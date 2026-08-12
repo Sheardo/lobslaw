@@ -72,7 +72,12 @@ type RaftNode struct {
 	// whenever raft leadership flips on this node. internal/node
 	// wires this to a singleton.LeaderGate so leader-gated workloads
 	// (e.g. the telegram long-poller) start/stop correctly. nil-safe.
-	onLeadership func(bool)
+	//
+	// Guarded by onLeadershipMu: the watcher goroutine is already
+	// running by the time boot registers the callback, so the write
+	// in SetLeadershipCallback races the read in publishLeadership.
+	onLeadershipMu sync.RWMutex
+	onLeadership   func(bool)
 }
 
 // NewRaft constructs a Raft node bound to fsm. For Phase 2.3 only the
@@ -335,10 +340,16 @@ func (n *RaftNode) startStateWatch() {
 // authoritative reconcile point. Safe to call from anywhere; no-op
 // when no callback is wired.
 func (n *RaftNode) publishLeadership() {
+	n.onLeadershipMu.RLock()
 	cb := n.onLeadership
+	n.onLeadershipMu.RUnlock()
 	if cb == nil {
 		return
 	}
+	// Called outside the lock: the callback runs arbitrary
+	// subscriber code (starting and stopping leader-gated workloads),
+	// and holding a lock across that invites deadlock with anything
+	// that calls back into this node.
 	cb(n.Raft.State() == raft.Leader)
 }
 
@@ -439,7 +450,9 @@ func (n *RaftNode) IsLeader() bool {
 // caller wiring this callback would be lost — the gate would carry
 // false until the next genuine flip.
 func (n *RaftNode) SetLeadershipCallback(cb func(bool)) {
+	n.onLeadershipMu.Lock()
 	n.onLeadership = cb
+	n.onLeadershipMu.Unlock()
 	if cb != nil {
 		cb(n.Raft.State() == raft.Leader)
 	}
