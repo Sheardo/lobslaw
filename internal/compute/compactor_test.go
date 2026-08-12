@@ -13,6 +13,7 @@ import (
 type fakeSummaryStore struct {
 	mu       sync.Mutex
 	summary  string
+	title    string
 	through  uint64
 	messages map[uint64]Message
 	nextSeq  uint64
@@ -49,6 +50,19 @@ func (f *fakeSummaryStore) Range(_ context.Context, _ SessionKey, after, through
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeSummaryStore) Title(context.Context, SessionKey) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.title, nil
+}
+
+func (f *fakeSummaryStore) PutTitle(_ context.Context, _ SessionKey, title string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.title = title
+	return nil
 }
 
 func (f *fakeSummaryStore) PutSummary(_ context.Context, _ SessionKey, summary string, through uint64) error {
@@ -305,6 +319,103 @@ func TestNilCompactorIsSafeToCall(t *testing.T) {
 	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
 	if ran || err != nil {
 		t.Errorf("ran=%v err=%v; want a silent no-op", ran, err)
+	}
+}
+
+type fakeTitler struct {
+	mu    sync.Mutex
+	calls int
+	out   string
+	err   error
+}
+
+func (f *fakeTitler) Title(context.Context, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.out != "" {
+		return f.out, nil
+	}
+	return "a conversation", nil
+}
+
+func TestCompactorTitlesOnFirstCompaction(t *testing.T) {
+	t.Parallel()
+	store := newFakeSummaryStore()
+	for range 20 {
+		store.add(fatMessage("x"))
+	}
+	titler := &fakeTitler{out: "raft snapshot corruption"}
+	c := NewCompactor(store, &fakeSummarizer{},
+		CompactorConfig{KeepMessages: 5, TriggerTokens: 100, Titler: titler})
+
+	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+		t.Fatal(err)
+	}
+	if store.title != "raft snapshot corruption" {
+		t.Errorf("title = %q", store.title)
+	}
+}
+
+// Re-titling on every compaction would spend a call per compaction to
+// churn a label nobody asked to change.
+func TestCompactorTitlesOnlyOnce(t *testing.T) {
+	t.Parallel()
+	store := newFakeSummaryStore()
+	titler := &fakeTitler{}
+	c := NewCompactor(store, &fakeSummarizer{},
+		CompactorConfig{KeepMessages: 4, TriggerTokens: 200, Titler: titler})
+	ctx := context.Background()
+
+	for range 5 {
+		for range 6 {
+			store.add(fatMessage("x"))
+		}
+		if _, err := c.MaybeCompact(ctx, SessionKey{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if titler.calls != 1 {
+		t.Errorf("titler called %d times across 5 compactions, want 1", titler.calls)
+	}
+}
+
+// An untitled conversation is a cosmetic loss; the compaction that
+// preceded it already succeeded and must not be reported as failed.
+func TestCompactorSurvivesTitlerFailure(t *testing.T) {
+	t.Parallel()
+	store := newFakeSummaryStore()
+	for range 20 {
+		store.add(fatMessage("x"))
+	}
+	c := NewCompactor(store, &fakeSummarizer{},
+		CompactorConfig{KeepMessages: 5, TriggerTokens: 100,
+			Titler: &fakeTitler{err: errors.New("model down")}})
+
+	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
+	if !ran || err != nil {
+		t.Errorf("ran=%v err=%v; a titling failure must not fail the compaction", ran, err)
+	}
+	if store.summary == "" {
+		t.Error("summary was not stored")
+	}
+}
+
+func TestCompactorWithoutTitlerLeavesSessionsUntitled(t *testing.T) {
+	t.Parallel()
+	store := newFakeSummaryStore()
+	for range 20 {
+		store.add(fatMessage("x"))
+	}
+	c := testCompactor(store, &fakeSummarizer{}, 5, 100)
+	if _, err := c.MaybeCompact(context.Background(), SessionKey{}); err != nil {
+		t.Fatal(err)
+	}
+	if store.title != "" {
+		t.Errorf("title = %q; want none without a titler", store.title)
 	}
 }
 

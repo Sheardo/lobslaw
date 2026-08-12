@@ -261,6 +261,23 @@ document. `compute.Compactor` is the caller that composes the two.
 `LoadTranscript` returns the summary and only the messages after it, so the
 compacted head is represented once rather than twice.
 
+### Search and titles
+
+`SearchTranscripts` is a **substring** scan, not semantic. Episodic memory
+already embeds every turn and answers "what do I know about X" through
+`memory_search`; what it cannot do is find the exact words in the exact thread —
+a command that was run, an error string, a name. Building a second embedding
+pipeline over the same content would duplicate the cost for a worse version of a
+capability we already have.
+
+Results are ranked most-recently-active first: when several threads mention the
+same thing, the live one is nearly always the one meant. Snippets are windowed
+around the match so a 10 MB tool result doesn't arrive in the agent's context.
+
+`Title` is generated once, on a conversation's first compaction — the summary is
+exactly the input a title needs, and a conversation long enough to compact is
+long enough to be worth finding again.
+
 ### Retention
 
 `gateway.session_max_messages` (default 200) caps messages per session; the oldest are evicted first. This is a **storage** bound — raising it costs disk and raft-snapshot size, not tokens per turn. What reaches the model is `defaultSessionTail` (100) messages, and eventually whatever conversation compaction leaves behind.

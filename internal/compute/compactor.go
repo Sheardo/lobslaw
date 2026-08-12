@@ -50,6 +50,11 @@ type SessionSummaryStore interface {
 	Range(ctx context.Context, ref SessionKey, afterSeq, throughSeq uint64) ([]Message, error)
 	// PutSummary stores a compaction result.
 	PutSummary(ctx context.Context, ref SessionKey, summary string, throughSeq uint64) error
+	// Title reports the session's current label, and PutTitle sets
+	// it. Titles are derived from the summary, so they ride along
+	// with compaction rather than needing their own trigger.
+	Title(ctx context.Context, ref SessionKey) (string, error)
+	PutTitle(ctx context.Context, ref SessionKey, title string) error
 }
 
 // SessionKey identifies a conversation to the summary store. Mirrors
@@ -65,7 +70,10 @@ type CompactorConfig struct {
 	KeepMessages     int
 	TriggerTokens    int
 	MaxSummaryTokens int
-	Logger           *slog.Logger
+	// Titler names the conversation from its summary. Nil leaves
+	// sessions untitled — searchable, just not labelled.
+	Titler Titler
+	Logger *slog.Logger
 }
 
 // Compactor folds the old end of a conversation into a running
@@ -79,6 +87,7 @@ type CompactorConfig struct {
 type Compactor struct {
 	store      SessionSummaryStore
 	summarizer ConversationSummarizer
+	titler     Titler
 	log        *slog.Logger
 
 	keepMessages     int
@@ -97,6 +106,7 @@ func NewCompactor(store SessionSummaryStore, summarizer ConversationSummarizer, 
 	c := &Compactor{
 		store:            store,
 		summarizer:       summarizer,
+		titler:           cfg.Titler,
 		log:              cfg.Logger,
 		keepMessages:     cfg.KeepMessages,
 		triggerTokens:    cfg.TriggerTokens,
@@ -176,7 +186,47 @@ func (c *Compactor) MaybeCompact(ctx context.Context, key SessionKey) (bool, err
 		"tokens_folded", tokens,
 		"through_seq", boundary,
 		"summary_bytes", len(summary))
+
+	c.maybeTitle(ctx, key, summary)
 	return true, nil
+}
+
+// maybeTitle names a conversation once, on its first compaction.
+//
+// Titling rides on compaction rather than having its own trigger
+// because the summary is exactly the input a title needs, and a
+// conversation long enough to compact is long enough to be worth
+// finding again. Re-titling on every compaction would spend a call
+// per compaction to churn a label nobody asked to change.
+//
+// Failure is logged and swallowed: an untitled session is a cosmetic
+// loss, and the compaction that preceded it already succeeded.
+func (c *Compactor) maybeTitle(ctx context.Context, key SessionKey, summary string) {
+	if c.titler == nil {
+		return
+	}
+	existing, err := c.store.Title(ctx, key)
+	if err != nil {
+		c.log.Debug("session: title lookup failed", "err", err)
+		return
+	}
+	if strings.TrimSpace(existing) != "" {
+		return
+	}
+	title, err := c.titler.Title(ctx, summary)
+	if err != nil {
+		c.log.Warn("session: titling failed; conversation stays untitled", "err", err)
+		return
+	}
+	if title == "" {
+		return
+	}
+	if err := c.store.PutTitle(ctx, key, title); err != nil {
+		c.log.Warn("session: storing title failed", "err", err)
+		return
+	}
+	c.log.Info("session titled",
+		"channel", key.Channel, "channel_id", key.ChannelID, "title", title)
 }
 
 // truncateToTokens clips a summary that came back longer than asked

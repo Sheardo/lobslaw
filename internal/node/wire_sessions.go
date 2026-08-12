@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 // sessionStoreAdapter adapts memory.SessionService to the
@@ -52,6 +54,10 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 	if provider == nil {
 		return nil
 	}
+	var titler compute.Titler
+	if te := n.cfg.Compute.Context.TitlesEnabled; te == nil || *te {
+		titler = compute.NewLLMTitler(provider, "", derefInt(n.cfg.Compute.Context.TitleMaxChars))
+	}
 	svc := memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
 		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
 	})
@@ -70,12 +76,41 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 			KeepMessages:     derefInt(cfg.CompactKeepMessages),
 			TriggerTokens:    derefInt(cfg.CompactTriggerTokens),
 			MaxSummaryTokens: derefInt(cfg.CompactMaxSummaryTokens),
+			Titler:           titler,
 			Logger:           n.log,
 		})
 	if inner == nil {
 		return nil
 	}
 	return &compactorAdapter{inner: inner}
+}
+
+// registerSessionTools exposes session_search / session_list /
+// session_read to the agent. Read-only over data the operator already
+// stores, so they seed default-allow like other builtins.
+func (n *Node) registerSessionTools() error {
+	if n.raft == nil || n.store == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
+		return nil
+	}
+	svc := memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
+		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
+	})
+	cfg := n.cfg.Compute.Context
+	if err := compute.RegisterSessionBuiltins(n.builtinsRegistry, compute.SessionToolConfig{
+		Browser:          &sessionBrowserAdapter{inner: svc},
+		MaxSearchResults: derefInt(cfg.SessionSearchResults),
+		MaxSnippets:      derefInt(cfg.SessionSearchSnippets),
+		MaxReadMessages:  derefInt(cfg.SessionReadMessages),
+	}); err != nil {
+		return fmt.Errorf("register session builtins: %w", err)
+	}
+	for _, td := range compute.SessionToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register session tool %q: %w", td.Name, err)
+		}
+	}
+	n.log.Debug("compute: session_search/list/read registered")
+	return nil
 }
 
 // conversationConfig maps the tunables a channel needs for replay
@@ -155,6 +190,100 @@ func (a *sessionSummaryAdapter) Range(ctx context.Context, k compute.SessionKey,
 
 func (a *sessionSummaryAdapter) PutSummary(ctx context.Context, k compute.SessionKey, summary string, through uint64) error {
 	return a.inner.PutSummary(ctx, toMemoryKey(k), summary, through)
+}
+
+func (a *sessionSummaryAdapter) Title(ctx context.Context, k compute.SessionKey) (string, error) {
+	t, err := a.inner.LoadTranscript(ctx, toMemoryKey(k))
+	if err != nil {
+		return "", err
+	}
+	return t.Title, nil
+}
+
+func (a *sessionSummaryAdapter) PutTitle(ctx context.Context, k compute.SessionKey, title string) error {
+	return a.inner.PutTitle(ctx, toMemoryKey(k), title)
+}
+
+// sessionBrowserAdapter exposes the read side of the transcript store
+// to the agent's session_search / session_list / session_read tools.
+type sessionBrowserAdapter struct {
+	inner *memory.SessionService
+}
+
+func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBrowseQuery) ([]compute.SessionBrowseHit, error) {
+	hits, err := a.inner.SearchTranscripts(ctx, memory.SessionSearchQuery{
+		Text:               q.Text,
+		Channel:            q.Channel,
+		UserID:             q.UserID,
+		Limit:              q.Limit,
+		SnippetsPerSession: q.SnippetsPerSession,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]compute.SessionBrowseHit, 0, len(hits))
+	for _, h := range hits {
+		hit := compute.SessionBrowseHit{Info: toBrowseInfo(h.Session), Matches: h.Matches}
+		for _, s := range h.Snippets {
+			hit.Snippets = append(hit.Snippets, compute.SessionBrowseSnippet{
+				Seq: s.Seq, Role: s.Role, Text: s.Text,
+			})
+		}
+		out = append(out, hit)
+	}
+	return out, nil
+}
+
+func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int) ([]compute.SessionBrowseInfo, error) {
+	recs, err := a.inner.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(recs, func(i, j int) bool {
+		return recs[i].UpdatedAt.AsTime().After(recs[j].UpdatedAt.AsTime())
+	})
+	if limit > 0 && len(recs) > limit {
+		recs = recs[:limit]
+	}
+	out := make([]compute.SessionBrowseInfo, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, toBrowseInfo(r))
+	}
+	return out, nil
+}
+
+func (a *sessionBrowserAdapter) Read(ctx context.Context, k compute.SessionKey, fromSeq uint64, limit int) ([]compute.Message, error) {
+	// LoadRange is exclusive of its lower bound, so reading "from
+	// seq N" means asking for everything after N-1.
+	after := uint64(0)
+	if fromSeq > 0 {
+		after = fromSeq - 1
+	}
+	msgs, err := a.inner.LoadRange(ctx, toMemoryKey(k), after, after+uint64(limit))
+	if err != nil {
+		return nil, err
+	}
+	return toComputeMessages(msgs), nil
+}
+
+func toBrowseInfo(r *lobslawv1.SessionRecord) compute.SessionBrowseInfo {
+	var updated string
+	if r.UpdatedAt != nil {
+		updated = r.UpdatedAt.AsTime().Format("2006-01-02 15:04 UTC")
+	}
+	var count uint64
+	if r.NextSeq > r.FirstSeq {
+		count = r.NextSeq - r.FirstSeq
+	}
+	return compute.SessionBrowseInfo{
+		Channel:   r.Channel,
+		ChannelID: r.ChannelId,
+		Title:     r.Title,
+		UserID:    r.UserId,
+		Messages:  count,
+		UpdatedAt: updated,
+		Summary:   r.Summary,
+	}
 }
 
 func toComputeMessages(in []memory.TranscriptMessage) []compute.Message {

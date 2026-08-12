@@ -149,6 +149,17 @@ compact_max_completion_tokens = 1024   # cap on what the summariser generates
 compact_tool_result_bytes     = 400    # tool output the summariser reads
 # Appended to the built-in summariser prompt, not replacing it.
 compact_instructions = "Always keep ticket numbers and schema decisions."
+
+# Conversation titles, generated once on first compaction.
+titles_enabled  = true
+title_max_chars = 60
+
+# Bounds on what the session_* tools may pull into the agent's
+# context. Unbounded, one session_read undoes the context budget in a
+# single tool call.
+session_search_results  = 5
+session_search_snippets = 3
+session_read_messages   = 40
 ```
 
 **Sizing them.** `tail_tokens` is the one to move first: it sets what a turn
