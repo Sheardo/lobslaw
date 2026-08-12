@@ -2,7 +2,6 @@ package compute
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -23,7 +22,6 @@ import (
 
 // Shared ULID entropy for schedule IDs. Same monotonic pattern as
 // memIDEntropy elsewhere.
-var scheduleIDEntropy = ulid.Monotonic(cryptorand.Reader, 0)
 
 // ScheduleHandlerRef is the handler_ref value written on every
 // task created via schedule_create. Matches the existing
@@ -146,7 +144,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 			return nil, 2, fmt.Errorf("schedule_create: %w", err)
 		}
 
-		id := ulid.MustNew(ulid.Now(), scheduleIDEntropy).String()
+		id := ids.New()
 		task := &lobslawv1.ScheduledTaskRecord{
 			Id:         id,
 			Name:       name,

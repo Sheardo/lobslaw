@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -83,7 +83,7 @@ func newResearchStartHandler(raft memoryRaftApplier) BuiltinFunc {
 		channel := strings.TrimSpace(args["__channel"])
 		chatID := strings.TrimSpace(args["__chat_id"])
 
-		id := ulid.MustNew(ulid.Now(), commitmentIDEntropy).String()
+		id := ids.New()
 		params := map[string]string{
 			"question": question,
 			"depth":    strconv.Itoa(depth),
