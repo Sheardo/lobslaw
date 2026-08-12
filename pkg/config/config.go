@@ -204,6 +204,22 @@ type ContextConfig struct {
 	// many bytes. The turn that produced a result always sees it in
 	// full. Explicit 0 = replay tool output untouched.
 	HistoryToolResultBytes *int `koanf:"history_tool_result_bytes,omitempty"`
+
+	// CompactKeepMessages is how many recent messages stay verbatim.
+	// Compaction only summarises what is older, so the immediate
+	// exchange is never replaced by prose.
+	CompactKeepMessages *int `koanf:"compact_keep_messages,omitempty"`
+
+	// CompactTriggerTokens is how much aged-out conversation must
+	// accumulate before a summariser call is worth making. Explicit
+	// 0 uses the default; compaction is disabled by leaving the
+	// summariser role unset, not by zeroing this.
+	CompactTriggerTokens *int `koanf:"compact_trigger_tokens,omitempty"`
+
+	// CompactMaxSummaryTokens caps the running summary. It rides on
+	// every subsequent turn, so an unbounded summary recreates the
+	// problem compaction exists to solve.
+	CompactMaxSummaryTokens *int `koanf:"compact_max_summary_tokens,omitempty"`
 }
 
 // RolesConfig names the provider labels for each agent role.

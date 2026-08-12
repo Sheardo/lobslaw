@@ -135,26 +135,30 @@ func TestChatHistoryForget(t *testing.T) {
 type fakeSessionStore struct {
 	mu        sync.Mutex
 	msgs      map[string][]compute.Message
+	summaries map[string]string
 	appendErr error
 	loadErr   error
 	appends   int
 }
 
 func newFakeSessionStore() *fakeSessionStore {
-	return &fakeSessionStore{msgs: map[string][]compute.Message{}}
+	return &fakeSessionStore{msgs: map[string][]compute.Message{}, summaries: map[string]string{}}
 }
 
-func (f *fakeSessionStore) LoadTail(_ context.Context, ref SessionRef, n int) ([]compute.Message, error) {
+func (f *fakeSessionStore) LoadTranscript(_ context.Context, ref SessionRef, n int) (Transcript, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.loadErr != nil {
-		return nil, f.loadErr
+		return Transcript{}, f.loadErr
 	}
 	all := f.msgs[cacheKey(ref)]
 	if n > 0 && len(all) > n {
 		all = all[len(all)-n:]
 	}
-	return append([]compute.Message(nil), all...), nil
+	return Transcript{
+		Summary:  f.summaries[cacheKey(ref)],
+		Messages: append([]compute.Message(nil), all...),
+	}, nil
 }
 
 func (f *fakeSessionStore) Append(_ context.Context, ref SessionRef, _ string, msgs []compute.Message) error {
@@ -185,7 +189,7 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 	store := newFakeSessionStore()
 	ref := testRef()
 
-	first := newConversationLog(store, nil)
+	first := newConversationLog(store, nil, nil)
 	first.Append(context.Background(), ref, "turn-1", []compute.Message{
 		{Role: "user", Content: "remember this"},
 		{Role: "assistant", Content: "noted"},
@@ -193,8 +197,8 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 
 	// A fresh log = a restarted process: empty cache, durable store
 	// intact. This is the whole point of the feature.
-	second := newConversationLog(store, nil)
-	got := second.Load(context.Background(), ref)
+	second := newConversationLog(store, nil, nil)
+	got := second.Load(context.Background(), ref).Messages
 	if len(got) != 2 {
 		t.Fatalf("after restart Load = %d messages; want 2", len(got))
 	}
@@ -205,10 +209,10 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 
 func TestConversationLogWithoutDurableStoreUsesCache(t *testing.T) {
 	t.Parallel()
-	c := newConversationLog(nil, nil)
+	c := newConversationLog(nil, nil, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "hi"}})
-	if got := c.Load(context.Background(), ref); len(got) != 1 {
+	if got := c.Load(context.Background(), ref).Messages; len(got) != 1 {
 		t.Errorf("Load = %d; want 1 from cache", len(got))
 	}
 }
@@ -219,11 +223,11 @@ func TestConversationLogFallsBackWhenNotLeader(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
 	store.appendErr = ErrSessionUnavailable
-	c := newConversationLog(store, nil)
+	c := newConversationLog(store, nil, nil)
 	ref := testRef()
 
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "on a follower"}})
-	got := c.Load(context.Background(), ref)
+	got := c.Load(context.Background(), ref).Messages
 	if len(got) != 1 || got[0].Content != "on a follower" {
 		t.Errorf("Load = %+v; want the cached message despite the failed durable write", got)
 	}
@@ -232,7 +236,7 @@ func TestConversationLogFallsBackWhenNotLeader(t *testing.T) {
 func TestConversationLogFallsBackWhenDurableReadFails(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil)
+	c := newConversationLog(store, nil, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "cached"}})
 
@@ -240,7 +244,7 @@ func TestConversationLogFallsBackWhenDurableReadFails(t *testing.T) {
 	store.loadErr = errors.New("bbolt exploded")
 	store.mu.Unlock()
 
-	got := c.Load(context.Background(), ref)
+	got := c.Load(context.Background(), ref).Messages
 	if len(got) != 1 || got[0].Content != "cached" {
 		t.Errorf("Load = %+v; want cache fallback on durable read error", got)
 	}
@@ -249,25 +253,25 @@ func TestConversationLogFallsBackWhenDurableReadFails(t *testing.T) {
 func TestConversationLogForgetClearsBothTiers(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil)
+	c := newConversationLog(store, nil, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "x"}})
 
 	if err := c.Forget(context.Background(), ref); err != nil {
 		t.Fatalf("Forget: %v", err)
 	}
-	if got := c.Load(context.Background(), ref); len(got) != 0 {
+	if got := c.Load(context.Background(), ref).Messages; len(got) != 0 {
 		t.Errorf("Load after Forget = %d; want 0", len(got))
 	}
-	if got, _ := store.LoadTail(context.Background(), ref, 0); len(got) != 0 {
-		t.Errorf("durable store still holds %d messages after Forget", len(got))
+	if got, _ := store.LoadTranscript(context.Background(), ref, 0); len(got.Messages) != 0 {
+		t.Errorf("durable store still holds %d messages after Forget", len(got.Messages))
 	}
 }
 
 func TestConversationLogSkipsEmptyAppend(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil)
+	c := newConversationLog(store, nil, nil)
 	c.Append(context.Background(), testRef(), "t", nil)
 	if store.appends != 0 {
 		t.Errorf("empty append reached the durable store %d times", store.appends)

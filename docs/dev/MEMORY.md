@@ -251,11 +251,24 @@ The gateway does not treat that as fatal. `conversationLog` keeps an in-memory c
 
 The honest limitation: on a follower, history still doesn't survive a restart. Leader forwarding is the fix and isn't built.
 
+### Compaction
+
+`SessionRecord` carries a running `summary` plus `summary_through_seq`. The
+memory layer only stores it — the summariser is an LLM call and lives in
+`internal/compute`, per the deterministic/interpretive split at the top of this
+document. `compute.Compactor` is the caller that composes the two.
+
+`LoadTranscript` returns the summary and only the messages after it, so the
+compacted head is represented once rather than twice.
+
 ### Retention
 
 `gateway.session_max_messages` (default 200) caps messages per session; the oldest are evicted first. This is a **storage** bound — raising it costs disk and raft-snapshot size, not tokens per turn. What reaches the model is `defaultSessionTail` (100) messages, and eventually whatever conversation compaction leaves behind.
 
-Note that this cap is the only bound today: idle sessions are never expired, and there is no compaction. A long-lived chat therefore holds its cap of messages indefinitely, and a conversation longer than the model's context window will still fail — the transcript survives, but nothing summarises it yet.
+Storage and context are deliberately decoupled: the store keeps the full
+retained transcript (for search and export) while only the summary plus a short
+verbatim tail reaches the model. Idle sessions are still never expired — the
+message cap is the only storage bound today.
 
 ---
 

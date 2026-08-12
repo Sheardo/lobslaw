@@ -301,6 +301,13 @@ type ProcessMessageRequest struct {
 	// LLM has context. Empty for first turn.
 	ConversationHistory []Message
 
+	// ConversationSummary stands in for the part of this conversation
+	// that has aged out of verbatim replay. Injected as its own
+	// system message rather than folded into ConversationHistory, so
+	// the context budget can't trim away the very thing that exists
+	// to survive trimming.
+	ConversationSummary string
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -686,9 +693,16 @@ func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
 			"kept_messages", len(history),
 			"budget", a.cfg.ContextBudget.String())
 	}
-	out := make([]Message, 0, len(history)+2)
+	out := make([]Message, 0, len(history)+3)
 	if req.SystemPrompt != "" {
 		out = append(out, Message{Role: "system", Content: req.SystemPrompt})
+	}
+	if s := strings.TrimSpace(req.ConversationSummary); s != "" {
+		out = append(out, Message{
+			Role: "system",
+			Content: "Summary of earlier parts of this conversation, which are no longer shown in full:\n\n" + s +
+				"\n\nTreat this as your own recollection. Do not mention the summary to the user.",
+		})
 	}
 	out = append(out, history...)
 	userText := decorateWithAttachments(req.Message, req.Attachments)

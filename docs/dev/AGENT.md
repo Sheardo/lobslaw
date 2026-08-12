@@ -170,6 +170,42 @@ Token counts are estimated at 4 bytes/token, no tokenizer. It's a budget, not a
 limit; the provider enforces the real window, and vendoring a tokenizer per model
 family would be false precision.
 
+### Rolling summary
+
+The budget above *drops* old messages. Compaction is what stops that being
+amnesia: material aging past the verbatim window is folded into a running
+summary stored on the `SessionRecord`, and injected as its own system message.
+
+```toml
+[compute.context]
+compact_keep_messages     = 40    # never summarise the recent exchange
+compact_trigger_tokens    = 1500  # how much must age out to justify a call
+compact_max_summary_tokens = 600  # the summary rides on every later turn
+```
+
+Three properties worth preserving if this is ever rewritten:
+
+- **Incremental.** Each compaction folds only the newly-aged-out span into the
+  previous summary. A message is summarised roughly once, not once per turn —
+  otherwise compaction costs grow with conversation length, which is the thing
+  it exists to prevent.
+- **Off the reply path.** The user has already been answered when a turn is
+  appended, so compaction runs in a goroutine under `context.WithoutCancel`.
+  Making them wait for a summariser round-trip would trade tokens for latency
+  they can feel.
+- **Summarised messages are not replayed.** `LoadTranscript` returns the
+  summary plus only what follows it. Replaying both pays twice for the same
+  content and invites the model to treat one as a correction of the other.
+
+The summariser runs on `RoleSummariser`, so operators can point compaction at a
+cheap model while turns run on a better one. No summariser role resolved → no
+compactor → long conversations lose their head to the budget, as before.
+
+`SessionService.PutSummary` refuses to move `summary_through_seq` backwards: a
+stale compaction landing after a newer one would resurrect messages the newer
+summary already folded in. `Append` and `PutSummary` are serialised for the same
+reason — both are read-modify-write on the same record.
+
 ### Two traps this code exists to avoid
 
 **Orphaned tool results.** Trimming from the oldest end routinely cuts an

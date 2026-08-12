@@ -46,11 +46,28 @@ type SessionRef struct {
 // interface (like ChannelStateStore) so channels stay decoupled from
 // the memory package and are trivially fakeable in tests.
 type SessionStore interface {
-	// LoadTail returns the last n messages, oldest first. An absent
-	// conversation returns no messages and no error.
-	LoadTail(ctx context.Context, ref SessionRef, n int) ([]compute.Message, error)
+	// LoadTranscript returns the running summary plus the messages
+	// that follow it, capped at n verbatim messages (0 = all). An
+	// absent conversation returns an empty transcript and no error.
+	LoadTranscript(ctx context.Context, ref SessionRef, n int) (Transcript, error)
 	Append(ctx context.Context, ref SessionRef, turnID string, msgs []compute.Message) error
 	Forget(ctx context.Context, ref SessionRef) error
+}
+
+// Transcript is a conversation prepared for a turn.
+type Transcript struct {
+	// Summary stands in for the compacted head of the conversation.
+	// Empty until the thread is long enough to need compacting.
+	Summary string
+	// Messages are the verbatim tail, oldest first.
+	Messages []compute.Message
+}
+
+// SessionCompactor folds aged-out conversation into the running
+// summary. Optional — nil means no compaction, and long threads lose
+// their head to the context budget instead of being summarised.
+type SessionCompactor interface {
+	MaybeCompact(ctx context.Context, ref SessionRef) (bool, error)
 }
 
 // conversationLog is what channels actually talk to: a durable store
@@ -66,21 +83,23 @@ type SessionStore interface {
 // With no durable store wired at all — a gateway-only node, or a
 // test — this degrades to exactly the old in-memory behaviour.
 type conversationLog struct {
-	durable SessionStore
-	cache   *chatHistory
-	log     *slog.Logger
-	tail    int
+	durable   SessionStore
+	compactor SessionCompactor
+	cache     *chatHistory
+	log       *slog.Logger
+	tail      int
 }
 
-func newConversationLog(durable SessionStore, logger *slog.Logger) *conversationLog {
+func newConversationLog(durable SessionStore, compactor SessionCompactor, logger *slog.Logger) *conversationLog {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &conversationLog{
-		durable: durable,
-		cache:   newChatHistory(0, 0),
-		log:     logger,
-		tail:    defaultSessionTail,
+		durable:   durable,
+		compactor: compactor,
+		cache:     newChatHistory(0, 0),
+		log:       logger,
+		tail:      defaultSessionTail,
 	}
 }
 
@@ -91,18 +110,18 @@ func newConversationLog(durable SessionStore, logger *slog.Logger) *conversation
 // conversation only ever made it into memory. Preferring the cache
 // there is what stops a leadership change mid-conversation from
 // looking like amnesia to the user.
-func (c *conversationLog) Load(ctx context.Context, ref SessionRef) []compute.Message {
+func (c *conversationLog) Load(ctx context.Context, ref SessionRef) Transcript {
 	if c.durable != nil {
-		msgs, err := c.durable.LoadTail(ctx, ref, c.tail)
+		t, err := c.durable.LoadTranscript(ctx, ref, c.tail)
 		switch {
 		case err != nil:
 			c.log.Warn("session: durable load failed; falling back to in-memory history",
 				"err", err, "channel", ref.Channel, "channel_id", ref.ChannelID)
-		case len(msgs) > 0:
-			return msgs
+		case len(t.Messages) > 0 || t.Summary != "":
+			return t
 		}
 	}
-	return c.cache.Load(cacheKey(ref))
+	return Transcript{Messages: c.cache.Load(cacheKey(ref))}
 }
 
 // Append records a turn in both tiers. Never returns an error: losing
@@ -124,7 +143,33 @@ func (c *conversationLog) Append(ctx context.Context, ref SessionRef, turnID str
 		}
 		c.log.Warn("session: durable append failed; in-memory history retained",
 			"err", err, "channel", ref.Channel, "channel_id", ref.ChannelID, "turn_id", turnID)
+		return
 	}
+	c.compact(ctx, ref)
+}
+
+// compact runs compaction off the reply path. The user has already
+// been answered by the time a turn is appended, and summarising is an
+// LLM round-trip — making them wait for it would trade the tokens we
+// saved for latency they can feel.
+//
+// context.WithoutCancel because the caller's context dies with the
+// HTTP request or the Telegram update; the compaction it triggered
+// should still finish.
+func (c *conversationLog) compact(ctx context.Context, ref SessionRef) {
+	if c.compactor == nil {
+		return
+	}
+	go func() {
+		bg := context.WithoutCancel(ctx)
+		if _, err := c.compactor.MaybeCompact(bg, ref); err != nil {
+			if errors.Is(err, ErrSessionUnavailable) {
+				return
+			}
+			c.log.Warn("session: compaction failed; conversation keeps replaying verbatim",
+				"err", err, "channel", ref.Channel, "channel_id", ref.ChannelID)
+		}
+	}()
 }
 
 // Forget clears a conversation from both tiers. The cache is always
