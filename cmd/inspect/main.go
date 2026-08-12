@@ -79,5 +79,41 @@ func main() {
 			r.Id, r.Scope, len(r.Embedding), r.SourceIds, len(r.Text))
 		return nil
 	})
-	fmt.Printf("\nTotal vector records: %d\n", vcount)
+	fmt.Printf("\nTotal vector records: %d\n\n", vcount)
+
+	fmt.Println("=== SESSIONS ===")
+	scount := 0
+	_ = store.ForEach(memory.BucketSessions, func(_ string, v []byte) error {
+		var r lobslawv1.SessionRecord
+		if err := proto.Unmarshal(v, &r); err != nil {
+			return nil
+		}
+		scount++
+		fmt.Printf("\n  %s  user=%s  retained=%d (seq %d..%d)  updated=%s\n",
+			r.Id, r.UserId, r.NextSeq-r.FirstSeq, r.FirstSeq, r.NextSeq-1,
+			r.UpdatedAt.AsTime().Format("2006-01-02 15:04:05 UTC"))
+		// Message keys are "<session id>:<seq>", so the transcript is
+		// an ordered prefix scan.
+		_ = store.ForEachPrefix(memory.BucketSessionMessages, r.Id+":", func(_ string, mv []byte) error {
+			var m lobslawv1.SessionMessage
+			if err := proto.Unmarshal(mv, &m); err != nil {
+				return nil
+			}
+			text := m.Content
+			if len(text) > 100 {
+				text = text[:100] + "…"
+			}
+			detail := ""
+			for _, tc := range m.ToolCalls {
+				detail += " tool_call=" + tc.Name
+			}
+			if m.ToolCallId != "" {
+				detail += " tool_result_for=" + m.ToolCallId
+			}
+			fmt.Printf("    [%03d] %-9s %s%s\n", m.Seq, m.Role, text, detail)
+			return nil
+		})
+		return nil
+	})
+	fmt.Printf("\nTotal sessions: %d\n", scount)
 }

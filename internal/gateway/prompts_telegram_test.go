@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -85,6 +86,7 @@ func TestTelegramSendConfirmationKeyboardRegistersAndPostsKeyboard(t *testing.T)
 		555,
 		compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
 		&compute.ProcessMessageResponse{ConfirmationReason: "run this scary thing?"},
+		SessionRef{Channel: "telegram", ChannelID: "555"},
 	)
 
 	calls := h.capturedCalls()
@@ -306,5 +308,67 @@ func TestTelegramCallbackDoubleResolveReportsGracefully(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(sendText), "already resolved") {
 		t.Errorf("double-resolve text: %q", sendText)
+	}
+}
+
+// An approved confirmation must record the second half of the turn.
+// Without it the stored transcript ends at "confirmation required"
+// forever, and the next turn replays a conversation in which the
+// agent never ran the tool or answered — the exact failure the
+// dispatch-path comment warns about.
+func TestTelegramResumePersistsApprovedHalfOfTurn(t *testing.T) {
+	t.Parallel()
+	store := newFakeSessionStore()
+	agent, err := compute.NewAgent(compute.AgentConfig{
+		Provider: compute.NewMockProvider(compute.MockResponse{Content: "deleted it"}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newTGPromptHarness(t, agent, TelegramConfig{
+		UnknownUserScope: "public",
+		Sessions:         store,
+	})
+
+	ref := SessionRef{Channel: "telegram", ChannelID: "555"}
+	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
+
+	// The turn stopped at a confirmation: the user message and the
+	// assistant's tool request were already persisted by dispatch.
+	stopped := []compute.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: "delete the thing"},
+		{Role: "assistant", ToolCalls: []compute.ToolCall{{ID: "c1", Name: "shell_command"}}},
+	}
+	h.handler.conv.Append(context.Background(), ref, "turn-42", stopped[1:])
+
+	h.handler.resumeAfterApproval(context.Background(), &telegramContinuation{
+		req:      compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
+		messages: stopped,
+		chatID:   555,
+		session:  ref,
+	})
+
+	got, lerr := store.LoadTail(context.Background(), ref, 0)
+	if lerr != nil {
+		t.Fatalf("LoadTail: %v", lerr)
+	}
+	if len(got) < 3 {
+		t.Fatalf("stored %d messages, want the stopped turn plus the resumed reply: %+v", len(got), got)
+	}
+	last := got[len(got)-1]
+	if last.Role != "assistant" || last.Content == "" {
+		t.Errorf("last stored message = %+v; want the resumed assistant reply", last)
+	}
+	// The messages stashed in the continuation were already stored by
+	// dispatch; re-appending them would duplicate the turn.
+	var userMsgs int
+	for _, m := range got {
+		if m.Role == "user" {
+			userMsgs++
+		}
+	}
+	if userMsgs != 1 {
+		t.Errorf("user message stored %d times, want 1 — resume double-wrote the turn", userMsgs)
 	}
 }

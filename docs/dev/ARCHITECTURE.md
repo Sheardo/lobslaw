@@ -42,6 +42,7 @@ flowchart TB
     Store["memory.Store<br/>bbolt + Raft FSM"]
     MemSvc["memory.Service<br/>Store/Recall/Search/Forget/FindClusters"]
     Dream["memory.DreamRunner<br/>score + consolidate + merge phase"]
+    Sessions["memory.SessionService<br/>durable conversation transcripts"]
     Raft["etcd/raft/v3<br/>+ custom gRPC transport"]
   end
 
@@ -53,6 +54,8 @@ flowchart TB
 
   REST --> AgentLoop
   TG --> AgentLoop
+  REST -- conversation history --> Sessions
+  TG -- conversation history --> Sessions
   AgentLoop --> Promptgen
   AgentLoop --> Resolver
   AgentLoop --> LLMClient
@@ -77,6 +80,7 @@ flowchart TB
   AgentLoop --> Reranker
 
   MemSvc --> Store
+  Sessions --> Store
   Store --> Raft
 
   NodeSvc --> MemSvc

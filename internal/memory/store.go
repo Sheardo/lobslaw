@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -143,6 +144,38 @@ func (s *Store) ForEach(bucket string, fn func(key string, value []byte) error) 
 			}
 			return fn(string(k), plaintext)
 		})
+	})
+}
+
+// ForEachPrefix walks the key/value pairs in bucket whose key starts
+// with prefix, in ascending key order, calling fn with the decrypted
+// plaintext. Same retention rule as ForEach: fn may not hold the
+// value past its return.
+//
+// Exists because session transcripts are keyed "<session>:<seq>" in a
+// bucket shared by every session — a full ForEach would decrypt every
+// message in the cluster to read one conversation. The bbolt cursor
+// seeks straight to the range.
+//
+// An empty prefix is equivalent to ForEach.
+func (s *Store) ForEachPrefix(bucket, prefix string, fn func(key string, value []byte) error) error {
+	return s.loadDB().View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bucket))
+		if b == nil {
+			return fmt.Errorf("bucket %q not found", bucket)
+		}
+		p := []byte(prefix)
+		c := b.Cursor()
+		for k, v := c.Seek(p); k != nil && bytes.HasPrefix(k, p); k, v = c.Next() {
+			plaintext, err := crypto.Open(s.key, v)
+			if err != nil {
+				return fmt.Errorf("decrypt %s/%s: %w", bucket, string(k), err)
+			}
+			if err := fn(string(k), plaintext); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

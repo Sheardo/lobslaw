@@ -27,6 +27,16 @@ const (
 	// ciphertext. Keyed by "<provider>:<subject>" — one record per
 	// (provider, authenticated-user) tuple.
 	BucketCredentials = "credentials"
+	// BucketSessions holds the per-conversation index record: which
+	// channel + user, the retained sequence range, the title. Keyed
+	// by "<channel>:<channel_id>". One record per live conversation.
+	BucketSessions = "sessions"
+	// BucketSessionMessages holds the transcript bodies, keyed
+	// "<session_id>:<20-digit zero-padded seq>". The padding makes
+	// bbolt's byte ordering identical to sequence ordering, so a
+	// session's thread is an ordered prefix scan and trimming is a
+	// delete of the lowest keys.
+	BucketSessionMessages = "session_messages"
 	// BucketUserPrefs holds per-user preferences: timezone,
 	// subscribed channel addresses (telegram chat_id, future Slack
 	// user, etc.), language. Keyed by canonical user_id. Plaintext
@@ -53,4 +63,6 @@ var allBuckets = []string{
 	BucketSoulTune,
 	BucketCredentials,
 	BucketUserPrefs,
+	BucketSessions,
+	BucketSessionMessages,
 }

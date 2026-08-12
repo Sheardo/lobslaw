@@ -90,6 +90,12 @@ type RESTConfig struct {
 	// JSON aggregate view suitable for UIs / skills.
 	Plan PlanService
 
+	// Sessions is the durable conversation transcript store, used for
+	// requests that carry a session_id. Nil leaves REST on the
+	// in-memory buffer — conversations then last only as long as the
+	// process does.
+	Sessions SessionStore
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -107,6 +113,7 @@ type Server struct {
 	cfg   RESTConfig
 	agent *compute.Agent
 	log   *slog.Logger
+	conv  *conversationLog
 
 	mu       sync.Mutex
 	httpSrv  *http.Server
@@ -134,7 +141,12 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	return &Server{cfg: cfg, agent: agent, log: cfg.Logger}
+	return &Server{
+		cfg:   cfg,
+		agent: agent,
+		log:   cfg.Logger,
+		conv:  newConversationLog(cfg.Sessions, cfg.Logger),
+	}
 }
 
 // Start binds the listener and serves. Blocks until ctx is
@@ -239,6 +251,16 @@ type messageRequest struct {
 	Message string `json:"message"`
 	TurnID  string `json:"turn_id,omitempty"`
 	Model   string `json:"model,omitempty"` // optional override
+	// SessionID opts this request into a durable conversation: the
+	// prior transcript is replayed into the turn and this turn is
+	// appended to it. Omitting it keeps the legacy stateless
+	// behaviour, where every request starts from a blank thread.
+	//
+	// Opt-in rather than defaulted-per-user because REST has no
+	// natural conversation boundary — a script firing independent
+	// one-shot requests under one token must not accumulate them
+	// into a single ever-growing thread.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // messageResponse is what we return. Mirrors the internal
@@ -309,12 +331,30 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var sessionRef SessionRef
+	var priorHistory []compute.Message
+	if req.SessionID != "" {
+		sessionRef = SessionRef{
+			Channel:   "rest",
+			ChannelID: req.SessionID,
+			UserID:    claims.UserID,
+		}
+		priorHistory = s.conv.Load(r.Context(), sessionRef)
+		s.log.Debug("rest: conversation history loaded",
+			"turn_id", req.TurnID,
+			"session_id", req.SessionID,
+			"prior_messages", len(priorHistory))
+	}
+
 	agentReq := compute.ProcessMessageRequest{
-		Message: req.Message,
-		Claims:  claims,
-		TurnID:  req.TurnID,
-		Model:   req.Model,
-		Budget:  budget,
+		Message:             req.Message,
+		Claims:              claims,
+		TurnID:              req.TurnID,
+		Model:               req.Model,
+		Budget:              budget,
+		ConversationHistory: priorHistory,
+		Channel:             sessionRef.Channel,
+		ChannelID:           sessionRef.ChannelID,
 	}
 
 	resp, err := s.agent.RunToolCallLoop(r.Context(), agentReq)
@@ -323,6 +363,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Captured before the resume loop replaces resp: resumption only
+	// ever appends, so the original boundary still marks the start of
+	// the whole turn once it finishes.
+	turnStart := resp.TurnStartIndex
 
 	// Auto-resume loop: when the agent returns NeedsConfirmation AND
 	// the registry is wired, register a prompt, long-poll Wait until
@@ -373,6 +418,14 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// Preserve prior tool calls in the cumulative response.
 		resumed.ToolCalls = append(resp.ToolCalls, resumed.ToolCalls...)
 		resp = resumed
+	}
+
+	// Persisted after the confirmation loop so an approved-and-resumed
+	// turn is recorded once, complete, rather than twice in halves.
+	if req.SessionID != "" {
+		if newTurn := newTurnMessages(resp.Messages, turnStart); len(newTurn) > 0 {
+			s.conv.Append(r.Context(), sessionRef, req.TurnID, newTurn)
+		}
 	}
 
 	out := messageResponse{

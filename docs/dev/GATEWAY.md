@@ -274,6 +274,43 @@ Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — seman
 
 The continuation is per-handler and in-memory; a clustered deployment with node-A-sends-keyboard / node-B-receives-tap scenarios needs a shared store, which isn't shipped yet.
 
+## Conversation history
+
+Both channels get prior context from `conversationLog` (`internal/gateway/conversation.go`), a two-tier store:
+
+```
+channel turn
+     │
+     ├── Load  ──► durable SessionStore (raft) ──► falls back to cache on error or empty
+     │                                                        │
+     └── Append ──► in-memory cache (always) ─────────────────┘
+                └── durable SessionStore (best-effort; leader-only)
+```
+
+The durable tier is `memory.SessionService`, adapted at the wiring layer by `internal/node/wire_sessions.go` — the gateway holds only its own `SessionStore` interface, the same decoupling used for `ChannelStateStore`.
+
+Append never fails a turn. Losing history is bad; failing a turn the agent already completed — after tools ran and the user got their reply — is worse. A write rejected because this node isn't the raft leader is translated to `gateway.ErrSessionUnavailable` and logged at debug, since it's expected rather than broken.
+
+With no session store wired (a gateway-only node, or a test), the whole thing degrades to the pre-session in-memory behaviour.
+
+### Per-channel conversation identity
+
+| Channel | Session id | Default |
+|---|---|---|
+| Telegram | `telegram:<chat_id>` | always on — one thread per chat |
+| REST | `rest:<session_id>` | **off** unless the request carries `session_id` |
+
+REST is opt-in because it has no natural conversation boundary. A script firing independent one-shot requests under a single token must not accumulate them into one ever-growing thread, so omitting `session_id` keeps the original stateless behaviour:
+
+```json
+POST /v1/messages
+{"message": "what did I just ask you?", "session_id": "cli-42"}
+```
+
+REST persists after the confirmation loop resolves, so an approved-and-resumed turn is recorded once and complete rather than twice in halves.
+
+See [MEMORY.md → Sessions](MEMORY.md#sessions) for the storage layout, the trimming rules, and the leader-only caveat.
+
 ## What's not yet shipped
 
 Callouts deferred past Phase 6h:
