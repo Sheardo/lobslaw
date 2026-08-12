@@ -176,12 +176,27 @@ The budget above *drops* old messages. Compaction is what stops that being
 amnesia: material aging past the verbatim window is folded into a running
 summary stored on the `SessionRecord`, and injected as its own system message.
 
-```toml
-[compute.context]
-compact_keep_messages     = 40    # never summarise the recent exchange
-compact_trigger_tokens    = 1500  # how much must age out to justify a call
-compact_max_summary_tokens = 600  # the summary rides on every later turn
-```
+Every knob is in `[compute.context]` — see the
+[configuration reference](../docs/configuration/reference.md#compute) for the
+full list and sizing guidance. The compaction ones:
+
+| Knob | Default | Effect |
+|---|---|---|
+| `compact_enabled` | on | Off disables compaction without unsetting the summariser role |
+| `compact_keep_messages` | 40 | Never summarise the recent exchange |
+| `compact_trigger_tokens` | 1500 | How much must age out to justify a call |
+| `compact_max_summary_tokens` | 600 | Cap on the stored summary — it rides on every later turn |
+| `compact_max_completion_tokens` | 1024 | Cap on what the summariser may generate |
+| `compact_tool_result_bytes` | 400 | How much tool output the summariser reads |
+| `compact_instructions` | — | Appended to the built-in prompt, not replacing it |
+
+`compact_instructions` appends rather than overrides on purpose: the built-in
+prompt encodes the difference between a summary that records decisions and one
+that narrates topics, and losing that silently degrades every future turn.
+
+Config validation rejects a `compact_max_summary_tokens` larger than
+`tail_tokens` — a summary bigger than the whole verbatim budget crowds out the
+conversation it was meant to make room for.
 
 Three properties worth preserving if this is ever rewritten:
 

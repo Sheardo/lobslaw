@@ -132,6 +132,9 @@ type TelegramConfig struct {
 	// Compactor folds aged-out conversation into a running summary.
 	// Nil disables compaction.
 	Compactor SessionCompactor
+
+	// Conversation tunes replay depth and the degraded-mode cache.
+	Conversation ConversationConfig
 }
 
 // ChannelStateStore is a minimal raft-backed key-value interface for
@@ -306,7 +309,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		base:          base,
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
-		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, logger),
+		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
 	}, nil
 }
 

@@ -100,6 +100,9 @@ type RESTConfig struct {
 	// Nil disables compaction.
 	Compactor SessionCompactor
 
+	// Conversation tunes replay depth and the degraded-mode cache.
+	Conversation ConversationConfig
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -149,7 +152,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg:   cfg,
 		agent: agent,
 		log:   cfg.Logger,
-		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Logger),
+		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
 

@@ -56,9 +56,16 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
 	})
 	cfg := n.cfg.Compute.Context
+	if cfg.CompactEnabled != nil && !*cfg.CompactEnabled {
+		return nil
+	}
 	inner := compute.NewCompactor(
 		&sessionSummaryAdapter{inner: svc},
-		compute.NewLLMSummarizer(provider, ""),
+		compute.NewLLMSummarizer(provider, "", compute.SummarizerConfig{
+			MaxCompletionTokens: derefInt(cfg.CompactMaxCompletionTokens),
+			ToolResultBytes:     derefInt(cfg.CompactToolResultBytes),
+			ExtraInstructions:   cfg.CompactInstructions,
+		}),
 		compute.CompactorConfig{
 			KeepMessages:     derefInt(cfg.CompactKeepMessages),
 			TriggerTokens:    derefInt(cfg.CompactTriggerTokens),
@@ -69,6 +76,16 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 		return nil
 	}
 	return &compactorAdapter{inner: inner}
+}
+
+// conversationConfig maps the tunables a channel needs for replay
+// depth and its degraded-mode cache.
+func (n *Node) conversationConfig() gateway.ConversationConfig {
+	return gateway.ConversationConfig{
+		TailMessages:  derefInt(n.cfg.Compute.Context.TailMessages),
+		CacheMessages: n.cfg.Gateway.SessionCacheMessages,
+		CacheTTL:      n.cfg.Gateway.SessionCacheTTL,
+	}
 }
 
 // derefInt reads an optional config int; nil means "take the default",

@@ -220,6 +220,40 @@ type ContextConfig struct {
 	// every subsequent turn, so an unbounded summary recreates the
 	// problem compaction exists to solve.
 	CompactMaxSummaryTokens *int `koanf:"compact_max_summary_tokens,omitempty"`
+
+	// TailMessages caps how many stored messages are read per turn
+	// before the token budget trims them. A message cap as well as a
+	// token cap because reading 10k messages to then discard all but
+	// 40 is wasted I/O on every turn.
+	TailMessages *int `koanf:"tail_messages,omitempty"`
+
+	// CompactEnabled turns compaction off without unsetting the
+	// summariser role (which other subsystems also use). Unset =
+	// enabled whenever a summariser resolves.
+	CompactEnabled *bool `koanf:"compact_enabled,omitempty"`
+
+	// CompactMaxCompletionTokens caps the summariser call itself.
+	// Distinct from CompactMaxSummaryTokens: this bounds what the
+	// model may generate, that bounds what is kept. The second is
+	// enforced by truncation, so a model ignoring the first still
+	// can't inflate every later turn.
+	CompactMaxCompletionTokens *int `koanf:"compact_max_completion_tokens,omitempty"`
+
+	// CompactToolResultBytes is how much of each tool result the
+	// summariser sees. The summariser exists to save tokens; feeding
+	// it megabytes of grep output defeats that on the very call
+	// meant to help.
+	CompactToolResultBytes *int `koanf:"compact_tool_result_bytes,omitempty"`
+
+	// CompactInstructions are appended to the built-in summariser
+	// prompt — use it to name what this deployment must never lose
+	// ("always keep schema decisions and ticket numbers").
+	//
+	// Appended rather than replacing: the built-in prompt encodes
+	// the difference between a summary that records decisions and
+	// one that narrates topics, and losing that silently degrades
+	// every future turn.
+	CompactInstructions string `koanf:"compact_instructions,omitempty"`
 }
 
 // RolesConfig names the provider labels for each agent role.
@@ -481,6 +515,15 @@ type GatewayConfig struct {
 	// This is a storage bound, not a context bound — raising it costs
 	// disk and raft-snapshot size, not tokens per turn.
 	SessionMaxMessages int `koanf:"session_max_messages,omitempty"`
+
+	// SessionCacheMessages and SessionCacheTTL tune the in-memory
+	// conversation buffer that fronts the durable store. It is the
+	// degraded mode for turns handled on a raft follower (session
+	// writes are leader-only), not a performance cache — raise it if
+	// followers routinely serve long conversations. Zero takes the
+	// defaults (100 messages / 30m).
+	SessionCacheMessages int           `koanf:"session_cache_messages,omitempty"`
+	SessionCacheTTL      time.Duration `koanf:"session_cache_ttl,omitempty"`
 
 	// Responsiveness timers. Zero on any = disabled. Operators can
 	// tune per deployment; sensible defaults land in Load().

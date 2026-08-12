@@ -90,16 +90,31 @@ type conversationLog struct {
 	tail      int
 }
 
-func newConversationLog(durable SessionStore, compactor SessionCompactor, logger *slog.Logger) *conversationLog {
+// ConversationConfig tunes what a channel replays and how much the
+// degraded-mode cache holds. Zero values take the defaults.
+type ConversationConfig struct {
+	// TailMessages caps how many stored messages are read per turn.
+	TailMessages int
+	// CacheMessages and CacheTTL size the in-memory buffer used when
+	// the durable store is unavailable (typically a raft follower).
+	CacheMessages int
+	CacheTTL      time.Duration
+}
+
+func newConversationLog(durable SessionStore, compactor SessionCompactor, cfg ConversationConfig, logger *slog.Logger) *conversationLog {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	tail := cfg.TailMessages
+	if tail <= 0 {
+		tail = defaultSessionTail
 	}
 	return &conversationLog{
 		durable:   durable,
 		compactor: compactor,
-		cache:     newChatHistory(0, 0),
+		cache:     newChatHistory(cfg.CacheMessages, cfg.CacheTTL),
 		log:       logger,
-		tail:      defaultSessionTail,
+		tail:      tail,
 	}
 }
 

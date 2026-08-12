@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,5 +199,56 @@ func TestLoadDoesNotFallBackToEtc(t *testing.T) {
 	}
 	if cfg.Path() != "" {
 		t.Errorf("/etc/lobslaw should NOT be in the fallback chain; resolved to %q", cfg.Path())
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestValidateContextConfigRejectsNegatives(t *testing.T) {
+	t.Parallel()
+	c := &Config{Compute: ComputeConfig{Context: ContextConfig{TailTokens: intPtr(-1)}}}
+	if err := c.Validate(); err == nil {
+		t.Error("negative tail_tokens should fail validation")
+	}
+}
+
+// A summary bigger than the verbatim budget crowds out the recent
+// exchange it was supposed to make room for.
+func TestValidateContextConfigRejectsOversizedSummary(t *testing.T) {
+	t.Parallel()
+	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
+		TailTokens:              intPtr(1000),
+		CompactMaxSummaryTokens: intPtr(2000),
+	}}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("summary larger than the tail budget should fail validation")
+	}
+	if !strings.Contains(err.Error(), "crowds out") {
+		t.Errorf("error should explain why: %v", err)
+	}
+}
+
+func TestValidateContextConfigAcceptsSaneValues(t *testing.T) {
+	t.Parallel()
+	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
+		TailTokens:              intPtr(4000),
+		CompactMaxSummaryTokens: intPtr(600),
+		CompactKeepMessages:     intPtr(40),
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("sane config rejected: %v", err)
+	}
+}
+
+// Explicit 0 disables a bound; it must not be mistaken for negative.
+func TestValidateContextConfigAllowsExplicitZero(t *testing.T) {
+	t.Parallel()
+	c := &Config{Compute: ComputeConfig{Context: ContextConfig{
+		TailTokens:             intPtr(0),
+		HistoryToolResultBytes: intPtr(0),
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Errorf("explicit zero should be allowed as 'disabled': %v", err)
 	}
 }

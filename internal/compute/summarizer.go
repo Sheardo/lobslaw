@@ -7,10 +7,16 @@ import (
 	"strings"
 )
 
-// summarizerMaxTokens bounds the completion. The prompt asks for
-// prose well under this; the cap is a backstop against a model that
-// ignores the instruction and starts transcribing.
-const summarizerMaxTokens = 1024
+// Summariser defaults, overridable via [compute.context].
+const (
+	// DefaultCompactMaxCompletionTokens bounds the summariser's
+	// completion. The prompt asks for prose well under this; the cap
+	// is a backstop against a model that starts transcribing.
+	DefaultCompactMaxCompletionTokens = 1024
+	// DefaultCompactToolResultBytes is how much of each tool result
+	// the summariser reads.
+	DefaultCompactToolResultBytes = 400
+)
 
 // llmSummarizer implements ConversationSummarizer against an
 // LLMProvider — in practice the RoleSummariser client, so operators
@@ -19,16 +25,35 @@ const summarizerMaxTokens = 1024
 type llmSummarizer struct {
 	provider LLMProvider
 	model    string
+	cfg      SummarizerConfig
+}
+
+// SummarizerConfig tunes the summariser call. Zero values take the
+// package defaults.
+type SummarizerConfig struct {
+	// MaxCompletionTokens caps what the model may generate.
+	MaxCompletionTokens int
+	// ToolResultBytes caps how much of each tool result it reads.
+	ToolResultBytes int
+	// ExtraInstructions are appended to the built-in prompt so a
+	// deployment can name what it must never lose.
+	ExtraInstructions string
 }
 
 // NewLLMSummarizer wires a summariser to a provider. Returns nil when
 // no provider is available, which switches compaction off rather than
 // failing turns.
-func NewLLMSummarizer(provider LLMProvider, model string) ConversationSummarizer {
+func NewLLMSummarizer(provider LLMProvider, model string, cfg SummarizerConfig) ConversationSummarizer {
 	if provider == nil {
 		return nil
 	}
-	return &llmSummarizer{provider: provider, model: model}
+	if cfg.MaxCompletionTokens <= 0 {
+		cfg.MaxCompletionTokens = DefaultCompactMaxCompletionTokens
+	}
+	if cfg.ToolResultBytes <= 0 {
+		cfg.ToolResultBytes = DefaultCompactToolResultBytes
+	}
+	return &llmSummarizer{provider: provider, model: model, cfg: cfg}
 }
 
 // summarizerSystemPrompt is deliberately specific about what to keep.
@@ -68,15 +93,20 @@ func (s *llmSummarizer) SummarizeConversation(ctx context.Context, prior string,
 	}
 	b.WriteString("New messages to fold in:\n")
 	for _, m := range msgs {
-		b.WriteString(renderForSummary(m))
+		b.WriteString(renderForSummary(m, s.cfg.ToolResultBytes))
+	}
+
+	system := summarizerSystemPrompt
+	if extra := strings.TrimSpace(s.cfg.ExtraInstructions); extra != "" {
+		system += "\n\nAdditional instructions for this deployment:\n" + extra
 	}
 
 	resp, err := s.provider.Chat(ctx, ChatRequest{
 		Model:       s.model,
-		MaxTokens:   summarizerMaxTokens,
+		MaxTokens:   s.cfg.MaxCompletionTokens,
 		Temperature: 0.2,
 		Messages: []Message{
-			{Role: "system", Content: summarizerSystemPrompt},
+			{Role: "system", Content: system},
 			{Role: "user", Content: b.String()},
 		},
 	})
@@ -96,8 +126,7 @@ func (s *llmSummarizer) SummarizeConversation(ctx context.Context, prior string,
 // mattered about an exchange, and 10 MB of grep output does not help
 // it answer that — it just costs tokens on a call whose entire
 // purpose is to save them.
-func renderForSummary(m Message) string {
-	const maxToolResultBytes = 400
+func renderForSummary(m Message, maxToolResultBytes int) string {
 	var b strings.Builder
 	switch m.Role {
 	case "tool":

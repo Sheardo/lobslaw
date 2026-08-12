@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 	store := newFakeSessionStore()
 	ref := testRef()
 
-	first := newConversationLog(store, nil, nil)
+	first := newConversationLog(store, nil, ConversationConfig{}, nil)
 	first.Append(context.Background(), ref, "turn-1", []compute.Message{
 		{Role: "user", Content: "remember this"},
 		{Role: "assistant", Content: "noted"},
@@ -197,7 +198,7 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 
 	// A fresh log = a restarted process: empty cache, durable store
 	// intact. This is the whole point of the feature.
-	second := newConversationLog(store, nil, nil)
+	second := newConversationLog(store, nil, ConversationConfig{}, nil)
 	got := second.Load(context.Background(), ref).Messages
 	if len(got) != 2 {
 		t.Fatalf("after restart Load = %d messages; want 2", len(got))
@@ -209,7 +210,7 @@ func TestConversationLogPersistsAndReloads(t *testing.T) {
 
 func TestConversationLogWithoutDurableStoreUsesCache(t *testing.T) {
 	t.Parallel()
-	c := newConversationLog(nil, nil, nil)
+	c := newConversationLog(nil, nil, ConversationConfig{}, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "hi"}})
 	if got := c.Load(context.Background(), ref).Messages; len(got) != 1 {
@@ -223,7 +224,7 @@ func TestConversationLogFallsBackWhenNotLeader(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
 	store.appendErr = ErrSessionUnavailable
-	c := newConversationLog(store, nil, nil)
+	c := newConversationLog(store, nil, ConversationConfig{}, nil)
 	ref := testRef()
 
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "on a follower"}})
@@ -236,7 +237,7 @@ func TestConversationLogFallsBackWhenNotLeader(t *testing.T) {
 func TestConversationLogFallsBackWhenDurableReadFails(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil, nil)
+	c := newConversationLog(store, nil, ConversationConfig{}, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "cached"}})
 
@@ -253,7 +254,7 @@ func TestConversationLogFallsBackWhenDurableReadFails(t *testing.T) {
 func TestConversationLogForgetClearsBothTiers(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil, nil)
+	c := newConversationLog(store, nil, ConversationConfig{}, nil)
 	ref := testRef()
 	c.Append(context.Background(), ref, "t", []compute.Message{{Role: "user", Content: "x"}})
 
@@ -271,9 +272,39 @@ func TestConversationLogForgetClearsBothTiers(t *testing.T) {
 func TestConversationLogSkipsEmptyAppend(t *testing.T) {
 	t.Parallel()
 	store := newFakeSessionStore()
-	c := newConversationLog(store, nil, nil)
+	c := newConversationLog(store, nil, ConversationConfig{}, nil)
 	c.Append(context.Background(), testRef(), "t", nil)
 	if store.appends != 0 {
 		t.Errorf("empty append reached the durable store %d times", store.appends)
+	}
+}
+
+func TestConversationLogHonoursConfiguredTail(t *testing.T) {
+	t.Parallel()
+	store := newFakeSessionStore()
+	ref := testRef()
+	c := newConversationLog(store, nil, ConversationConfig{TailMessages: 3}, nil)
+	for i := range 10 {
+		c.Append(context.Background(), ref, "t", []compute.Message{
+			{Role: "user", Content: fmt.Sprintf("m%d", i)},
+		})
+	}
+	if got := c.Load(context.Background(), ref).Messages; len(got) != 3 {
+		t.Errorf("loaded %d messages, want the configured tail of 3", len(got))
+	}
+}
+
+func TestConversationCacheHonoursConfiguredSize(t *testing.T) {
+	t.Parallel()
+	// No durable store, so everything rides on the cache.
+	c := newConversationLog(nil, nil, ConversationConfig{CacheMessages: 2, CacheTTL: time.Hour}, nil)
+	ref := testRef()
+	for i := range 8 {
+		c.Append(context.Background(), ref, "t", []compute.Message{
+			{Role: "user", Content: fmt.Sprintf("m%d", i)},
+		})
+	}
+	if got := c.Load(context.Background(), ref).Messages; len(got) != 2 {
+		t.Errorf("cache held %d messages, want the configured 2", len(got))
 	}
 }
