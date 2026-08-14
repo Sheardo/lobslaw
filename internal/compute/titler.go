@@ -82,7 +82,7 @@ func cleanTitle(raw string, maxChars int) string {
 	for _, prefix := range []string{"Title:", "title:", "Summary:"} {
 		title = strings.TrimSpace(strings.TrimPrefix(title, prefix))
 	}
-	title = strings.Trim(title, `"'` + "`")
+	title = strings.Trim(title, `"'`+"`")
 	title = strings.TrimRight(title, ".!,;: ")
 	title = strings.TrimSpace(title)
 	if len(title) > maxChars {
