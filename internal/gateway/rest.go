@@ -294,6 +294,54 @@ type budgetStateJSON struct {
 	EgressBytes int64   `json:"egress_bytes"`
 }
 
+// restSessionID composes the stored conversation id from its owner and
+// the client's chosen session_id.
+//
+// REST session ids are arbitrary client-supplied strings in one flat
+// namespace, so without the owner component any authenticated caller
+// who guesses another caller's session_id would have that transcript
+// replayed into their turn — and would append to it. Composing the
+// owner in makes one user's thread structurally unreachable from
+// another's token, rather than depending on a check somewhere further
+// down remembering to compare owners.
+//
+// An ownership check in the store would also be the wrong shape:
+// Telegram deliberately shares one session across every member of a
+// group chat (the ref's UserID is the sender, the channel id is the
+// chat), so "requester must equal the session's creator" is not an
+// invariant the store can enforce. Whether ids are per-user is a fact
+// only the channel knows, and for REST they are.
+//
+// Unauthenticated deployments (RequireAuth=false) collapse to the
+// single "anon" owner, which is the correct reading of a node that
+// cannot tell its callers apart.
+func restSessionID(userID, sessionID string) string {
+	return escapeSessionComponent(userID) + "/" + sessionID
+}
+
+// escapeSessionComponent makes an identity safe to embed in a session
+// id. ':' is the store's own separator and rejected outright there, so
+// a JWT subject containing one would silently cost that caller durable
+// history. '%' is escaped first so the mapping stays injective —
+// without it the user ids "a%3Ab" and "a:b" would address the same
+// conversation, reintroducing the leak this exists to close.
+func escapeSessionComponent(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	return strings.ReplaceAll(s, ":", "%3A")
+}
+
+// validateSessionID rejects the separators the composed id is built
+// from. Failing the request beats the silent alternative: a ':' would
+// reach the store, be rejected by its own key validation, and leave
+// the caller with a stateless turn while believing they were holding a
+// conversation.
+func validateSessionID(id string) error {
+	if strings.ContainsAny(id, ":/") {
+		return errors.New("session_id must not contain ':' or '/'")
+	}
+	return nil
+}
+
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -334,9 +382,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	var sessionRef SessionRef
 	var priorHistory []compute.Message
 	if req.SessionID != "" {
+		if err := validateSessionID(req.SessionID); err != nil {
+			s.jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		sessionRef = SessionRef{
 			Channel:   "rest",
-			ChannelID: req.SessionID,
+			ChannelID: restSessionID(claims.UserID, req.SessionID),
 			UserID:    claims.UserID,
 		}
 		priorHistory = s.conv.Load(r.Context(), sessionRef)

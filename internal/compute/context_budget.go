@@ -3,6 +3,7 @@ package compute
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Context budget defaults. Both are deliberately ON by default: the
@@ -91,8 +92,9 @@ func elideToolResults(history []Message, maxBytes int) []Message {
 			copy(out, history)
 			copied = true
 		}
-		dropped := len(m.Content) - maxBytes
-		out[i].Content = m.Content[:maxBytes] +
+		kept := truncateAtRune(m.Content, maxBytes)
+		dropped := len(m.Content) - len(kept)
+		out[i].Content = kept +
 			fmt.Sprintf("\n… [%d bytes elided from replayed tool output]", dropped)
 	}
 	if !copied {
@@ -162,6 +164,27 @@ func dropOrphanedToolResults(history []Message) []Message {
 		return history
 	}
 	return out
+}
+
+// truncateAtRune clips s to at most n bytes, backing off to the last
+// character boundary rather than cutting one in half.
+//
+// Every byte budget in this package is a rough bound, so losing up to
+// three more bytes costs nothing — while splitting a multi-byte
+// character produces U+FFFD in the middle of text the model then reads
+// back as conversation. Non-Latin scripts are expected traffic here:
+// the soul layer ships a ten-language detector.
+func truncateAtRune(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // estimateTokens approximates a message's cost without a tokenizer.

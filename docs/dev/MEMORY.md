@@ -233,6 +233,8 @@ The index record carries the retained range (`first_seq`, `next_seq`); message b
 
 Reads use `Store.ForEachPrefix`, which cursor-seeks straight to the range rather than decrypting every message in the cluster to find one conversation.
 
+**Who a channel-id belongs to is the channel's business.** The store enforces the key shape and nothing about ownership, because ownership isn't uniform: a Telegram channel-id is a *chat*, deliberately shared by every member of a group, while a REST channel-id is `"<escaped-user>/<client session_id>"` so two callers picking the same id get two conversations. A `rec.UserId` check in the store would break the first case to fix the second. Channels that mint ids from client input scope them; channels whose ids are already an address don't need to.
+
 ### Append is one raft entry per turn
 
 `SessionAppendRecord` bundles the updated index record, the turn's messages, and the keys the trim evicted. The FSM applies evictions, then bodies, then the index record last — so a crash mid-apply leaves unreferenced messages (harmless; the next trim reclaims them) rather than an index promising messages that aren't there.

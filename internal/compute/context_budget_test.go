@@ -3,6 +3,7 @@ package compute
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func msgs(n int, role, content string) []Message {
@@ -298,5 +299,73 @@ func TestTurnStartIndexWithoutTrimming(t *testing.T) {
 	newTurn := resp.Messages[resp.TurnStartIndex:]
 	if len(newTurn) != 2 || newTurn[0].Content != "hello" {
 		t.Errorf("turn slice = %+v; want [hello, reply]", newTurn)
+	}
+}
+
+// --- rune safety -------------------------------------------------------
+
+// Byte budgets must not cut a character in half. The agent reads
+// elided tool output back as conversation, and U+FFFD in the middle of
+// it is both noise to the model and visible corruption to the user.
+func TestElideToolResultsKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+	// Repeated 3-byte runes guarantee the cut lands mid-character for
+	// at least one of the budgets below.
+	body := strings.Repeat("日", 400)
+	// The tool result needs its originating assistant call in the
+	// window, or Apply drops it as an orphan before elision is visible.
+	history := []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "c1", Name: "read"}}},
+		{Role: "tool", ToolCallID: "c1", Content: body},
+	}
+	for _, maxBytes := range []int{10, 11, 12, 13, 100, 101} {
+		got := ContextBudget{HistoryToolResultBytes: maxBytes}.Apply(history)
+		if len(got) != 2 {
+			t.Fatalf("maxBytes=%d: got %d messages, want 2", maxBytes, len(got))
+		}
+		if !utf8.ValidString(got[1].Content) {
+			t.Errorf("maxBytes=%d: elided content is not valid UTF-8: %q", maxBytes, got[1].Content)
+		}
+		if strings.ContainsRune(got[1].Content, utf8.RuneError) {
+			t.Errorf("maxBytes=%d: elided content contains U+FFFD", maxBytes)
+		}
+	}
+}
+
+func TestTruncateAtRune(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		n    int
+		want string
+	}{
+		{"under budget", "hello", 10, "hello"},
+		{"exact", "hello", 5, "hello"},
+		{"ascii cut", "hello", 3, "hel"},
+		{"mid rune backs off", "日本語", 4, "日"},
+		{"on boundary keeps whole", "日本語", 6, "日本"},
+		{"cut before first rune", "日本語", 2, ""},
+		{"zero", "日本語", 0, ""},
+		{"negative", "日本語", -1, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := truncateAtRune(tc.in, tc.n); got != tc.want {
+				t.Errorf("truncateAtRune(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+			}
+		})
+	}
+}
+
+// The stored summary is prepended to every later turn, so a broken
+// character there is charged repeatedly.
+func TestTruncateToTokensKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+	for _, maxTokens := range []int{1, 2, 3, 25} {
+		got := truncateToTokens(strings.Repeat("日", 200), maxTokens)
+		if !utf8.ValidString(got) {
+			t.Errorf("maxTokens=%d: summary is not valid UTF-8: %q", maxTokens, got)
+		}
 	}
 }

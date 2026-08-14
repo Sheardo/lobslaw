@@ -27,7 +27,9 @@ curl -X POST https://localhost:8443/v1/messages \
   -d '{"message": "what is my name?", "session_id": "cli-42"}'
 ```
 
-Pick the id yourself — anything stable and unique per conversation, with no `:` in it. Reusing an id resumes that conversation; a fresh id starts a new one.
+Pick the id yourself — anything stable and unique per conversation, containing no `:` or `/` (both are rejected with a 400). Reusing an id resumes that conversation; a fresh id starts a new one.
+
+Session ids are scoped to the authenticated caller, so two users who both pick `default` get two separate conversations and neither can read the other's. On a node with `require_auth = false` every caller is the same anonymous identity, and so shares one namespace — if REST is reachable by more than one person, authenticate it.
 
 ## Telegram
 
