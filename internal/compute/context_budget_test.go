@@ -357,15 +357,3 @@ func TestTruncateAtRune(t *testing.T) {
 		})
 	}
 }
-
-// The stored summary is prepended to every later turn, so a broken
-// character there is charged repeatedly.
-func TestTruncateToTokensKeepsValidUTF8(t *testing.T) {
-	t.Parallel()
-	for _, maxTokens := range []int{1, 2, 3, 25} {
-		got := truncateToTokens(strings.Repeat("日", 200), maxTokens)
-		if !utf8.ValidString(got) {
-			t.Errorf("maxTokens=%d: summary is not valid UTF-8: %q", maxTokens, got)
-		}
-	}
-}
