@@ -189,7 +189,7 @@ func truncateToTokens(s string, maxTokens int) string {
 	}
 	// Cut at a sentence boundary where one is close to the limit, so
 	// the summary doesn't end mid-word.
-	cut := s[:maxBytes]
+	cut := truncateAtRune(s, maxBytes)
 	if i := strings.LastIndexAny(cut, ".!?\n"); i > maxBytes/2 {
 		return cut[:i+1]
 	}

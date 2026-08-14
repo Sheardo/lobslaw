@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 type fakeSummaryStore struct {
@@ -304,5 +305,22 @@ func TestNilCompactorIsSafeToCall(t *testing.T) {
 	ran, err := c.MaybeCompact(context.Background(), SessionKey{})
 	if ran || err != nil {
 		t.Errorf("ran=%v err=%v; want a silent no-op", ran, err)
+	}
+}
+
+// The stored summary is prepended to every later turn, so a character
+// broken by the token ceiling is charged repeatedly — and the summary
+// is the one piece of context deliberately kept when everything else
+// is trimmed away.
+func TestTruncateToTokensKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+	for _, maxTokens := range []int{1, 2, 3, 25} {
+		got := truncateToTokens(strings.Repeat("日", 200), maxTokens)
+		if !utf8.ValidString(got) {
+			t.Errorf("maxTokens=%d: summary is not valid UTF-8: %q", maxTokens, got)
+		}
+		if strings.ContainsRune(got, utf8.RuneError) {
+			t.Errorf("maxTokens=%d: summary contains U+FFFD: %q", maxTokens, got)
+		}
 	}
 }
