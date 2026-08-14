@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func testSessionService(t *testing.T, maxMessages int) *SessionService {
@@ -659,5 +660,76 @@ func TestPutTitlePreservesSummary(t *testing.T) {
 	}
 	if tr.Title != "the title" {
 		t.Errorf("title = %q", tr.Title)
+	}
+}
+
+// --- snippet windowing -------------------------------------------------
+
+// Search snippets go straight into the agent's context, so a window
+// that cuts a character in half is corruption the model reads back as
+// conversation.
+func TestSnippetAroundKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+	// The window is snippetContextBytes/2 either side of the match, so
+	// whether it lands mid-character depends on where the match sits
+	// relative to the 3-byte runes around it. The padding goes BETWEEN
+	// the match and the surrounding text: padding the front instead
+	// would shift the match and the rune grid together and cancel out,
+	// leaving a fixture that passes by alignment alone.
+	for pad := range 3 {
+		gap := strings.Repeat("x", pad)
+		content := strings.Repeat("日本語のテキスト", 60) +
+			gap + "ERROR" + gap + strings.Repeat("さらに文章", 60)
+		idx := strings.Index(content, "ERROR")
+		got := snippetAround(content, idx, len("ERROR"))
+		if !utf8.ValidString(got) {
+			t.Errorf("pad=%d: snippet is not valid UTF-8: %q", pad, got)
+		}
+		if strings.ContainsRune(got, utf8.RuneError) {
+			t.Errorf("pad=%d: snippet contains U+FFFD: %q", pad, got)
+		}
+		if !strings.Contains(got, "ERROR") {
+			t.Errorf("pad=%d: snippet lost the match it was centred on: %q", pad, got)
+		}
+	}
+}
+
+// The match offset comes from a lowercased copy of the content, so it
+// is not guaranteed to address the same byte in the original. Whatever
+// it points at, the window must not panic on a slice bound.
+func TestSnippetAroundToleratesOutOfRangeOffset(t *testing.T) {
+	t.Parallel()
+	content := "短いテキスト"
+	for _, idx := range []int{-5, 0, len(content), len(content) + 50} {
+		got := snippetAround(content, idx, 3)
+		if !utf8.ValidString(got) {
+			t.Errorf("idx=%d: snippet is not valid UTF-8: %q", idx, got)
+		}
+	}
+}
+
+// A real search over non-ASCII content, end to end through the store.
+func TestSearchTranscriptsNonASCIISnippets(t *testing.T) {
+	t.Parallel()
+	svc := testSessionService(t, 100)
+	ref := SessionRef{Channel: "rest", ChannelID: "jp", UserID: "u1"}
+	if _, err := svc.Append(context.Background(), ref, "t1", []TranscriptMessage{
+		{Role: "user", Content: strings.Repeat("これはテストです。", 40) + "ERR_CONN_REFUSED" + strings.Repeat("続きの文章です。", 40)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := svc.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "err_conn_refused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || len(hits[0].Snippets) != 1 {
+		t.Fatalf("got %d hits, want 1 with a snippet", len(hits))
+	}
+	snip := hits[0].Snippets[0].Text
+	if !utf8.ValidString(snip) {
+		t.Errorf("snippet is not valid UTF-8: %q", snip)
+	}
+	if !strings.Contains(snip, "ERR_CONN_REFUSED") {
+		t.Errorf("snippet lost the match: %q", snip)
 	}
 }

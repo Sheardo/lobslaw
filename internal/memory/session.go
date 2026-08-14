@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -646,7 +647,27 @@ func (s *SessionService) SearchTranscripts(_ context.Context, q SessionSearchQue
 
 // snippetAround returns a window of text centred on a match, with
 // ellipses where it was cut.
+//
+// idx is an offset into the LOWERCASED copy of content that the search
+// matched against, so for text where lowercasing changes a character's
+// encoded width it addresses a slightly different place in the
+// original. The window is 240 bytes wide and only has to be roughly
+// centred, so a few bytes of drift is invisible — but the offset is
+// clamped rather than trusted, because "no lowercase mapping is ever
+// wider than the character it replaces" is an assumption about the
+// whole of Unicode, and being wrong about it here is a panic on a
+// slice bound in the middle of a search.
+//
+// Boundaries are then aligned to whole characters: cutting a
+// multi-byte character in half yields U+FFFD in a snippet that goes
+// straight into the agent's context.
 func snippetAround(content string, idx, matchLen int) string {
+	if idx > len(content) {
+		idx = len(content)
+	}
+	if idx < 0 {
+		idx = 0
+	}
 	start := idx - snippetContextBytes/2
 	if start < 0 {
 		start = 0
@@ -655,6 +676,8 @@ func snippetAround(content string, idx, matchLen int) string {
 	if end > len(content) {
 		end = len(content)
 	}
+	start = alignRuneStart(content, start)
+	end = alignRuneStart(content, end)
 	out := content[start:end]
 	if start > 0 {
 		out = "…" + out
@@ -663,6 +686,23 @@ func snippetAround(content string, idx, matchLen int) string {
 		out += "…"
 	}
 	return out
+}
+
+// alignRuneStart moves an offset back to the nearest character
+// boundary. Used for both ends of a snippet: backing a start offset up
+// keeps the character it landed inside, and backing an end offset up
+// drops the partial character it would otherwise have cut.
+func alignRuneStart(s string, i int) int {
+	if i <= 0 {
+		return 0
+	}
+	if i >= len(s) {
+		return len(s)
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
 }
 
 // PutTitle sets a conversation's human-readable label. Titles are
