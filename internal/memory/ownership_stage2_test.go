@@ -99,18 +99,31 @@ func TestForgetRefusesAnotherPrincipalsRecord(t *testing.T) {
 	}
 }
 
-func TestForgetAllowsOwnAndLegacyRecords(t *testing.T) {
+func TestForgetAllowsOwnRecords(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)
 	seedOwnedVector(t, s, "alice-own", []float32{1, 0, 0}, "user:alice")
-	seedOwnedVector(t, s, "legacy", []float32{1, 0, 0}, "")
+	// Unowned is readable by nobody, so it is forgettable by nobody
+	// either — the operator path (empty requester) still reaches it.
+	seedOwnedVector(t, s, "unowned", []float32{1, 0, 0}, "")
 
-	matched := map[string]struct{}{"alice-own": {}, "legacy": {}}
+	matched := map[string]struct{}{"alice-own": {}, "unowned": {}}
 	if err := retainForgettable(s, matched, For("user:alice")); err != nil {
 		t.Fatal(err)
 	}
-	if len(matched) != 2 {
-		t.Errorf("alice lost the right to forget her own or a legacy record: %v", matched)
+	if _, ok := matched["alice-own"]; !ok {
+		t.Error("alice lost the right to forget her own record")
+	}
+	if _, ok := matched["unowned"]; ok {
+		t.Error("a named principal forgot an unowned record")
+	}
+
+	operator := map[string]struct{}{"unowned": {}}
+	if err := retainForgettable(s, operator, forgetAudience("")); err != nil {
+		t.Fatal(err)
+	}
+	if len(operator) != 1 {
+		t.Error("the operator path cannot reach an unowned record; nothing could clean it up")
 	}
 }
 

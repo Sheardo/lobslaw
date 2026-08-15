@@ -97,7 +97,10 @@ func TestParseWhenRejectsEmpty(t *testing.T) {
 func seedCommitment(t *testing.T, store *memory.Store, id, status string, due time.Time) {
 	t.Helper()
 	c := &lobslawv1.AgentCommitment{
-		Id:     id,
+		Id: id,
+		// Owned, because production always is: an unowned commitment
+		// is actionable by nobody now.
+		Owner:  "user:alice",
 		Status: status,
 		DueAt:  timestamppb.New(due),
 		Params: map[string]string{"prompt": "ping"},
@@ -124,7 +127,7 @@ func TestCommitmentListHidesNonPendingByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	fn, _ := b.Get("commitment_list")
-	out, exit, err := fn(context.Background(), nil)
+	out, exit, err := fn(turnAs("alice"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +170,7 @@ func TestCommitmentListIncludesHistoryWhenAsked(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: &fakeApplier{}})
 	fn, _ := b.Get("commitment_list")
-	out, _, err := fn(context.Background(), map[string]string{"include_history": "true"})
+	out, _, err := fn(turnAs("alice"), map[string]string{"include_history": "true"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +198,7 @@ func TestCommitmentListRejectsBadBoolean(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: &fakeApplier{}})
 	fn, _ := b.Get("commitment_list")
-	_, exit, err := fn(context.Background(), map[string]string{"include_history": "yeppers"})
+	_, exit, err := fn(turnAs("alice"), map[string]string{"include_history": "yeppers"})
 	if err == nil || exit == 0 {
 		t.Error("non-boolean include_history should fail")
 	}
@@ -234,7 +237,7 @@ func TestCommitmentListHidesOtherPrincipals(t *testing.T) {
 	store := newMemoryStoreForTest(t)
 	seedOwnedCommitment(t, store, "alice-1", "user:alice")
 	seedOwnedCommitment(t, store, "bob-1", "user:bob")
-	seedOwnedCommitment(t, store, "legacy", "")
+	seedOwnedCommitment(t, store, "unowned", "")
 
 	b := NewBuiltins()
 	if err := RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: &fakeApplier{}}); err != nil {
@@ -261,8 +264,14 @@ func TestCommitmentListHidesOtherPrincipals(t *testing.T) {
 	if got["bob-1"] {
 		t.Error("alice was shown bob's commitment")
 	}
-	if !got["alice-1"] || !got["legacy"] {
-		t.Errorf("alice lost her own or the legacy commitment: %+v", payload.Commitments)
+	if !got["alice-1"] {
+		t.Errorf("alice lost her own commitment: %+v", payload.Commitments)
+	}
+	// Unowned is actionable by nobody now — the carve-out that made it
+	// actionable by everybody was for commitments predating the owner
+	// field, a population that never existed.
+	if got["unowned"] {
+		t.Error("an unowned commitment was listed")
 	}
 	// Bob's must not reach the hidden counter either — that would leak
 	// how many things other people have scheduled.
