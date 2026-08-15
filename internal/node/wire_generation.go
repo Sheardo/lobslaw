@@ -366,3 +366,49 @@ func (n *Node) artifactOpener() gateway.ArtifactOpener {
 		return f, nil
 	}
 }
+
+func (n *Node) resolveImageEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("image", n.cfg.Compute.Image.Provider, compute.CapabilityImage)
+}
+
+// wireImageTools registers generate_image. Skipped when there is
+// nowhere to write, for the same reason as speak: generating an image
+// the agent cannot hand over bills for nothing.
+func (n *Node) wireImageTools(builtins *compute.Builtins) error {
+	eps := n.resolveImageEndpoints()
+	if len(eps) == 0 {
+		return nil
+	}
+	resolver := n.artifactResolver()
+	if resolver == nil {
+		n.log.Warn("compute: image provider configured but no writable artifact mount; " +
+			"skipping generate_image")
+		return nil
+	}
+
+	cfgs := make([]compute.ImageConfig, 0, len(eps))
+	for _, ep := range eps {
+		d, err := compute.NewOpenAIImageDriver(compute.OpenAIImageConfig{
+			Endpoint:   ep.endpoint,
+			Model:      ep.model,
+			Credential: compute.NewBearerCredential(ep.apiKey),
+		})
+		if err != nil {
+			n.log.Warn("compute: image provider skipped", "via", ep.via, "err", err)
+			continue
+		}
+		cfgs = append(cfgs, compute.ImageConfig{Driver: d, Resolver: resolver})
+	}
+	if len(cfgs) == 0 {
+		return nil
+	}
+	if err := compute.RegisterImageBuiltin(builtins, cfgs...); err != nil {
+		return fmt.Errorf("register generate_image: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.ImageToolDef()); err != nil {
+		return fmt.Errorf("register generate_image tool def: %w", err)
+	}
+	n.log.Debug("compute: generate_image registered",
+		"model", eps[0].model, "via", eps[0].via, "chain_len", len(cfgs))
+	return nil
+}

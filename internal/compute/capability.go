@@ -18,6 +18,7 @@ const (
 	CapabilityPDF             = "pdf"
 	CapabilityEmbeddings      = "embeddings"
 	CapabilitySpeak           = "speak"
+	CapabilityImage           = "image"
 )
 
 // SelectByCapability returns providers carrying any of the given

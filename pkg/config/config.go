@@ -224,6 +224,7 @@ type ComputeConfig struct {
 	PDF                 PDFConfig        `koanf:"pdf,omitempty"`
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
 	Speak               SpeakConfig      `koanf:"speak,omitempty"`
+	Image               ImageGenConfig   `koanf:"image,omitempty"`
 
 	// ArtifactMount names the storage mount that receives generated
 	// files (speech, images, video). Empty falls back to the first
@@ -395,6 +396,11 @@ type VisionConfig = ModalityOverride
 // provider pins to it, and leaving it empty discovers providers by
 // the "speak" capability tag in priority order.
 type SpeakConfig = ModalityOverride
+
+// ImageGenConfig selects the provider backing the generate_image
+// builtin. Named ImageGen because VisionConfig already covers reading
+// images; this one writes them.
+type ImageGenConfig = ModalityOverride
 
 // AudioConfig selects the provider backing the audio modality
 // builtins (transcription of inbound voice notes and audio files).
