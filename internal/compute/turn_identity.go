@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // TurnIdentity is who a turn came from and where it arrived — the
@@ -51,6 +52,16 @@ type TurnIdentity struct {
 	// attribution wants both, as the OAuth audit trail does.
 	Scope string
 
+	// Roles are the policy subjects the caller holds — Claims.Roles,
+	// which arrive either from a token's `roles` claim or from the
+	// operator's [[user]] declaration for channels that have no token.
+	//
+	// Carried here so a builtin can put the turn back through the
+	// policy engine without reaching for the request's Claims, which
+	// it does not have. Holding a role decides nothing by itself: it
+	// is an input to a rule, and the rule is what allows or denies.
+	Roles []string
+
 	// Channel and ChannelID address the conversation this turn is
 	// happening in — "telegram" and a chat id, say. Both empty for
 	// turns with no channel origin: the scheduler, commitment fires,
@@ -82,6 +93,18 @@ func (t TurnIdentity) AttributedTo() string {
 		return t.UserID
 	default:
 		return ""
+	}
+}
+
+// Claims rebuilds the subject a policy rule matches against. It is a
+// projection, not the original token: the turn kept only the fields
+// an authorisation decision reads, and expiry was checked once at the
+// door.
+func (t TurnIdentity) Claims() *types.Claims {
+	return &types.Claims{
+		UserID: t.UserID,
+		Scope:  t.Scope,
+		Roles:  t.Roles,
 	}
 }
 

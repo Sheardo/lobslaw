@@ -332,6 +332,53 @@ private: a writer that forgets the field must not silently publish.
 `default`), and `Claims.Scope` is a permission tier — neither identifies a
 person, and overloading either a third time is how the original bug hid.
 
+#### Reading across owners
+
+Someone has to be able to read across owners — an operator recovering a
+deployment, or clearing up after a person who has left. Operator authority for
+that is deliberately split in two. Machine operations (backup, restore, node
+lifecycle) are authorised by an mTLS client certificate; access to a *person's*
+data is authorised separately, by a principal holding `role:operator`, and a
+certificate alone never grants the unrestricted audience.
+
+The data half is what is built. `Claims.Roles` arrives either from a token's
+`roles` claim or, for channels with no token, from `[[user]] roles` in operator
+config resolved by principal. `TurnIdentity` carries it so a builtin can put the
+turn back through the policy engine without holding the request's claims.
+
+**Holding the role is not the grant.** Every widening goes through
+`compute.CrossOwnerAuthorizer`, implemented over the policy engine as
+`memory:read:any` on `memory:*`:
+
+```go
+readAudience(ctx, turn, authz)  // Everyone() only when policy says allow
+```
+
+The obvious implementation — `claims.HasRole("operator")` at the point of the
+read — gives a deployment exactly two states: reads nothing of anyone else's, or
+reads everything always and silently. An operator who wants their own access
+narrowed to one owner, gated, or revoked for a week has nowhere to say so.
+Routing it through a rule makes the widening something with a subject, an
+effect, and a priority. `deny` and `require_confirmation` both refuse:
+`ContextEngine.Assemble` and the `Forget` scope check have no user in front of
+them to confirm with, and an effect an operator chose to slow something down
+must not become the one that speeds it up.
+
+**A nil authorizer never widens.** A deployment that has not wired one has not
+said operators may read everything, and reading silence as universal read turns
+an incomplete wiring into a breach that nothing in the logs distinguishes from
+normal traffic.
+
+**Every widening is an audit event.** The authorizer appends to the hash-chained
+log — actor, rule id, effect — before returning true, which is why the policy
+check and the audit write live in one implementation in `internal/node` rather
+than at each reading call site. The complaint that motivated the operator role
+was an audit trail the subject could write; a reader that forgets to log cannot
+exist if logging is not the reader's job.
+
+Applies at `memory_search` (both the semantic and substring strategies),
+`ContextEngine.Assemble`, and `memory_forget` / `memory_correct`.
+
 #### Consolidation and forgetting
 
 Dream **never clusters across owners**. Consolidation replaces a cluster's
@@ -349,15 +396,21 @@ member in a cluster would publish the rest.
 `Forget` takes a `requester` and will not delete what that principal cannot
 read. The scoping happens *before* the `SourceIds` cascade, so a record filtered
 out cannot pull its consolidations down with it. An empty requester is
-unrestricted for operator tooling and peer nodes; the agent's `memory_forget`
-always sets one, so the model never reaches that path.
+unrestricted for operator tooling and peer nodes reaching the RPC over mTLS.
+
+The agent's `memory_forget` sets a requester from the turn, so the model never
+reaches the unrestricted path by default. A caller the policy engine has granted
+`memory:read:any` is the exception: the RPC has one field for whose read this
+is, and a caller excused from ownership filtering has nothing to put in it, so
+the widened form is the empty requester. The principal is not lost by that — the
+authorizer names it in the audit entry before the call is made.
 
 ### Where identity comes from
 
 `TurnIdentity` travels on the request context, attached once per turn in
 `Agent.runLoop`, and is the only source of caller identity for any builtin —
 not just the session tools. It carries the user, their permission scope, the
-conversation address, and the timezone.
+roles they hold, the conversation address, and the timezone.
 
 It is deliberately *not* in the tool-argument map. That map is built from the
 model's own JSON, so a value read out of it is a value the model can choose.

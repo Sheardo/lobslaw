@@ -157,11 +157,12 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 // these find literal text in a specific thread.
 func (n *Node) wireMemoryTools(builtins *compute.Builtins, embedder compute.EmbeddingProvider) error {
 	if err := compute.RegisterMemoryBuiltins(builtins, compute.MemoryConfig{
-		Store:     n.store,
-		Raft:      n.raft,
-		Forgetter: n.memorySvc,
-		Dreamer:   n.memorySvc,
-		Embedder:  embedder,
+		Store:      n.store,
+		Raft:       n.raft,
+		Forgetter:  n.memorySvc,
+		Dreamer:    n.memorySvc,
+		Embedder:   embedder,
+		CrossOwner: n.crossOwnerAuthz(),
 	}); err != nil {
 		return fmt.Errorf("register memory builtins: %w", err)
 	}

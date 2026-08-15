@@ -633,6 +633,20 @@ type UserConfig struct {
 	Timezone    string                  `koanf:"timezone,omitempty"`
 	Language    string                  `koanf:"language,omitempty"`
 	Channels    []UserChannelAddrConfig `koanf:"channels,omitempty"`
+
+	// Roles are the policy subjects this person holds, matched by
+	// rules written as subject = "role:operator". They exist here
+	// because a JWT is the only other way to assert a role, and most
+	// channels have no JWT: someone talking to the bot over Telegram
+	// arrives with a chat id and nothing else, so without an
+	// operator-declared list there is no way to say who they are
+	// beyond their name.
+	//
+	// Holding a role grants nothing on its own. It only makes the
+	// principal matchable by a rule, so what the role can do stays a
+	// property of the policy the operator wrote rather than of the
+	// string "operator" appearing in the code.
+	Roles []string `koanf:"roles,omitempty"`
 }
 
 // UserChannelAddrConfig binds one (channel, address) pair for a user.

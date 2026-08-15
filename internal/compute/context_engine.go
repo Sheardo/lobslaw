@@ -24,9 +24,10 @@ import (
 // registry, and a multi-provider RoleMap — enough to compute
 // "relevant memory + likely-useful tools" per turn.
 type ContextEngine struct {
-	store    *memory.Store
-	embedder EmbeddingProvider
-	log      *slog.Logger
+	store      *memory.Store
+	embedder   EmbeddingProvider
+	crossOwner CrossOwnerAuthorizer
+	log        *slog.Logger
 
 	maxRecall int
 }
@@ -39,6 +40,13 @@ type ContextEngineConfig struct {
 	Store    *memory.Store
 	Embedder EmbeddingProvider
 	Logger   *slog.Logger
+
+	// CrossOwner decides whether this turn's caller may recall across
+	// owners. Nil never widens — see readAudience. Passive recall is
+	// the most dangerous place to get this wrong, because it runs with
+	// no tool call in front of it and its output lands in the system
+	// prompt rather than anywhere the user can see it.
+	CrossOwner CrossOwnerAuthorizer
 
 	// MaxRecall caps the number of memory records injected into
 	// the prompt per turn. 3 is the sweet spot — enough for
@@ -58,10 +66,11 @@ func NewContextEngine(cfg ContextEngineConfig) *ContextEngine {
 		maxRecall = 3
 	}
 	return &ContextEngine{
-		store:     cfg.Store,
-		embedder:  cfg.Embedder,
-		log:       logger,
-		maxRecall: maxRecall,
+		store:      cfg.Store,
+		embedder:   cfg.Embedder,
+		crossOwner: cfg.CrossOwner,
+		log:        logger,
+		maxRecall:  maxRecall,
 	}
 }
 
@@ -101,9 +110,13 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	// memories into another user's system prompt before they have said
 	// anything. An unidentified turn yields the zero Principal, which
 	// still sees shared and legacy records but nothing owned.
+	//
+	// A caller policy has granted cross-owner read widens to
+	// Everyone(); nothing else does, including a caller who merely
+	// holds role:operator.
 	turn, _ := TurnIdentityFrom(ctx)
 	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
-		memory.For(turn.Principal), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+		readAudience(ctx, turn, e.crossOwner), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		e.log.Warn("context-engine: vector search failed",
 			"err", err)

@@ -280,9 +280,69 @@ path = "audit/audit-{date}.jsonl"
 mode = 0640
 ```
 
+## `[[user]]`
+
+One entry per human the deployment knows about. Seeded into the
+user-preferences bucket on first boot; runtime edits win on subsequent
+boots, so this is the initial declaration rather than a live mirror.
+
+```toml
+[[user]]
+id           = "alice"
+display_name = "Alice"
+timezone     = "Europe/London"
+language     = "en"
+roles        = ["operator"]
+
+[[user.channels]]
+type    = "telegram"
+address = "123456789"
+```
+
+`id` is the canonical principal id — the same value `[identity.aliases]`
+maps channel ids onto. Everything else is keyed off it.
+
+### `roles`
+
+Policy subjects this person holds, matched by rules written as
+`subject = "role:operator"`. A JWT's `roles` claim does the same job for
+REST callers; this key is how a channel with no token — Telegram — says
+the same thing.
+
+Roles are looked up by resolved principal, so `roles` on `id = "alice"`
+covers every channel id `[identity.aliases]` maps to `alice`. A channel
+id with no alias entry resolves to itself and therefore matches no
+`[[user]]` block, which means an operator arriving on a second channel
+needs an alias entry before their role follows them there.
+
+**Holding a role grants nothing on its own.** It only makes the
+principal matchable by a rule. Cross-owner memory access in particular
+is a policy decision, not a property of the role:
+
+```toml
+[[policy.rules]]
+id       = "operators-read-any-memory"
+subject  = "role:operator"
+action   = "memory:read:any"
+resource = "memory:*"
+effect   = "allow"
+priority = 50
+```
+
+Nothing seeds that rule. Without it, a `role:operator` principal reads
+exactly what they own, the same as anyone else. With it, every widened
+read — `memory_search`, passive recall, a cross-owner `memory_forget` —
+appends an entry to the audit chain naming the principal and the rule
+that allowed it.
+
+`effect = "deny"` and `effect = "require_confirmation"` both refuse the
+widening. Confirmation is not offered: two of the three call sites run
+with no user in front of them to ask, and an effect chosen to slow
+something down must not become the one that speeds it up.
+
 ## Other sections
 
-`[discovery]`, `[observability]`, `[hooks]`, `[users]` — see `pkg/config/config.go` for the full schema. These are stable but rarely-touched.
+`[discovery]`, `[observability]`, `[hooks]` — see `pkg/config/config.go` for the full schema. These are stable but rarely-touched.
 
 ## Secret references
 
