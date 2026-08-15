@@ -342,6 +342,15 @@ type ProcessMessageResponse struct {
 	// "I ran these commands for you".
 	ToolCalls []ToolInvocation
 
+	// Attachments are files the turn PRODUCED — generated speech,
+	// images, video. The channel layer sends these alongside Reply.
+	//
+	// They are not in Reply because they cannot be: audio is not text.
+	// A tool that makes a file announces it via CollectArtifact and it
+	// surfaces here, so the channel can attach the bytes rather than
+	// the model reciting a file path at the user.
+	Attachments []types.Attachment
+
 	// Messages is the full conversation after this turn — the
 	// caller persists this to feed subsequent turns.
 	Messages []Message
@@ -564,6 +573,14 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 }
 
 func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
+	// Every exit from this loop — normal, budget-exceeded, confirmation
+	// or hard-timeout — must carry whatever files the turn produced.
+	// A turn that synthesised audio and then hit its budget still
+	// generated (and was billed for) the audio, so dropping it on the
+	// unusual paths would lose something the user already paid for.
+	ctx, artifacts := WithArtifactCollector(ctx)
+	defer func() { resp.Attachments = artifacts.Collected() }()
+
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))

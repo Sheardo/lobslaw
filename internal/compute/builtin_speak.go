@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -90,6 +91,18 @@ func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("speak: %w", err)
 		}
+
+		// Announce the file so the channel layer attaches it. Without
+		// this the model gets a path and the user gets nothing —
+		// audio the agent cannot hand over is audio it should not have
+		// been billed for.
+		CollectArtifact(ctx, types.Attachment{
+			Kind:      AttachmentKindForMIME(got.MIME),
+			MimeType:  got.MIME,
+			Size:      int(got.Bytes),
+			Reference: got.Mount + ":" + got.Path,
+			Filename:  filepath.Base(got.Path),
+		})
 
 		// The PATH is the result, not the bytes. Audio cannot go into a
 		// tool result the model reads; what the model needs is a

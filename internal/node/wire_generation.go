@@ -3,9 +3,14 @@ package node
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -327,4 +332,37 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 	n.log.Debug("compute: speak registered",
 		"model", eps[0].model, "via", eps[0].via, "chain_len", len(cfgs))
 	return nil
+}
+
+// artifactOpener resolves a "mount:path" reference produced by a tool
+// back to its bytes, for the channel layer to attach.
+//
+// This is a READ path over model-influenced input, so it repeats the
+// containment the resolver does on write rather than trusting it. The
+// write side and the read side are separated by raft, a restart and
+// possibly a different node; an invariant enforced only at write time
+// is an invariant that holds only until something else writes.
+func (n *Node) artifactOpener() gateway.ArtifactOpener {
+	return func(reference string) (io.ReadCloser, error) {
+		mount, rel, ok := strings.Cut(reference, ":")
+		if !ok || mount == "" || rel == "" {
+			return nil, fmt.Errorf("artifact: malformed reference %q, want mount:path", reference)
+		}
+		root, ok := (nodeMounts{mounts: n.cfg.Storage.Mounts}).MountRoot(mount)
+		if !ok {
+			return nil, fmt.Errorf("artifact: unknown or unwritable mount %q", mount)
+		}
+		full := filepath.Join(root, filepath.Clean("/"+rel))
+		// Belt and braces against a reference that traverses: Join +
+		// Clean already contain it, and this catches a symlinked mount
+		// root or a future caller that skips the Clean.
+		if !strings.HasPrefix(full, filepath.Clean(root)+string(filepath.Separator)) {
+			return nil, fmt.Errorf("artifact: reference %q escapes mount %q", reference, mount)
+		}
+		f, err := os.Open(full) //nolint:gosec // contained above
+		if err != nil {
+			return nil, fmt.Errorf("artifact: open: %w", err)
+		}
+		return f, nil
+	}
 }
