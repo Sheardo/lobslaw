@@ -37,10 +37,21 @@ linters:
       # from a CI checkout.
       - \.claude
     rules:
+      # Every `path` below matches (^|/) rather than a bare ^. golangci-lint
+      # normally reports module-relative paths, which ^ anchors against — but
+      # when the working directory reaches the module through a symlink it
+      # reports paths that escape the module root
+      # ("../../../home/you/src/repo/internal/audit/log.go"). Those do not
+      # start with "internal/", so a ^-anchored rule stops matching and every
+      # exclusion below silently switches off — 60 suppressed findings
+      # reappear, none of them new. Anchoring on a path separator instead
+      # matches both shapes and keeps the suppression from depending on how
+      # the caller spelled the directory. Do not "tidy" these back to ^.
+      #
       # internal/egress/ is the chokepoint package — it legitimately
       # constructs http.Client and uses http.* functions. The lint
       # rule blocks new call sites elsewhere from doing the same.
-      - path: ^internal/egress/
+      - path: (^|/)internal/egress/
         linters: [forbidigo]
       # Test files commonly use httptest + http.DefaultClient; the
       # rule only matters for production code paths.
@@ -63,7 +74,7 @@ linters:
       # dimension names, which ARE now constants: those are our own
       # vocabulary and a typo there silently no-ops instead of
       # failing.
-      - path: ^internal/compute/
+      - path: (^|/)internal/compute/
         text: 'string `(tool|tool_calls|assistant|user|system|stop)` has'
         linters: [goconst]
       # revive's `exported` rule is enforced on pkg/ (see the
@@ -73,21 +84,21 @@ linters:
       # doc comment on every one of them is noise with no audience.
       # Godoc for these packages is the package comment plus the
       # comments that already exist where the intent is non-obvious.
-      - path: ^(internal|cmd)/
+      - path: (^|/)(internal|cmd)/
         text: '^exported:'
         linters: [revive]
       # pkg/crypto shadows the stdlib `crypto` name. That is
       # deliberate and long-standing: it is this project's crypto
       # package, always imported as a lobslaw path, and renaming it
       # would churn every call site to satisfy a naming opinion.
-      - path: ^pkg/crypto/
+      - path: (^|/)pkg/crypto/
         text: 'avoid package names that conflict'
         linters: [revive]
       # pkg/types is flagged as a "meaningless" package name. It is
       # the deliberate shared-vocabulary layer described in its own
       # doc.go — the one package that imports nothing from internal/
       # — and the name is load-bearing documentation, not laziness.
-      - path: ^pkg/types/
+      - path: (^|/)pkg/types/
         text: 'avoid meaningless package names'
         linters: [revive]
   settings:
