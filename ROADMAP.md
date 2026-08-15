@@ -88,7 +88,7 @@ sections further down propose:
 | R7 | **Partial** — see the status note on the section itself |
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
 | R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
-| R3 | **Partial.** Per-conversation turn serialisation + all four queue modes shipped in `internal/gateway/turnqueue.go`, wired into Telegram and REST. The cluster-wide lease and the persisted pending queue are not in — see the section |
+| R3 | **Partial.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`) and the cluster-wide per-conversation lease (`internal/memory/session_lease.go`) are both in, wired into Telegram and REST. The persisted pending queue is not — a restart mid-queue still loses queued messages. See the section |
 | R5 | Partial — `internal/soul/trust.go` and skill signing exist; the single trust contract and ingest scanning do not |
 
 R5 is P0 on security grounds and independent of everything else. With R0 landed,
@@ -445,7 +445,7 @@ stopping it per fragment, so the UX reads as "it's listening" instead of stutter
 
 - [x] Three messages sent during one in-flight turn produce one coherent history in arrival order.
 - [x] `debounce` folds rapid-fire fragments into a single turn.
-- [ ] A node killed mid-turn releases its lease within the TTL and another node picks up the queue.
+- [x] A node killed mid-turn releases its lease within the TTL and another node picks up the queue.
 - [ ] Queued messages survive a restart.
 
 > **Partially shipped, 2026-08-15.** `internal/gateway/turnqueue.go` serialises
@@ -459,13 +459,21 @@ stopping it per fragment, so the UX reads as "it's listening" instead of stutter
 > the transports agree rather than leaving correctness dependent on which one an
 > operator picked.
 >
-> **Still to do — the cluster half.** The gate is in-process, so two *nodes*
-> serving the same conversation still race. That needs the raft-backed
-> per-session lease (`LOG_OP_CLAIM`, which exists) keyed on session id with a
-> TTL and heartbeat. Today one node serves a given conversation in practice —
-> polling is leader-pinned by the singleton gate and a webhook has one
-> endpoint — so this is a narrower gap than it sounds, but it is the difference
-> between "does not happen" and "cannot happen".
+> **Cluster half shipped 2026-08-15.** `internal/memory/session_lease.go`
+> issues a raft-backed per-conversation lease over `LOG_OP_CLAIM`, with a TTL
+> matching the responsiveness hard timeout and a heartbeat at a third of it.
+> `TurnGate` takes it after local admission and drops it on release, so both
+> channels get it without repeating the logic.
+>
+> The lease is its own bucket rather than fields on `SessionRecord`: it is
+> written three times per turn (claim, heartbeats, release) against a
+> transcript written once, and sharing a record would make every lease write
+> contend with the append made by the turn holding it.
+>
+> Expiry is evaluated by the caller, not the FSM — it is wall-clock, and the
+> FSM must replay identically on every replica. A node taking over a dead
+> holder names that holder explicitly, so the CAS stays an exact comparison.
+> This is the same split the scheduler uses.
 >
 > **Still to do — persistence.** Queued messages live in memory, so a restart
 > mid-queue loses them. That wants `SessionRecord.pending`, which does not

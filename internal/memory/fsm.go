@@ -215,6 +215,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.AgentCommitment:
 		return p.Revision, true
+	case *lobslawv1.SessionLease:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -225,6 +227,8 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.ScheduledTaskRecord:
 		p.Revision = rev
 	case *lobslawv1.AgentCommitment:
+		p.Revision = rev
+	case *lobslawv1.SessionLease:
 		p.Revision = rev
 	}
 }
@@ -358,7 +362,7 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("CLAIM %s: empty id", bucket)
 	}
-	if bucket != BucketScheduledTasks && bucket != BucketCommitments {
+	if !claimableBucket(bucket) {
 		return fmt.Errorf("CLAIM %s: bucket does not support claim semantics", bucket)
 	}
 
@@ -448,8 +452,27 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketSessionLeases:
+		var r lobslawv1.SessionLease
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
+	}
+}
+
+// claimableBucket reports whether CLAIM semantics apply. Kept beside
+// decodeClaimable so the two lists cannot drift: a bucket accepted
+// here but not decodable there would pass the op check and then fail
+// mid-apply.
+func claimableBucket(bucket string) bool {
+	switch bucket {
+	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -487,6 +510,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSessions, p.SessionAppend, nil
 	case *lobslawv1.LogEntry_Session:
 		return BucketSessions, p.Session, nil
+	case *lobslawv1.LogEntry_SessionLease:
+		return BucketSessionLeases, p.SessionLease, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

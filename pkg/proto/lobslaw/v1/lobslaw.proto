@@ -908,6 +908,33 @@ enum LogOp {
   LOG_OP_CLAIM = 3;
 }
 
+// SessionLease is cluster-wide ownership of one conversation for the
+// duration of a turn.
+//
+// A turn is: load history, run the agent for seconds with tool loops,
+// append the result. Two turns on the same conversation must not
+// overlap, or both read the same prior history and both append it.
+// The gateway serialises turns within a process; this is the part
+// that holds across nodes, because a conversation can be reached from
+// more than one gateway at once (a webhook and a REST client, or two
+// gateways behind a load balancer).
+//
+// Deliberately its own record rather than fields on SessionRecord.
+// Lease churn — claim, heartbeat, release — would otherwise bump the
+// session's revision on every turn and collide with the transcript
+// appends written by the very turn that holds the lease.
+message SessionLease {
+  // id is the conversation key, "<channel>:<channel_id>".
+  string id = 1;
+  string claimed_by = 2;
+  google.protobuf.Timestamp claim_expires_at = 3;
+  // turn_id is diagnostic: it tells an operator which turn is holding
+  // a conversation that appears stuck.
+  string turn_id = 4;
+  // revision — see ScheduledTaskRecord.revision.
+  uint64 revision = 5;
+}
+
 message LogEntry {
   LogOp op = 1;
   // Target record id for DELETE; same id also duplicates the record's
@@ -930,6 +957,7 @@ message LogEntry {
     // where the FSM also purges the session's message key range.
     SessionAppendRecord session_append = 22;
     SessionRecord session = 23;
+    SessionLease session_lease = 25;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

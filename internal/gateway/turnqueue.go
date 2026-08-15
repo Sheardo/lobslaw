@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -103,6 +104,15 @@ type Lease struct {
 	gate *TurnGate
 	key  string
 
+	// cluster is the raft-backed lease, nil when no leaser is wired.
+	cluster LeaseHandle
+	// log is captured at mint. The heartbeat goroutine must not read
+	// l.gate: Release nils it, and that is a write racing the read.
+	log *slog.Logger
+	// stopBeat ends the heartbeat goroutine on release.
+	stopBeat chan struct{}
+	beatOnce sync.Once
+
 	// Batch is every message this turn is answering: the one that was
 	// admitted, plus any folded into it while it waited. Callers must
 	// use this rather than the message they arrived with, or a folded
@@ -124,20 +134,43 @@ func (l *Lease) Release() {
 	}
 	g := l.gate
 	l.gate = nil
+
+	// Stop heartbeating before releasing, or a beat in flight can
+	// re-extend a lease we have just given up.
+	if l.stopBeat != nil {
+		l.beatOnce.Do(func() { close(l.stopBeat) })
+	}
+	if l.cluster != nil {
+		// Deliberately not the turn's context: that is usually dead by
+		// the time a turn finishes, and releasing is what lets the
+		// user's next message start immediately instead of waiting out
+		// the lease TTL.
+		l.cluster.Release(context.WithoutCancel(context.Background()))
+	}
 	g.release(l.key)
 }
 
 // TurnGate serialises turns per session.
 //
-// In-process only. Two nodes both serving the same session still
-// race — that needs the raft-backed per-session lease (R3's cluster
-// half). In practice one node serves a given session today: polling
-// is leader-pinned by the singleton gate, and a webhook has exactly
-// one endpoint.
+// Two layers, because they answer different questions. The in-process
+// queue decides what happens to a message that arrives mid-turn on
+// THIS node — fold it, drop it, or wait — and is where the queue modes
+// live. The cluster lease, when a leaser is wired, decides whether
+// this node may run the conversation at all. A single node needs only
+// the first; two gateways serving one conversation need both.
 type TurnGate struct {
 	mode     QueueMode
 	debounce time.Duration
 	log      *slog.Logger
+
+	// leaser is the cluster half. Nil leaves the gate in-process
+	// only, which is right for a single node and is also what every
+	// existing test gets.
+	leaser SessionLeaser
+	// heartbeat is how often a held lease is extended. Must be well
+	// inside the lease TTL, or a long turn loses its lease to a peer
+	// that reasonably concluded this node had died.
+	heartbeat time.Duration
 
 	mu       sync.Mutex
 	sessions map[string]*gateState
@@ -153,12 +186,24 @@ type gateState struct {
 
 type waiter struct {
 	ready      chan Disposition
+	turnID     string
 	batch      []string
 	superseded int
 }
 
+// WithLeaser attaches the cluster half. Returns the gate for chaining
+// at construction; not safe to call once turns are running.
+func (g *TurnGate) WithLeaser(l SessionLeaser, heartbeat time.Duration) *TurnGate {
+	g.leaser = l
+	if heartbeat > 0 {
+		g.heartbeat = heartbeat
+	}
+	return g
+}
+
 // NewTurnGate builds a gate. A zero debounce with QueueDebounce takes
-// DefaultDebounce; debounce is ignored in every other mode.
+// DefaultDebounce; debounce is ignored in every other mode. The gate
+// is in-process until WithLeaser adds the cluster half.
 func NewTurnGate(mode QueueMode, debounce time.Duration, log *slog.Logger) *TurnGate {
 	if !mode.IsValid() {
 		mode = QueueSerial
@@ -170,12 +215,17 @@ func NewTurnGate(mode QueueMode, debounce time.Duration, log *slog.Logger) *Turn
 		log = slog.Default()
 	}
 	return &TurnGate{
-		mode:     mode,
-		debounce: debounce,
-		log:      log,
-		sessions: make(map[string]*gateState),
+		mode:      mode,
+		debounce:  debounce,
+		log:       log,
+		heartbeat: DefaultHeartbeat,
+		sessions:  make(map[string]*gateState),
 	}
 }
+
+// DefaultHeartbeat is a third of the default lease TTL, so two beats
+// can be lost before a peer concludes this node is gone.
+const DefaultHeartbeat = 30 * time.Second
 
 // Acquire decides what happens to one inbound message and, when the
 // answer is Admitted, blocks until this caller owns the session.
@@ -187,7 +237,7 @@ func NewTurnGate(mode QueueMode, debounce time.Duration, log *slog.Logger) *Turn
 // A cancelled ctx while queued yields Dropped: the user's client has
 // gone, and running a turn to answer nobody costs tokens and may
 // still write to the transcript.
-func (g *TurnGate) Acquire(ctx context.Context, key, text string) (*Lease, Disposition) {
+func (g *TurnGate) Acquire(ctx context.Context, key, turnID, text string) (*Lease, Disposition) {
 	g.mu.Lock()
 
 	st := g.sessions[key]
@@ -203,9 +253,9 @@ func (g *TurnGate) Acquire(ctx context.Context, key, text string) (*Lease, Dispo
 		// fragment of a burst always starts its own turn and only the
 		// rest fold — which is the case the mode exists to prevent.
 		if g.mode == QueueDebounce {
-			return g.foldWindow(ctx, key, text), Admitted
+			return g.foldWindow(ctx, key, turnID, text), Admitted
 		}
-		return &Lease{gate: g, key: key, Batch: []string{text}}, Admitted
+		return g.mint(ctx, key, turnID, []string{text}, 0)
 	}
 
 	switch g.mode {
@@ -231,13 +281,13 @@ func (g *TurnGate) Acquire(ctx context.Context, key, text string) (*Lease, Dispo
 		}
 		dropped := len(st.waiters)
 		st.waiters = nil
-		w := &waiter{ready: make(chan Disposition, 1), batch: []string{text}, superseded: dropped}
+		w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}, superseded: dropped}
 		st.waiters = append(st.waiters, w)
 		g.mu.Unlock()
 		return g.wait(ctx, key, w)
 	}
 
-	w := &waiter{ready: make(chan Disposition, 1), batch: []string{text}}
+	w := &waiter{ready: make(chan Disposition, 1), turnID: turnID, batch: []string{text}}
 	st.waiters = append(st.waiters, w)
 	g.mu.Unlock()
 	return g.wait(ctx, key, w)
@@ -261,7 +311,7 @@ func (g *TurnGate) wait(ctx context.Context, key string, w *waiter) (*Lease, Dis
 			g.release(key)
 			return nil, Dropped
 		}
-		return &Lease{gate: g, key: key, Batch: w.batch, Superseded: w.superseded}, Admitted
+		return g.mint(ctx, key, w.turnID, w.batch, w.superseded)
 
 	case <-ctx.Done():
 		g.mu.Lock()
@@ -297,7 +347,7 @@ func (g *TurnGate) wait(ctx context.Context, key string, w *waiter) (*Lease, Dis
 
 // foldWindow holds an idle-session turn open for the debounce window
 // so fragments typed straight after the first join the same turn.
-func (g *TurnGate) foldWindow(ctx context.Context, key, text string) *Lease {
+func (g *TurnGate) foldWindow(ctx context.Context, key, turnID, text string) *Lease {
 	timer := time.NewTimer(g.debounce)
 	defer timer.Stop()
 	select {
@@ -318,7 +368,8 @@ func (g *TurnGate) foldWindow(ctx context.Context, key, text string) *Lease {
 		st.waiters = nil
 	}
 	g.mu.Unlock()
-	return &Lease{gate: g, key: key, Batch: batch}
+	l, _ := g.mint(ctx, key, turnID, batch, 0)
+	return l
 }
 
 // release hands the session to the next waiter, or marks it idle.
@@ -356,3 +407,86 @@ func (g *TurnGate) release(key string) {
 // Mode reports the configured queue mode, so callers can tailor what
 // they tell the user about a dropped message.
 func (g *TurnGate) Mode() QueueMode { return g.mode }
+
+// The gate above serialises turns inside one process. A conversation
+// can be reached from more than one at a time — a webhook and a REST
+// client, or two gateways behind a load balancer — and those have
+// different maps. SessionLeaser is the part that holds across nodes.
+
+// ErrLeaseUnavailable means the cluster lease for this conversation
+// could not be taken. The adapter translates the memory package's
+// sentinel onto this so the gateway need not import it.
+var ErrLeaseUnavailable = errors.New("gateway: session lease unavailable")
+
+// SessionLeaser takes cluster-wide ownership of a conversation for the
+// duration of a turn. Nil disables the cluster half, which is correct
+// for a single-node deployment: there is no second process to race.
+type SessionLeaser interface {
+	// AcquireLease returns a handle, or an error wrapping
+	// ErrLeaseUnavailable when another node holds the conversation.
+	AcquireLease(ctx context.Context, key, turnID string) (LeaseHandle, error)
+}
+
+// LeaseHandle is a held cluster lease. Implementations must tolerate a
+// nil receiver so a caller that has no leaser needs no branch.
+type LeaseHandle interface {
+	// Heartbeat extends the lease. Returning an error means the lease
+	// was lost and the turn should stop.
+	Heartbeat(ctx context.Context) error
+	Release(ctx context.Context)
+}
+
+// mint builds the lease handed to a caller, taking the cluster lease
+// on the way. One chokepoint deliberately: a path that returned a
+// Lease without it would serialise locally and silently not across
+// nodes, which looks identical until two gateways are running.
+//
+// Failing to take the cluster lease means another node owns this
+// conversation, so the local slot is given back and the caller is told
+// to drop. The queue mode already decided we were willing to run —
+// this is the cluster disagreeing.
+func (g *TurnGate) mint(ctx context.Context, key, turnID string, batch []string, superseded int) (*Lease, Disposition) {
+	l := &Lease{gate: g, key: key, log: g.log, Batch: batch, Superseded: superseded}
+	if g.leaser == nil {
+		return l, Admitted
+	}
+
+	handle, err := g.leaser.AcquireLease(ctx, key, turnID)
+	if err != nil {
+		g.log.Info("gateway: conversation is held by another node",
+			"key", key, "err", err)
+		g.release(key)
+		return nil, Dropped
+	}
+	l.cluster = handle
+	l.stopBeat = make(chan struct{})
+	go l.beat(g.heartbeat)
+	return l, Admitted
+}
+
+// beat extends the cluster lease until release. A turn that outruns
+// the TTL without this is treated as dead by peers, and the
+// conversation is taken over while it is still running.
+func (l *Lease) beat(every time.Duration) {
+	if every <= 0 {
+		return
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-l.stopBeat:
+			return
+		case <-t.C:
+			// Background context: the turn's context may already be
+			// cancelled by a hard timeout while the agent is still
+			// unwinding, and dropping the lease at that moment would
+			// hand the conversation to a peer mid-write.
+			if err := l.cluster.Heartbeat(context.WithoutCancel(context.Background())); err != nil {
+				l.log.Warn("gateway: lost the cluster lease mid-turn",
+					"key", l.key, "err", err)
+				return
+			}
+		}
+	}
+}

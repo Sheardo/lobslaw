@@ -25,7 +25,7 @@ func TestSerialTurnsDoNotInterleave(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			lease, d := g.Acquire(context.Background(), "chat:1", "msg")
+			lease, d := g.Acquire(context.Background(), "chat:1", "turn", "msg")
 			if d != Admitted {
 				t.Errorf("serial dropped a message: %v", d)
 				return
@@ -61,7 +61,7 @@ func TestDifferentSessionsRunConcurrently(t *testing.T) {
 	t.Parallel()
 	g := NewTurnGate(QueueSerial, 0, nil)
 
-	first, d := g.Acquire(context.Background(), "chat:1", "a")
+	first, d := g.Acquire(context.Background(), "chat:1", "turn", "a")
 	if d != Admitted {
 		t.Fatal("first not admitted")
 	}
@@ -69,7 +69,7 @@ func TestDifferentSessionsRunConcurrently(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		lease, d := g.Acquire(context.Background(), "chat:2", "b")
+		lease, d := g.Acquire(context.Background(), "chat:2", "turn", "b")
 		if d == Admitted {
 			lease.Release()
 		}
@@ -87,18 +87,18 @@ func TestOffDropsMidTurnMessages(t *testing.T) {
 	t.Parallel()
 	g := NewTurnGate(QueueOff, 0, nil)
 
-	held, d := g.Acquire(context.Background(), "chat:1", "first")
+	held, d := g.Acquire(context.Background(), "chat:1", "turn", "first")
 	if d != Admitted {
 		t.Fatal("first not admitted")
 	}
 
-	if _, d := g.Acquire(context.Background(), "chat:1", "second"); d != Dropped {
+	if _, d := g.Acquire(context.Background(), "chat:1", "turn", "second"); d != Dropped {
 		t.Errorf("mid-turn message got %v, want Dropped", d)
 	}
 
 	// Once the turn ends the next message runs normally.
 	held.Release()
-	lease, d := g.Acquire(context.Background(), "chat:1", "third")
+	lease, d := g.Acquire(context.Background(), "chat:1", "turn", "third")
 	if d != Admitted {
 		t.Fatalf("post-turn message got %v, want Admitted", d)
 	}
@@ -111,14 +111,14 @@ func TestLatestSupersedesQueuedMessages(t *testing.T) {
 	t.Parallel()
 	g := NewTurnGate(QueueLatest, 0, nil)
 
-	held, d := g.Acquire(context.Background(), "chat:1", "running")
+	held, d := g.Acquire(context.Background(), "chat:1", "turn", "running")
 	if d != Admitted {
 		t.Fatal("first not admitted")
 	}
 
 	firstQueued := make(chan Disposition, 1)
 	go func() {
-		_, d := g.Acquire(context.Background(), "chat:1", "stale")
+		_, d := g.Acquire(context.Background(), "chat:1", "turn", "stale")
 		firstQueued <- d
 	}()
 
@@ -127,7 +127,7 @@ func TestLatestSupersedesQueuedMessages(t *testing.T) {
 
 	secondQueued := make(chan *Lease, 1)
 	go func() {
-		lease, d := g.Acquire(context.Background(), "chat:1", "fresh")
+		lease, d := g.Acquire(context.Background(), "chat:1", "turn", "fresh")
 		if d == Admitted {
 			secondQueued <- lease
 		}
@@ -171,18 +171,18 @@ func TestDebounceFoldsRapidFragments(t *testing.T) {
 	results := make(chan result, 3)
 
 	go func() {
-		lease, d := g.Acquire(context.Background(), "chat:1", "what is")
+		lease, d := g.Acquire(context.Background(), "chat:1", "turn", "what is")
 		results <- result{lease, d}
 	}()
 	// The follow-ups land inside the fold window.
 	time.Sleep(20 * time.Millisecond)
 	go func() {
-		lease, d := g.Acquire(context.Background(), "chat:1", "the plan")
+		lease, d := g.Acquire(context.Background(), "chat:1", "turn", "the plan")
 		results <- result{lease, d}
 	}()
 	time.Sleep(10 * time.Millisecond)
 	go func() {
-		lease, d := g.Acquire(context.Background(), "chat:1", "for today")
+		lease, d := g.Acquire(context.Background(), "chat:1", "turn", "for today")
 		results <- result{lease, d}
 	}()
 
@@ -226,7 +226,7 @@ func TestAbandonedWaiterLeavesTheQueue(t *testing.T) {
 	t.Parallel()
 	g := NewTurnGate(QueueSerial, 0, nil)
 
-	held, d := g.Acquire(context.Background(), "chat:1", "running")
+	held, d := g.Acquire(context.Background(), "chat:1", "turn", "running")
 	if d != Admitted {
 		t.Fatal("first not admitted")
 	}
@@ -237,7 +237,7 @@ func TestAbandonedWaiterLeavesTheQueue(t *testing.T) {
 		// A caller that gave up does not release — as far as it is
 		// concerned its context died. So Admitted must never come
 		// back on a context that is already dead.
-		_, d := g.Acquire(ctx, "chat:1", "abandoned")
+		_, d := g.Acquire(ctx, "chat:1", "turn", "abandoned")
 		queued <- d
 	}()
 	waitUntil(t, func() bool { return g.queueLen("chat:1") == 1 }, "message never queued")
@@ -249,7 +249,7 @@ func TestAbandonedWaiterLeavesTheQueue(t *testing.T) {
 	waitUntil(t, func() bool { return g.queueLen("chat:1") == 0 }, "abandoned waiter stayed in the queue")
 
 	held.Release()
-	lease, d := g.Acquire(context.Background(), "chat:1", "next")
+	lease, d := g.Acquire(context.Background(), "chat:1", "turn", "next")
 	if d != Admitted {
 		t.Fatalf("session unusable after an abandoned waiter: %v", d)
 	}
@@ -270,7 +270,7 @@ func TestCancelRacingHandoffNeverWedgesTheSession(t *testing.T) {
 
 	for i := 0; i < 200; i++ {
 		g := NewTurnGate(QueueSerial, 0, nil)
-		held, d := g.Acquire(context.Background(), "chat:1", "running")
+		held, d := g.Acquire(context.Background(), "chat:1", "turn", "running")
 		if d != Admitted {
 			t.Fatal("first not admitted")
 		}
@@ -278,7 +278,7 @@ func TestCancelRacingHandoffNeverWedgesTheSession(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
 		go func() {
-			lease, d := g.Acquire(ctx, "chat:1", "racing")
+			lease, d := g.Acquire(ctx, "chat:1", "turn", "racing")
 			// A correct caller always releases what it was given.
 			if d == Admitted {
 				lease.Release()
@@ -294,7 +294,7 @@ func TestCancelRacingHandoffNeverWedgesTheSession(t *testing.T) {
 		// Whatever happened, the next turn must be able to start.
 		next := make(chan Disposition, 1)
 		go func() {
-			lease, d := g.Acquire(context.Background(), "chat:1", "next")
+			lease, d := g.Acquire(context.Background(), "chat:1", "turn", "next")
 			if d == Admitted {
 				lease.Release()
 			}
