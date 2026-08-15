@@ -93,7 +93,7 @@ table wins — and the section says so at its head.
 | R7 | **Partial** — see the status note on the section itself |
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
 | R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
-| R3 | **Partial.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`) and the cluster-wide per-conversation lease (`internal/memory/session_lease.go`) are both in, wired into Telegram and REST. The persisted pending queue is not — a restart mid-queue still loses queued messages. See the section |
+| R3 | **Done.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`), the cluster-wide per-conversation lease (`internal/memory/session_lease.go`), and restart-safe delivery. The pending queue in the proposal was deliberately not built — the transports already provide the guarantee, and the real gap was duplicate processing on restart, now fixed by acknowledging the poll offset per update. See the section |
 | R5 | **Not started** — `internal/soul/trust.go` and skill signing exist, but neither half of R5 does: `ContextEngine` still appends a bespoke `<relevant_context>` block to the system prompt rather than going through `promptgen.WrapContext`, and there is no `internal/promptguard` |
 | R20 | **20a/20b/20c done** (#21) plus the decrypt work the measurement turned up (#25). Latency −73% and allocation −99% geomean versus the starting point; allocation no longer scales with corpus size. **20d (the band prefilter) is open**, and its case is weaker than written — decrypt fell from ~71% to ~32% of a query, so the cosine arithmetic is now the largest share. The minimum score floor is also still open |
 | R21 | Not started. Embedding failures at ingest are still skipped silently, and the backfill `builtin_memory.go` reasons about still does not exist |
@@ -454,7 +454,7 @@ stopping it per fragment, so the UX reads as "it's listening" instead of stutter
 - [x] Three messages sent during one in-flight turn produce one coherent history in arrival order.
 - [x] `debounce` folds rapid-fire fragments into a single turn.
 - [x] A node killed mid-turn releases its lease within the TTL and another node picks up the queue.
-- [ ] Queued messages survive a restart.
+- [x] Queued messages survive a restart — by the transports, not by a queue. See below.
 
 > **Partially shipped, 2026-08-15.** `internal/gateway/turnqueue.go` serialises
 > turns per conversation, with all four modes, wired into both the Telegram and
@@ -483,9 +483,34 @@ stopping it per fragment, so the UX reads as "it's listening" instead of stutter
 > holder names that holder explicitly, so the CAS stays an exact comparison.
 > This is the same split the scheduler uses.
 >
-> **Still to do — persistence.** Queued messages live in memory, so a restart
-> mid-queue loses them. That wants `SessionRecord.pending`, which does not
-> exist yet; it is a proto change and belongs with the lease work.
+> **`SessionRecord.pending` was not built, deliberately.** The proposal above
+> assumes the queue is the only thing standing between a restart and a lost
+> message. Checked against the transports, it is not:
+>
+> - **Poll** resumes from the persisted offset, so anything unacknowledged is
+>   redelivered. The first-run flush only discards when there is no persisted
+>   offset at all — a genuinely first run, not a restart.
+> - **Webhook** writes its 200 only after the turn completes, so a restart
+>   mid-turn leaves Telegram without a response and it retries. The dedup map is
+>   in-memory, so after a restart the retry is not swallowed.
+> - **REST** is synchronous; the client holds the retry, which is the right
+>   place for it in a request/response API.
+>
+> A pending queue would be a second, weaker durability mechanism layered over
+> those — and two mechanisms that disagree are worse than one.
+>
+> **The real exposure was the opposite one, and is now fixed.** Delivery is
+> at-least-once with no *durable* dedup, and the poll offset was persisted once
+> per batch, after every update in it had been dispatched. A crash after update
+> 3 of 5 therefore left the offset covering none of them: on restart all five
+> came back, the in-memory dedup map was empty, and the first three ran again —
+> duplicate replies, duplicate tool calls, duplicate commitments. Losing a
+> queued message is recoverable by asking again; silently acting twice is not.
+>
+> The offset is now acknowledged per update, after dispatch, so a restart
+> replays at most the turn that was actually in flight. The poll loop also stops
+> dispatching once its context is cancelled, rather than starting turns it is
+> about to abandon.
 
 ---
 
