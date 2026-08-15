@@ -20,6 +20,11 @@ Derived from a feature/security/scalability comparison against
 concept or config vocabulary from either, it is cited inline — config familiarity is a feature, and
 both projects have solved problems lobslaw hasn't reached yet.
 
+R0–R12 are drawn from published docs. R13–R17 are drawn from hermes-agent's **source**, because the
+load-bearing details — trigger cadences, cache-replay policy, the provenance mechanism, and the
+failure modes they've already paid for — are not in its documentation. Cited by file and symbol so
+the claims are checkable.
+
 The comparison's one-line conclusion, which sets the ordering below:
 
 > lobslaw's distributed core is more serious than either reference, but almost all conversational
@@ -45,6 +50,32 @@ The comparison's one-line conclusion, which sets the ordering below:
 | **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | 🟡 P2 | M | R11 |
 | **R11** | [Channel breadth](#r11--channel-breadth) | 🟡 P2 | L | — |
 | **R12** | [Memory transparency](#r12--memory-transparency) | 🟡 P2 | M | — |
+| **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | 🟠 P1 | M | R15, R16 |
+| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟠 P1 | S | — |
+| **R15** | [Self-taught store](#r15--self-taught-store) | 🟠 P1 | M | R16, R17 |
+| **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | 🟡 P2 | M | R17 |
+| **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | 🟡 P2 | M | — |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟠 P1 | L | R15, R17 |
+
+R13–R17 are the self-learning group, derived from reading hermes-agent's implementation
+(`agent/background_review.py`, `agent/curator.py`, `tools/memory_tool.py`,
+`tools/skill_provenance.py`, `tools/skill_usage.py`). R13 lands first — it is independent of the
+rest and pays off at current scale, and it is what makes a growing skill library affordable.
+R15 is the foundation for R16/R17: nothing self-taught is shippable until the store exists.
+
+**R18 changes where skills live at all, and precedes R15.** Sequence for this group:
+R13 → R18 → R14 → R15 → R16 → R17. R13 and R14 are independent of R18 and can land in any order
+alongside it.
+
+### Status drift
+
+Written before Phase-12-era work landed. Reconcile before scheduling:
+
+| # | State |
+|---|---|
+| R1 | **Largely landed** — `BucketSessions` + `BucketSessionMessages`, `internal/memory/session.go`, `internal/gateway/conversation.go`, `compute.ContextBudget`, rolling summary, `session_search`/`session_list`/`session_read`. Note the shipped design keeps messages in their own bucket rather than inline on the session record as proposed below |
+| R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
+| R0, R2, R3, R4, R5 | Not started. R4 is still `continue` at `internal/policy/engine.go:111` |
 
 R4 and R5 are P0 on security grounds and are independent of everything else — land them first if
 R0/R1 slip. R4 is a handful of lines.
@@ -617,6 +648,61 @@ when the turn produced one. This is what makes "why did we do it that way" answe
 
 Addresses review §3.6.
 
+> **Partially shipped, 2026-08-15.** Ownership and scoping landed ahead of this
+> item because a leak forced them (PRs #11, #12); see the aide decisions
+> [`user-scoping-ownership-model`](#) and
+> [`operator-role-and-cluster-authorization`](#). What shipped is a **subset**
+> of the design below, and one part of it sits slightly differently — read the
+> gap list before building the rest.
+>
+> **Done**
+>
+> - The channel bug named below is fixed. `maybeIngestTurn` took `turn.Channel`
+>   from `Claims.Scope`, so every episodic record was tagged `channel:admin`
+>   and `ChatID` was never set at all. Both now come from the request, with a
+>   regression test.
+> - Records carry an `owner` (a principal reference) and a `visibility`, and
+>   every read is scoped to an audience whose zero value matches nothing.
+> - Cross-channel resolution *works*, via a static `[identity.aliases]` map in
+>   `internal/identity`.
+>
+> **Gaps, in the order they should be closed**
+>
+> 1. **Identity is config, not state.** `[identity.aliases]` is a flat
+>    `channel-id → canonical-id` map read at boot. The design below is right
+>    that this belongs in `BucketUserPrefs` as the canonical store with
+>    `repeated ChannelIdentity`, plus `BucketPrincipalIndex` for O(1)
+>    resolution. Until then, binding a new channel means editing a file and
+>    restarting, and there is no `verified_at` / `verified_by` provenance.
+> 2. **Resolution happens in the wrong place.** Today `Agent.turnIdentityFor`
+>    resolves per turn. The design below resolves at the **gateway edge**, so
+>    `Claims.UserID` is already canonical and nothing downstream can forget to
+>    resolve. That is the better placement and it should move — the current
+>    one works only because every path into the agent happens to go through
+>    `runLoop`.
+> 3. **No pairing flow.** Nothing binds a new channel address to an existing
+>    principal at runtime. The parameters below (8 chars, unambiguous alphabet,
+>    crypto/rand, 1h TTL, rate limited, never logged, raft-backed pending set)
+>    still stand.
+> 4. **No migration from `UserIDScopes`.** Existing entries do not seed
+>    identities, so a deployment using them gets no aliasing until an operator
+>    writes the map by hand.
+> 5. **Records written before ownership are unowned** and therefore readable by
+>    everyone. That is deliberate — the alternative is that an upgrade hides a
+>    single-user node's whole memory — but it is a shrinking hole, not a closed
+>    one, and wants a one-shot `claim` command.
+> 6. **Nothing writes `SHARED`.** The enum is honoured on read and never set,
+>    so operator-seeded knowledge is invisible to a second user. Blocked on the
+>    operator role from `operator-role-and-cluster-authorization`.
+> 7. **The cluster gRPC has no principal.** `MemoryService.Search` and an
+>    empty-requester `Forget` are unrestricted, spelled out at each site. The
+>    design is recorded in `operator-role-and-cluster-authorization`; it is not
+>    built.
+>
+> When items 1–4 land, this note and the config-only alias map should both go —
+> two identity models coexisting quietly is exactly what the design below warns
+> about.
+
 ### Problem
 
 Three unrelated notions of "who":
@@ -924,9 +1010,532 @@ Proposed, mostly falling out of R6's surfaces:
 
 ---
 
+## R13 — Progressive skill disclosure
+
+Do this first of the self-learning group. Independent of the rest, pays off at current scale, and
+it is the precondition for a skill library that grows on its own.
+
+### Problem
+
+`internal/compute/agent.go` advertises every registered tool on every turn, with the reasoning
+recorded in place:
+
+> The keyword-based tailor caused recurring "I don't have that tool" hallucinations whenever a
+> category missed; at our current scale (~50 tools, ~5K tokens of definitions) the token cost of
+> full advertisement is acceptable. When tool count crosses ~100 we swap to semantic top-K
+> retrieval against the existing embedding service.
+
+Semantic top-K reintroduces exactly the failure that killed keyword tailoring — a retrieval miss
+still makes a capability invisible, and the model still confabulates about what it has. Ranking
+better is not the same as not hiding things.
+
+And once R15 lands, the skill library grows without operator involvement, so "full advertisement is
+acceptable" stops being true on a timeline we don't control.
+
+### Proposal
+
+Three-level disclosure, applied to **skills** — not to tools. Tools are the verb set and must stay
+fully visible; skills are documents, and a document's *body* is what's expensive.
+
+| Level | Call | Cost |
+|---|---|---|
+| 0 | Skill index in the system prompt: name + one-line description | bounded, ~60 chars/skill |
+| 1 | `skill_view(name)` → the SKILL.md body | on demand |
+| 2 | `skill_view(name, path)` → a `references/` file | on demand |
+
+**Nothing becomes invisible.** The index always lists every available skill, so the hallucination
+mode can't recur — only bodies are lazy. That is the property semantic top-K cannot offer.
+
+Supporting changes:
+
+- **Cap descriptions at parse, not at render.** hermes truncates to 57 chars when building the index;
+  truncating at render means an operator writes a 200-char description and silently loses it.
+  Enforce at manifest parse so the error is visible where it can be fixed.
+- **Manifest advertises its own reference files** (`references/`, `templates/`, `scripts/`) so
+  level 0 can say *what* is available without reading any of it.
+- **Conditional activation** so irrelevant skills leave the index entirely. `RequiresBinary` already
+  exists; add platform and required-capability gating (hermes's `requires_toolsets` /
+  `fallback_for_toolsets` / `platforms`). A skill that needs a vision provider on a text-only
+  deployment is noise.
+
+### Acceptance
+
+- [ ] Index cost is O(skills) in *names*, independent of body size.
+- [ ] Every installed skill appears at level 0 regardless of the user's message.
+- [ ] A skill whose gating fails is absent from the index and cannot be `skill_view`n.
+- [ ] Over-long descriptions fail at parse with the offending manifest named.
+
+---
+
+## R14 — Pinned tier-0 memory
+
+### Problem
+
+lobslaw has an archive (vector + episodic, Dream-consolidated) and dynamic per-turn recall. It has
+nothing **always-on**. Two consequences:
+
+- Facts that must never be missed are subject to a retrieval hit. A vector miss on "the user prefers
+  terse replies" means the turn behaves as if it were never said.
+- Dynamic injection is cache-hostile by construction: the prompt changes every turn.
+
+hermes's answer is two small capped files (`MEMORY.md`, `USER.md` — 2,200 and 1,375 chars) injected
+as a **frozen snapshot at session start**, with the reason stated in `tools/memory_tool.py`:
+
+> Mid-session writes update files on disk immediately (durable) but do NOT change the system prompt
+> — this preserves the prefix cache for the entire session.
+
+The small size is not modesty. It is a fixed tax on every request, so it must be small; and the cap
+is what forces curation, since *"memory does not auto-compact"* over there.
+
+### Proposal
+
+Two capped, pinned blocks: **user profile** (who the user is) and **agent notes** (environment
+facts, conventions, learned quirks). Rendered by new `promptgen.BuildUserProfile` /
+`BuildAgentNotes` sections, positioned in the stable prefix.
+
+- **Frozen per session.** Writes are durable immediately; the rendered snapshot refreshes at the
+  next session boundary. Prefix stability is the point.
+- **Character caps, not token caps** — char counts are model-independent. hermes's 2,200 / 1,375 are
+  a reasonable starting reference; make both configurable under `[memory.pinned]`.
+- **Storage.** User half extends `BucketUserPrefs`, which already exists and is already canonical
+  for per-user state. Agent notes get a sibling record.
+- **Entries are delimiter-separated and multiline**, edited by short unique substring match rather
+  than IDs — what makes the tool usable without maintaining an index the model has to read first.
+
+**Where we improve on hermes.** Their cap forces the model to consolidate *in the same turn*,
+because they have no background consolidator. lobslaw has Dream. So:
+
+- Overflow still **errors** rather than truncating — the pressure is the feature.
+- At ~80% capacity, Dream proposes a consolidation asynchronously, off the hot path. The cap creates
+  the pressure; Dream does the work.
+
+**Copy their scar regardless.** `tools/memory_tool.py` carries
+`_MAX_CONSOLIDATION_FAILURES_PER_TURN = 3`, added after issue #42405:
+
+> so a fragile replace/add can't loop the turn to budget exhaustion and **suppress the user's reply**
+
+A hard cap plus "consolidate now" is a livelock waiting to happen. After N failures, return a
+terminal result that tells the model to stop and answer the user. A memory side effect must never
+cost the user their reply.
+
+**R5 interaction.** These blocks are agent-written and land in system position, so they must be
+`promptguard`-scanned on write even though the store is trusted. Provenance of the *store* is not
+provenance of the *content*.
+
+### Acceptance
+
+- [ ] Prompt prefix is byte-identical across turns within a session (cache-hit assertion).
+- [ ] A write past the cap errors with current usage and leaves the store unchanged.
+- [ ] Dream proposes a consolidation at the configured threshold without blocking a turn.
+- [ ] N consecutive consolidation failures yield a terminal result; the user still gets a reply.
+
+---
+
+## R15 — Self-taught store
+
+**Foundation for R16 and R17.** Nothing self-authored ships until this exists.
+
+### Intent
+
+**Provenance by location, not by tag.**
+
+hermes tracks write origin with a `ContextVar` (`tools/skill_provenance.py`) because every skill
+lives in one directory, so origin has to be carried out of band. The curator then has to *remember*
+its invariant — *"Only touches agent-created skills"* — as a rule it applies, and the review fork
+has to be told in its prompt which skills are off-limits.
+
+A separate store makes all of that structural instead of remembered:
+
+| Property | With a separate store |
+|---|---|
+| Provenance | If it's in the store, the agent wrote it. No marker to forget, forge, or lose |
+| Disable | A capability boundary, not a branch: store unwired ⇒ no write path exists |
+| Blast radius | "Forget everything you taught yourself" is one operation |
+| Audit | "Show me everything it decided on its own" is one namespace scan |
+| R17's invariant | Free — the curator's domain *is* the store |
+
+### Boundary rule — what goes in
+
+The store holds **behaviour-changing artefacts the agent authored**: skills, procedures, and
+proposed pinned-block entries. Observations continue to flow into the episodic and vector buckets
+exactly as they do now.
+
+The line is: *does this change behaviour without retrieval?* An episodic record is data the model
+*may* retrieve and weigh. A skill or a pinned entry is an instruction it *follows*. Those deserve
+different custody, and the risk profiles are not comparable.
+
+### Shape
+
+```go
+// internal/memory/buckets.go — new
+BucketSelfTaught        = "self_taught"          // artefact records
+BucketSelfTaughtUsage   = "self_taught_usage"    // telemetry (see below)
+BucketSelfTaughtArchive = "self_taught_archive"  // archived, never deleted
+```
+
+```proto
+message SelfTaughtRecord {
+  string id   = 1;
+  SelfTaughtKind kind = 2;   // SKILL | PROCEDURE | PINNED_PROPOSAL
+  string name = 3;
+  string body = 4;
+  map<string, string> files = 5;   // references/… -> content
+  SelfTaughtOrigin origin   = 6;   // REVIEW_FORK | USER_DIRECTED
+  string turn_id    = 7;           // what taught it — audit correlation
+  string session_id = 8;
+  SelfTaughtState state = 9;       // PROPOSED | ACTIVE | STALE | ARCHIVED
+  bool   pinned  = 10;             // orthogonal: opts out of all auto-transitions
+  uint32 version = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+```
+
+**Materialisation and precedence are owned by [R18](#r18--skills-in-the-cluster-store)**, which
+generalises them to every skill rather than only self-taught ones. R15 contributes the
+`BucketSelfTaught` source and the `agent` tier; R18 owns the store-to-cache contract, the version
+history, and the tier-first winner rule that makes "never shadows a signed or operator skill"
+actually true.
+
+The earlier draft of this section proposed materialising self-taught skills onto their own storage
+mount while signed and operator skills stayed filesystem-authoritative. That created two sources of
+truth and a reconciliation rule between them. R18 removes the split instead of arbitrating it.
+
+### Provenance tiers
+
+| Tier | Source | Policy default |
+|---|---|---|
+| `signed` | clawhub bundle, ed25519 verified against a trusted publisher | full manifest capabilities |
+| `operator` | on-disk, operator-authored | full |
+| `agent` | written by the review fork | no new binaries, MCP servers, credentials, or network declarations; sandbox floor; confirmation on first invoke; never shadows the tiers above |
+
+### Archive, never delete
+
+Deletion is not a lifecycle transition. Archived artefacts move to `BucketSelfTaughtArchive` and
+stay recoverable. For a product whose pitch is trust, an agent that can silently erase evidence of
+what it taught itself is the wrong default — and hermes reached the same conclusion
+(*"Never auto-deletes — only archives. Archive is recoverable."*).
+
+### Telemetry: a bucket, not a sidecar
+
+hermes keeps usage counters in a sidecar `~/.hermes/skills/.usage.json` to avoid conflict pressure
+on user-authored SKILL.md files. lobslaw wants a bucket instead, for three reasons that are stronger
+than theirs:
+
+1. **Signature validity.** Counters inside a manifest would invalidate its digest. For hermes this
+   is tidiness; here it breaks verification.
+2. **Cluster aggregation.** A per-node JSON file is invisible to peers, so every node but one would
+   compute staleness from partial data — and R17's transitions depend on it. hermes never faces this.
+3. **Atomicity.** The FSM provides it. hermes needs `fcntl`/`msvcrt` locking plus a
+   "broken sidecar never breaks the tool call" degradation path.
+
+> **Do not `raft.Apply` per `skill_view`.** Counter bumps are high-frequency and low-value; paying
+> consensus for each one is the obvious way to make this worse than the sidecar it replaced. Batch
+> in-process and flush on turn end or every N seconds. Losing a handful of counts to a crash is
+> acceptable — hermes already treats these as best-effort — losing the write path to contention is
+> not.
+
+### The self-learning switch
+
+Three states, because "on/off" is the wrong shape for a security-first product:
+
+```toml
+[self_learning]
+mode = "propose"   # "off" | "propose" | "auto"
+```
+
+| Mode | Behaviour |
+|---|---|
+| `off` | Store not wired. No fork spawns, no artefact loads, no write path exists. **Verifiable by absence**, not by a branch someone has to have remembered to check |
+| `propose` | Artefacts land `PROPOSED` and do not load until approved — via R2's prompt machinery or `lobslaw learned review`. hermes's `write_approval` generalised, and the right default here |
+| `auto` | Artefacts become `ACTIVE` immediately (hermes's default) |
+
+`off` must be enforced at wiring — `wireSelfTaught` returns nil and every dependent is absent. A
+feature flag that merely guards call sites is a different, weaker claim than "the capability is not
+present", and the second is what an operator disabling self-learning is asking for.
+
+### Acceptance
+
+- [ ] With `mode = "off"`, no self-taught bucket is opened and no self-taught artefact can load.
+      Asserted by wiring, not by mocking a flag.
+- [ ] A self-taught skill never shadows a signed or operator skill of the same name.
+- [ ] An `agent`-tier skill declaring a new binary or MCP server fails to load, with the reason.
+- [ ] `propose` mode artefacts are inert until approved.
+- [ ] One command lists, and one command discards, everything self-taught.
+- [ ] Usage counters survive a leader change and aggregate across nodes.
+
+---
+
+## R16 — Post-turn review fork
+
+Depends on R15 — the fork's only write target is the self-taught store.
+
+### Proposal
+
+Fork after the reply is delivered, replay the conversation, ask whether anything should be learned.
+`maybeIngestTurn` is already the hook point and already establishes the pattern (fire behind the
+reply, bounded background context, failures log and are swallowed).
+
+**Asymmetric triggers**, which is the best single idea in hermes's design:
+
+| Axis | Interval | Unit | Rationale |
+|---|---|---|---|
+| Memory | 10 | conversation **turns** | Measures "have we learned who the user is" |
+| Skills | 10 | tool **iterations in one turn** | Measures "was there enough work to be worth encoding" |
+
+A forty-tool-call debugging session triggers a skill review immediately; forty turns of chat don't.
+(hermes: `agent_init.py:1744` / `:1860`, checked in `turn_context.py:698` and
+`turn_finalizer.py:734`.)
+
+**Recursion guard.** The fork zeroes its own intervals, or the first review spawns the second.
+
+**Suppressed for scheduler-originated turns.** No human in the loop means nothing to learn about the
+user, and hermes measures the fork at *~30K tokens per event* — too much to spend on a cron tick.
+
+**Cost-aware replay.** The instinct to route background work to a cheap model is wrong here, and
+hermes documents why: the fork on the **main** model replays the full conversation against a warm
+prefix cache, so it is mostly cheap cache reads. A *different* model can't reuse that cache, so it
+is cold regardless — and replaying the full transcript would cold-write all of it. Therefore:
+
+> Same model → full replay. Different model → compact digest. That's the whole policy.
+
+Add `RoleReview` to `RoleMap` so the routing is explicit, and derive replay mode from whether the
+resolved provider matches the turn's main provider.
+
+**Authority is a policy scope, not a runtime denylist.** hermes whitelists the fork's tools and
+denies the rest at runtime. lobslaw should express it as a scope in the existing default-deny engine:
+write on the self-taught namespace, nothing else. The tool whitelist and the write domain then become
+one statement, evaluated by the same engine and recorded in the same hash-chained audit log as every
+other decision.
+
+### Prompt design
+
+Adopt from hermes's `_COMBINED_REVIEW_PROMPT`:
+
+- **The preference order.** Patch a currently-loaded skill → patch an existing umbrella → add a
+  `references/` support file → only then create a new class-level skill.
+- **The anti-sprawl naming rule.** No skill named after a PR number, error string, codename, or
+  `fix-X`/`debug-Y` session artifact. Class-level names only.
+- **The axis split**, which is the conceptual payload:
+  > Memory says *who the user is and what the current state is*; skills say *how to do this class of
+  > task for this user*.
+  >
+  > Frustration and style corrections are first-class **skill** signals, not just memory signals.
+
+  Recording "the user hates verbose replies" changes nothing next session. Encoding it in the
+  procedure that governs the task does. lobslaw has a third axis the references lack — SOUL is *how
+  to be* — so the split is three-way here: memory = state, skills = procedure, soul = disposition.
+
+**Do not adopt** hermes's action bias — *"a pass that does nothing is a missed learning opportunity,
+not a neutral outcome"*, evaluated every ~10 tool iterations. That pressure is precisely what forced
+them to build a curator, usage telemetry, a stale/archive lifecycle and protected-skill rules. Bias
+conservative by default: lobslaw has Dream to catch what a quiet pass missed, and `propose` mode
+means a marginal artefact costs the user an approval prompt.
+
+### Acceptance
+
+- [ ] Review fires after the reply, never before it.
+- [ ] Skill review triggers on a tool-heavy single turn; memory review on turn count.
+- [ ] A fork cannot spawn a fork.
+- [ ] Scheduler-originated turns spawn no review.
+- [ ] Routing the review to a non-main provider switches replay to a digest.
+- [ ] The fork cannot write outside the self-taught namespace — enforced by policy, shown in audit.
+
+---
+
+## R17 — Self-taught lifecycle (curator)
+
+Depends on R15 (the store and its state field) and R16 (something to curate). Not specifiable
+before those land, which is why it sits last.
+
+### Proposal
+
+Lifecycle over self-taught artefacts, driven by the usage telemetry in `BucketSelfTaughtUsage`:
+
+| State | Transition |
+|---|---|
+| `active` | default |
+| `stale` | unused beyond `stale_after_days` (default 30) |
+| `archived` | unused beyond `archive_after_days` (default 90); moved to the archive bucket |
+| `pinned` | orthogonal boolean — opts out of every automatic transition |
+
+- **Deterministic pruning always on; LLM consolidation opt-in.** hermes ships the umbrella-building
+  fork off by default and keeps the inactivity prune running. Same split: state transitions are
+  cheap and predictable, merging artefacts is a judgement call that should be a choice.
+- **Never delete.** Archive only, per R15.
+- **No inactivity trigger needed.** hermes built one because it has no scheduler. lobslaw has a
+  leader-gated scheduler and Dream already runs periodically — and Dream already scores, clusters,
+  adjudicates merges and prunes for memory. Extending that machinery to artefacts is a smaller step
+  here than it was there.
+- **Usage must be cluster-aggregated**, which is why R15 chose a bucket over a sidecar: a curator
+  computing staleness from one node's view would archive skills another node uses daily.
+
+### Acceptance
+
+- [ ] A skill unused past the threshold transitions to stale, then archives, and stays recoverable.
+- [ ] A pinned artefact never transitions.
+- [ ] Nothing outside the self-taught store is ever touched — asserted, not assumed.
+- [ ] Staleness is computed from cluster-wide usage.
+
+---
+
+## R18 — Skills in the cluster store
+
+Precedes R15. Changes where skills live, not what they are.
+
+Recorded as aide decision **`lobslaw-skill-storage-model`** (2026-08-15), which supersedes the
+"skills live in storage as directories" clause of `lobslaw-skills` and `lobslaw-persistence-model`.
+The three [open questions](#open-questions) below are carried in that decision and are unresolved.
+
+### The confusion to remove
+
+Files currently play three unrelated roles, all pointed at the same directory:
+
+| Role | Today | Proposed |
+|---|---|---|
+| **Authority** — what the cluster believes is installed | filesystem, under a storage mount | **Raft / bbolt** |
+| **Interchange** — install, share, back up, restore | clawhub tarball, or a directory | import / export, both directions |
+| **Execution substrate** — what the interpreter and Landlock see | the same directory as authority | a derived per-node cache, disposable |
+
+Separating *authority* from *execution substrate* is the entire change. Today they are the same
+directory, which is why a skill exists only where a mount happens to be materialised.
+
+### Why this is the right call
+
+- **One source of truth.** The alternative — signed and operator skills on disk, agent-authored
+  skills in the store — needs a reconciliation rule between two authorities. That complexity is
+  self-inflicted.
+- **Versioning, rollback, backup and restore fall out of the store**, rather than each needing its
+  own filesystem convention. `soul_history_rollback` is the precedent already in the tree.
+- **It closes a `DEFERRED.md` item.** "Cross-cluster storage tunneling" records that a compute-only
+  node cannot reach mounts materialised on a peer. Skills-in-Raft removes skills from that problem
+  entirely: every node has every skill because every node has the log.
+- **Provenance-by-location survives.** Separate buckets per source, so the importer writes one and
+  the review fork writes the other, and `self_learning.mode = "off"` is still verifiable by absence.
+  What unifies is the *runtime*, not the storage.
+
+### Shape
+
+```go
+// internal/memory/buckets.go — new
+BucketSkills        = "skills"          // imported: signed + operator tiers
+BucketSelfTaught    = "self_taught"     // R15: agent-authored
+BucketSkillVersions = "skill_versions"  // "<name>:<version>" -> record (history)
+BucketSkillBlobs    = "skill_blobs"     // digest -> bytes (small text payloads only)
+```
+
+```proto
+message SkillRecord {
+  string name    = 1;
+  string version = 2;
+  SkillTier tier = 3;          // SIGNED | OPERATOR | AGENT
+
+  // Manifest bytes VERBATIM, plus its detached signature. Not a
+  // parsed struct — see the trap below.
+  bytes  manifest_yaml = 4;
+  bytes  manifest_sig  = 5;
+
+  map<string, string> files = 6;  // relative path -> blob digest
+  SkillSource source = 7;         // clawhub URL / import path / fork turn_id
+  string imported_by = 8;         // principal
+  google.protobuf.Timestamp imported_at = 9;
+  bool active = 10;               // one active version per (name, tier)
+}
+```
+
+> **Store the manifest bytes verbatim.** The signature is a detached ed25519 signature over the
+> exact manifest file (`signing.go: readSignature` reads `manifest.yaml.sig`; `Verify(data, sig)`).
+> Parsing into a proto and re-serialising on export changes the bytes and breaks verification
+> permanently — the skill becomes unverifiable, and `SigningRequired` deployments would reject a
+> skill that was genuinely signed. Round-tripping the bytes untouched is what keeps
+> `SigningRequired` working unchanged after the move.
+
+**Blob split, with a threshold.** Every Raft apply replicates to every node and lives in snapshots
+thereafter, so the store is the wrong place for multi-megabyte payloads. Manifests, handlers and text
+references (kilobytes) go in. Sidecar binaries do not — they stay in storage, content-addressed, with
+the digest on the record, which is how `internal/binaries` already resolves them after a clawhub
+install. Oversized payloads **fail at import with the offending path named**, rather than being
+silently split or silently accepted.
+
+### Store-to-cache contract
+
+Materialisation is not a compromise — execution requires a filesystem. `invoker.buildPolicy` grants
+Landlock `Read`+`Exec` on `skill.ManifestDir` so the interpreter can load and run the handler. The
+store cannot be `exec`'d.
+
+- Cache lives per node at `<state>/skills-cache/<name>/<version>/`.
+- Written **only** by the materialiser. Never edited in place.
+- Rebuilt on boot, on record change, on digest mismatch, or on `lobslaw skills rematerialise`.
+- **Disposable.** `rm -rf` the cache and restart is a complete recovery. That property is the test of
+  whether the store is really the authority.
+
+The implementation insight that keeps this small: **`Registry.Scan` / `Registry.Watch` do not change.**
+They point at the cache directory instead of a storage mount. This is a change of *source*, not a
+change of registry, invoker, sandbox or policy derivation.
+
+### Precedence must become tier-first
+
+`candidateBeats` currently orders by version, then `preferSigned` only as a tie-break at equal
+version, then manifest dir. So **an unsigned v2 beats a signed v1 today.** That is defensible while
+nothing but an operator can write a skill; it becomes a privilege-escalation path the moment an agent
+can author one — bump the version, win the name.
+
+New order: **tier → version → …**, with `signed > operator > agent`. This is a change to existing
+behaviour, so it lands with an explicit test and a note in the commit message rather than quietly.
+
+### Versioning, backup, restore
+
+- Every import or write appends to `BucketSkillVersions`; `active` is a separate pointer.
+- `lobslaw skills history <name>` and `lobslaw skills rollback <name> <version>` — deliberately the
+  same shape as `soul_history_rollback`, so it is a pattern already known in this codebase.
+- **Backup** = a Raft snapshot (already exists), or `lobslaw skills export --all` writing a directory
+  tree.
+- **Restore** = import that tree, or restore the snapshot.
+- Round-trip fidelity is testable and worth pinning: `import → export → diff` must be empty.
+
+### Migration
+
+1. Importer + exporter + materialiser, with the registry still reading its current mount. No
+   behaviour change yet.
+2. `lobslaw skills import` the existing mount contents; verify the round-trip diff is empty.
+3. Point the registry at the cache. The mount becomes an import source.
+4. clawhub install becomes download → verify digest + signature → **import**, instead of
+   extract-to-mount. Binaries continue through `internal/binaries` unchanged.
+
+**Keep a dev source.** Losing edit-a-file-and-it-reloads would make skill authoring an
+edit → export → import loop, which is bad enough that people will work around it. A configured dev
+directory keeps today's `Scan`/`Watch` behaviour, always wins locally, is never written to the store
+and never replicated, and is logged loudly at boot so it can't be a surprise in production.
+
+**R0 becomes a hard dependency** — `skills install` is a Raft write, so a non-leader gateway or CLI
+node needs forwarding.
+
+### Open questions
+
+Not decided here; they need a call before implementation:
+
+1. **Blob threshold**, and whether reference files above it are permitted at all or must move to
+   storage.
+2. **Is a live-watched operator directory legal in production**, or is dev-mode strictly
+   development-only?
+3. **Version history is unbounded**, and it inflates every Raft snapshot forever. Needs a
+   `keep_versions = N` policy plus GC, or "versioned skills" quietly becomes a store-growth problem.
+
+### Acceptance
+
+- [ ] A node with no storage mount and no skills directory serves the full skill library from the log.
+- [ ] Deleting the cache and restarting restores every skill byte-identically.
+- [ ] `import → export → diff` is empty for a signed skill, and the export still verifies.
+- [ ] `SigningRequired` behaviour is unchanged after the move.
+- [ ] A self-taught skill cannot win a name against a signed or operator skill at any version.
+- [ ] `skills rollback` restores a prior version across the cluster.
+- [ ] An oversized payload fails at import, naming the path.
+
+---
+
 ## Cross-cutting notes
 
-**Proto changes.** R1, R2, R6 and R7 all add messages or fields. Batch them into one proto change
+**Proto changes.** R1, R2, R6, R7, R15 and R18 all add messages or fields. Batch them into one proto change
 per item rather than one omnibus change, and keep every change additive — a rolling upgrade must
 have old and new nodes reading the same log.
 
