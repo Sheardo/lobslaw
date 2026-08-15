@@ -96,6 +96,9 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 	if err := n.wirePDFTools(builtins); err != nil {
 		return nil, err
 	}
+	if err := n.wireSpeakTools(builtins); err != nil {
+		return nil, err
+	}
 
 	return binariesProvider, nil
 }

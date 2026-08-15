@@ -223,6 +223,14 @@ type ComputeConfig struct {
 	Audio               AudioConfig      `koanf:"audio,omitempty"`
 	PDF                 PDFConfig        `koanf:"pdf,omitempty"`
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
+	Speak               SpeakConfig      `koanf:"speak,omitempty"`
+
+	// ArtifactMount names the storage mount that receives generated
+	// files (speech, images, video). Empty falls back to the first
+	// writable mount, which is convenient for a single-mount
+	// deployment and ambiguous for any other — declare it explicitly
+	// once there is more than one place a file could land.
+	ArtifactMount string `koanf:"artifact_mount,omitempty"`
 	// Roles maps named functional roles (main, preflight,
 	// reranker, summariser, etc.) to provider labels. Internal
 	// code asks the resolver for a role by name; the resolver
@@ -381,6 +389,12 @@ type ModalityOverride struct {
 // abab6.5s-chat / MiniMax-VL-01, Google Gemini Flash, OpenAI
 // gpt-4o-mini, Anthropic claude-3-5-haiku, etc.
 type VisionConfig = ModalityOverride
+
+// SpeakConfig selects the provider backing the speak (text-to-speech)
+// builtin. Same shape as the other modality overrides: naming a
+// provider pins to it, and leaving it empty discovers providers by
+// the "speak" capability tag in priority order.
+type SpeakConfig = ModalityOverride
 
 // AudioConfig selects the provider backing the audio modality
 // builtins (transcription of inbound voice notes and audio files).

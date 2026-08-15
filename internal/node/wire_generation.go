@@ -204,11 +204,29 @@ func (m nodeMounts) MountRoot(label string) (string, bool) {
 // dropping a job that has already been paid for.
 func (n *Node) artifactResolver() *compute.ArtifactResolver {
 	mounts := n.cfg.Storage.Mounts
-	dest := ""
-	for _, mt := range mounts {
-		if mt.Mode == "" || mt.Mode == "rw" {
-			dest = mt.Label
-			break
+	dest := n.cfg.Compute.ArtifactMount
+
+	if dest != "" {
+		// An operator who named a mount meant that mount. Falling back
+		// to a different one would put generated files somewhere they
+		// did not choose — possibly a different backend, with different
+		// retention and different people able to read it.
+		if _, ok := (nodeMounts{mounts: mounts}).MountRoot(dest); !ok {
+			n.log.Error("compute: artifact_mount names a mount that is missing or read-only; "+
+				"generation results cannot be stored", "mount", dest)
+			return nil
+		}
+	} else {
+		for _, mt := range mounts {
+			if mt.Mode == "" || mt.Mode == "rw" {
+				dest = mt.Label
+				break
+			}
+		}
+		if dest != "" && len(mounts) > 1 {
+			n.log.Warn("compute: no artifact_mount configured; generated files will land in the "+
+				"first writable mount — set compute.artifact_mount to be explicit",
+				"chose", dest, "mounts", len(mounts))
 		}
 	}
 	if dest == "" {
@@ -255,4 +273,58 @@ func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, o
 			paramOrigChatID:   chatID,
 		},
 	}, nil
+}
+
+// resolveSpeakEndpoints finds the TTS provider chain: an explicit
+// [compute.speak] override, else every provider tagged "speak" in
+// priority order.
+func (n *Node) resolveSpeakEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("speak", n.cfg.Compute.Speak.Provider, compute.CapabilitySpeak)
+}
+
+// wireSpeakTools registers the speak (text-to-speech) builtin.
+//
+// Registered only when there is somewhere to put the audio. A speak
+// tool with no writable mount would take the model's text, bill the
+// provider for synthesis, and then have nowhere to land the result —
+// so the honest behaviour is to not offer the tool and let the agent
+// say it cannot do it.
+func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
+	eps := n.resolveSpeakEndpoints()
+	if len(eps) == 0 {
+		return nil
+	}
+	resolver := n.artifactResolver()
+	if resolver == nil {
+		n.log.Warn("compute: speak provider configured but no writable artifact mount; " +
+			"skipping the speak tool")
+		return nil
+	}
+
+	cfgs := make([]compute.SpeakConfig, 0, len(eps))
+	for _, ep := range eps {
+		d, err := compute.NewOpenAISpeakDriver(compute.OpenAISpeakConfig{
+			Endpoint:   ep.endpoint,
+			Model:      ep.model,
+			Credential: compute.NewBearerCredential(ep.apiKey),
+		})
+		if err != nil {
+			n.log.Warn("compute: speak provider skipped", "via", ep.via, "err", err)
+			continue
+		}
+		cfgs = append(cfgs, compute.SpeakConfig{Driver: d, Resolver: resolver})
+	}
+	if len(cfgs) == 0 {
+		return nil
+	}
+
+	if err := compute.RegisterSpeakBuiltin(builtins, cfgs...); err != nil {
+		return fmt.Errorf("register speak: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.SpeakToolDef()); err != nil {
+		return fmt.Errorf("register speak tool def: %w", err)
+	}
+	n.log.Debug("compute: speak registered",
+		"model", eps[0].model, "via", eps[0].via, "chain_len", len(cfgs))
+	return nil
 }
