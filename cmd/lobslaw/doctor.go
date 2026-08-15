@@ -34,7 +34,12 @@ type doctorCheck struct {
 	Run  func() (detail string, problem error)
 }
 
-func lobslawDoctor(args []string) {
+// gocyclo: 47. Doctor is a long list of independent environment
+// checks, each a small if-block appending to the report. The
+// complexity is a count of checks rather than a measure of tangle,
+// but the function is long enough that a table of check funcs would
+// genuinely read better.
+func lobslawDoctor(args []string) { //nolint:gocyclo // long list of independent checks; would suit a check table
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""), "path to config.toml")
 	offline := fs.Bool("offline", false, "skip network reachability checks")

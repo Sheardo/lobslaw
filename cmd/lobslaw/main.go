@@ -1,3 +1,14 @@
+// Command lobslaw is the single binary for every node function.
+//
+// Which functions a process actually serves — memory, policy,
+// compute, gateway, storage — comes from [cluster].functions in the
+// config rather than from separate binaries, so a single-node
+// deployment and a five-node cluster run the same executable.
+//
+// Beyond starting a node, the binary hosts the operator subcommands:
+// init to scaffold a config, doctor to check the environment,
+// cluster for membership and certificates, plugin for skill
+// management, and audit to verify the local log's hash chain.
 package main
 
 import (

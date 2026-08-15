@@ -7,6 +7,13 @@ import (
 	"strings"
 )
 
+// TuneSource is the provenance recorded on every TuneState this
+// file writes. It lands in the replicated tune record and in the
+// audit trail, so it identifies the soul_tune builtin as the actor
+// rather than a background pass — keep it in step with the builtin's
+// registered name in internal/compute/builtin_soul.go.
+const TuneSource = "soul_tune"
+
 // SetName replaces the soul's name after sanitisation. Persists via
 // the TuneStore (raft in prod). Returns the cleaned name on success.
 func (a *Adjuster) SetName(ctx context.Context, name string) (string, error) {
@@ -18,7 +25,7 @@ func (a *Adjuster) SetName(ctx context.Context, name string) (string, error) {
 	defer a.mu.Unlock()
 	state := a.tune.Clone()
 	state.Name = &cleaned
-	state.UpdatedBy = "soul_tune"
+	state.UpdatedBy = TuneSource
 	if err := a.store.Put(ctx, state); err != nil {
 		return "", err
 	}
@@ -48,7 +55,7 @@ func (a *Adjuster) AddFragment(ctx context.Context, text string) (string, int, e
 	updated := append(append([]string(nil), current...), cleaned)
 	state := a.tune.Clone()
 	state.Fragments = &updated
-	state.UpdatedBy = "soul_tune"
+	state.UpdatedBy = TuneSource
 	if err := a.store.Put(ctx, state); err != nil {
 		return "", 0, err
 	}
@@ -74,7 +81,7 @@ func (a *Adjuster) RemoveFragment(ctx context.Context, needle string) (string, e
 			updated := append(append([]string(nil), current[:i]...), current[i+1:]...)
 			state := a.tune.Clone()
 			state.Fragments = &updated
-			state.UpdatedBy = "soul_tune"
+			state.UpdatedBy = TuneSource
 			if err := a.store.Put(ctx, state); err != nil {
 				return "", err
 			}
@@ -124,7 +131,7 @@ func (a *Adjuster) Tune(ctx context.Context, dimension string, delta int) (int, 
 	if err := setEmotiveLocked(state, dimension, newValue); err != nil {
 		return prev, prev, err
 	}
-	state.UpdatedBy = "soul_tune"
+	state.UpdatedBy = TuneSource
 	if err := a.store.Put(ctx, state); err != nil {
 		return prev, prev, err
 	}
@@ -143,7 +150,7 @@ func (a *Adjuster) SetEmojiUsage(ctx context.Context, value string) error {
 	defer a.mu.Unlock()
 	state := a.tune.Clone()
 	state.EmojiUsage = &value
-	state.UpdatedBy = "soul_tune"
+	state.UpdatedBy = TuneSource
 	if err := a.store.Put(ctx, state); err != nil {
 		return err
 	}

@@ -61,7 +61,8 @@ func (o LoadOptions) withDefaults() LoadOptions {
 	return out
 }
 
-// DirLayout describes the conventional layout of a policy.d/ dir:
+// PresetSubdir is the subdirectory name that marks operator preset
+// overrides, and with it the conventional layout of a policy.d/ dir:
 //
 //	policy.d/
 //	├── git.toml           # tool policy: name == filename stem

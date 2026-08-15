@@ -166,11 +166,11 @@ func validate(cfg *types.SoulConfig) error {
 		name  string
 		value int
 	}{
-		{"excitement", cfg.EmotiveStyle.Excitement},
-		{"formality", cfg.EmotiveStyle.Formality},
-		{"directness", cfg.EmotiveStyle.Directness},
-		{"sarcasm", cfg.EmotiveStyle.Sarcasm},
-		{"humor", cfg.EmotiveStyle.Humor},
+		{DimExcitement, cfg.EmotiveStyle.Excitement},
+		{DimFormality, cfg.EmotiveStyle.Formality},
+		{DimDirectness, cfg.EmotiveStyle.Directness},
+		{DimSarcasm, cfg.EmotiveStyle.Sarcasm},
+		{DimHumor, cfg.EmotiveStyle.Humor},
 	} {
 		if field.value < 0 || field.value > 10 {
 			return fmt.Errorf("emotive_style.%s=%d must be 0–10", field.name, field.value)

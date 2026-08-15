@@ -139,35 +139,35 @@ func (a *Adjuster) mergedLocked() Soul {
 // Caller holds a.mu.
 func (a *Adjuster) emotiveValueLocked(name string) (current, baseline int, ok bool) {
 	switch name {
-	case "excitement":
+	case DimExcitement:
 		baseline = a.baselineEmotive.Excitement
 		current = baseline
 		if a.tune != nil && a.tune.Excitement != nil {
 			current = *a.tune.Excitement
 		}
 		return current, baseline, true
-	case "formality":
+	case DimFormality:
 		baseline = a.baselineEmotive.Formality
 		current = baseline
 		if a.tune != nil && a.tune.Formality != nil {
 			current = *a.tune.Formality
 		}
 		return current, baseline, true
-	case "directness":
+	case DimDirectness:
 		baseline = a.baselineEmotive.Directness
 		current = baseline
 		if a.tune != nil && a.tune.Directness != nil {
 			current = *a.tune.Directness
 		}
 		return current, baseline, true
-	case "sarcasm":
+	case DimSarcasm:
 		baseline = a.baselineEmotive.Sarcasm
 		current = baseline
 		if a.tune != nil && a.tune.Sarcasm != nil {
 			current = *a.tune.Sarcasm
 		}
 		return current, baseline, true
-	case "humor":
+	case DimHumor:
 		baseline = a.baselineEmotive.Humor
 		current = baseline
 		if a.tune != nil && a.tune.Humor != nil {
@@ -183,15 +183,15 @@ func (a *Adjuster) emotiveValueLocked(name string) (current, baseline int, ok bo
 func setEmotiveLocked(state *TuneState, name string, value int) error {
 	v := value
 	switch name {
-	case "excitement":
+	case DimExcitement:
 		state.Excitement = &v
-	case "formality":
+	case DimFormality:
 		state.Formality = &v
-	case "directness":
+	case DimDirectness:
 		state.Directness = &v
-	case "sarcasm":
+	case DimSarcasm:
 		state.Sarcasm = &v
-	case "humor":
+	case DimHumor:
 		state.Humor = &v
 	default:
 		return fmt.Errorf("unknown dimension %q", name)

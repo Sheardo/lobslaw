@@ -41,15 +41,33 @@ type Classifier interface {
 // than guessing.
 var ErrNoClassification = errors.New("soul: no classification match")
 
+// The five tunable emotive dimensions. These names are the shared
+// vocabulary of the soul subsystem: they are switch cases in the
+// Adjuster, map keys in the regex classifier, validation field names
+// in the loader, and the menu handed to the LLM classifier. A typo
+// in any one of those places silently makes a dimension untunable
+// rather than failing, which is why they are constants.
+//
+// The values are also operator-visible — they appear in SOUL.md's
+// emotive_style block and in soul_tune calls — so they are a wire
+// contract, not just an internal identifier.
+const (
+	DimExcitement = "excitement"
+	DimFormality  = "formality"
+	DimDirectness = "directness"
+	DimSarcasm    = "sarcasm"
+	DimHumor      = "humor"
+)
+
 // Dimensions is the canonical ordering of classifiable dimensions.
 // Used as the menu for the LLM classifier's prompt + as the set
 // the regex classifier iterates over.
 var Dimensions = []string{
-	"excitement",
-	"formality",
-	"directness",
-	"sarcasm",
-	"humor",
+	DimExcitement,
+	DimFormality,
+	DimDirectness,
+	DimSarcasm,
+	DimHumor,
 }
 
 // RegexClassifier is the offline / fallback classifier. Matches
@@ -81,27 +99,27 @@ func NewRegexClassifier() *RegexClassifier {
 	return &RegexClassifier{
 		patterns: []dimensionPattern{
 			{
-				dimension: "sarcasm",
+				dimension: DimSarcasm,
 				decrease:  regexp.MustCompile(`(?i)\b(?:less|not so|stop being so|don'?t be so)\s+(?:snarky|sarcastic|snide)\b`),
 				increase:  regexp.MustCompile(`(?i)\b(?:more|be more|extra)\s+(?:snarky|sarcastic|snide|cheeky)\b`),
 			},
 			{
-				dimension: "formality",
+				dimension: DimFormality,
 				decrease:  regexp.MustCompile(`(?i)\b(?:less formal|not so formal|be more casual|chill out|relax)\b`),
 				increase:  regexp.MustCompile(`(?i)\b(?:more formal|be formal|professional tone|polite)\b`),
 			},
 			{
-				dimension: "directness",
+				dimension: DimDirectness,
 				decrease:  regexp.MustCompile(`(?i)\b(?:less blunt|soften|less direct|gentler)\b`),
 				increase:  regexp.MustCompile(`(?i)\b(?:more direct|be blunt|cut to the chase|straight up)\b`),
 			},
 			{
-				dimension: "humor",
+				dimension: DimHumor,
 				decrease:  regexp.MustCompile(`(?i)\b(?:less (?:jokes|funny)|not funny|stop joking|serious)\b`),
 				increase:  regexp.MustCompile(`(?i)\b(?:more jokes|funnier|be funny|lighten up)\b`),
 			},
 			{
-				dimension: "excitement",
+				dimension: DimExcitement,
 				decrease:  regexp.MustCompile(`(?i)\b(?:less excited|calm down|dial it back|chill)\b`),
 				increase:  regexp.MustCompile(`(?i)\b(?:more excited|more energy|pump it up|enthusiastic)\b`),
 			},

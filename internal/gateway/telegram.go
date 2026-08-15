@@ -698,10 +698,6 @@ func (h *TelegramHandler) resolveScope(from *tgUser) (string, bool) {
 	return "", false
 }
 
-// sendText POSTs to the Bot API's sendMessage endpoint. Errors are
-// logged but don't propagate — there's nothing useful to do with a
-// failed send at this layer. Telegram will deliver eventually if
-// it's a transient network issue.
 // Send is the public proactive-message entry point. Identical to
 // sendText except errors propagate to the caller instead of being
 // logged and swallowed. Used by the compute-layer notify_telegram

@@ -377,7 +377,12 @@ func New(cfg Config) (*Node, error) {
 
 // Start begins serving gRPC, optionally dials seed nodes, and blocks
 // until ctx is cancelled. Cancellation triggers Shutdown.
-func (n *Node) Start(ctx context.Context) error {
+// gocyclo: 31, just past the configured 30. Start is a sequence of
+// guarded startup steps whose branches are almost all "is this
+// function enabled"; the shape is flat rather than deeply nested.
+// Left as-is because the natural split — per-function start helpers
+// — is the same refactor wireCompute needs and belongs with it.
+func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat startup sequence; refactor alongside wireCompute
 	errCh := make(chan error, 1)
 	go func() {
 		if err := n.server.Serve(n.listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
