@@ -232,12 +232,15 @@ type Node struct {
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
-	toolRegistry     *compute.Registry
-	hooksDisp        *hooks.Dispatcher
-	policyEngine     *policy.Engine
-	resolver         *compute.Resolver
-	llmProvider      compute.LLMProvider
-	executor         *compute.Executor
+	toolRegistry *compute.Registry
+	hooksDisp    *hooks.Dispatcher
+	policyEngine *policy.Engine
+	resolver     *compute.Resolver
+	llmProvider  compute.LLMProvider
+	executor     *compute.Executor
+	// approvals is shared between the executor (which spends session
+	// approvals) and the channels (which record them).
+	approvals        *compute.SessionApprovals
 	agent            *compute.Agent
 	embedder         compute.EmbeddingProvider
 	roleMap          *compute.RoleMap

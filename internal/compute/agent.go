@@ -363,7 +363,16 @@ type ProcessMessageResponse struct {
 	// requested user approval mid-turn. Channel handlers surface
 	// the ConfirmationReason to the user and re-run the turn with
 	// explicit approval.
-	NeedsConfirmation  bool
+	NeedsConfirmation bool
+
+	// ConfirmationAction and ConfirmationResource name the operation
+	// waiting on the user, so a channel can offer to remember the
+	// answer for this conversation. Empty when the confirmation came
+	// from the budget rather than a policy rule — there is no
+	// operation to remember in that case, only a spend to acknowledge.
+	ConfirmationAction   string
+	ConfirmationResource string
+
 	ConfirmationReason string
 }
 
@@ -617,9 +626,11 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 				return nil, fmt.Errorf("tool call %q: %w", tc.Name, err)
 			}
 			resp.ToolCalls = append(resp.ToolCalls, inv)
-			if confirmation != "" {
+			if confirmation != nil {
 				resp.NeedsConfirmation = true
-				resp.ConfirmationReason = confirmation
+				resp.ConfirmationReason = confirmation.Reason
+				resp.ConfirmationAction = confirmation.Action
+				resp.ConfirmationResource = confirmation.Resource
 				resp.BudgetState = req.Budget.State()
 				messages = append(messages, toolResultMessage(tc, inv))
 				resp.Messages = messages
@@ -965,7 +976,17 @@ const syntheticArgPrefix = "__"
 // surface to the model as tool output (non-zero exit, for instance),
 // packages them into the ToolInvocation rather than returning an
 // error.
-func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, string, error) {
+// pendingConfirmation is what a tool call needs a human for. Action
+// and Resource are set only when a policy rule asked — a budget
+// confirmation is about spend, not about an operation, so there is
+// nothing a channel could sensibly offer to remember.
+type pendingConfirmation struct {
+	Reason   string
+	Action   string
+	Resource string
+}
+
+func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
 	budgetDec := req.Budget.RecordToolCall()
 	if budgetDec.Exceeded {
 		return ToolInvocation{
@@ -973,7 +994,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			ToolName: tc.Name,
 			Args:     tc.Arguments,
 			Error:    "budget exceeded",
-		}, fmt.Sprintf("budget exceeded on %s", budgetDec.ExceededOn), nil
+		}, &pendingConfirmation{Reason: fmt.Sprintf("budget exceeded on %s", budgetDec.ExceededOn)}, nil
 	}
 
 	params, err := parseToolArgs(tc.Arguments)
@@ -1006,7 +1027,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			ToolName: tc.Name,
 			Args:     tc.Arguments,
 			Error:    fmt.Sprintf("parse args: %v", err),
-		}, "", nil
+		}, nil, nil
 	}
 
 	inv := ToolInvocation{
@@ -1029,7 +1050,12 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		if a.cfg.Executor != nil {
 			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
 				inv.Error = err.Error()
-				return inv, "", nil
+				if errors.Is(err, ErrRequireConfirm) {
+					return inv, &pendingConfirmation{
+						Reason: confirmationReason(err), Action: "tool:exec", Resource: tc.Name,
+					}, nil
+				}
+				return inv, nil, nil
 			}
 		}
 		skillParams := make(map[string]any, len(params))
@@ -1044,17 +1070,17 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		})
 		if err != nil {
 			inv.Error = err.Error()
-			return inv, "", nil
+			return inv, nil, nil
 		}
 		inv.ExitCode = skillRes.ExitCode
 		inv.Output = combineSkillOutputs(skillRes)
 		req.Budget.RecordEgressBytes(int64(len(skillRes.Stdout) + len(skillRes.Stderr)))
-		return inv, "", nil
+		return inv, nil, nil
 	}
 
 	if a.cfg.Executor == nil {
 		inv.Error = fmt.Sprintf("tool %q not found (no executor or skill dispatcher registered)", tc.Name)
-		return inv, "", nil
+		return inv, nil, nil
 	}
 	invReq := InvokeRequest{
 		ToolName: tc.Name,
@@ -1064,8 +1090,22 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	}
 	result, err := a.cfg.Executor.Invoke(ctx, invReq)
 	if err != nil {
+		// A policy rule asking for confirmation must reach the USER.
+		// Returning it as a tool error hands it to the model instead,
+		// which turns require_confirmation into a deny with a
+		// confusing message — the operator writes a rule expecting to
+		// be asked, and is never asked. docs/architecture/agent-loop
+		// has always described the intended behaviour ("pause turn and
+		// ask the channel; resume when user replies"); only the budget
+		// path implemented it.
+		if errors.Is(err, ErrRequireConfirm) {
+			inv.Error = err.Error()
+			return inv, &pendingConfirmation{
+				Reason: confirmationReason(err), Action: "tool:exec", Resource: tc.Name,
+			}, nil
+		}
 		inv.Error = err.Error()
-		return inv, "", nil
+		return inv, nil, nil
 	}
 
 	inv.ExitCode = result.ExitCode
@@ -1073,7 +1113,7 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 
 	req.Budget.RecordEgressBytes(int64(len(result.Stdout) + len(result.Stderr)))
 
-	return inv, "", nil
+	return inv, nil, nil
 }
 
 // combineSkillOutputs formats a skill result the same way
@@ -1187,4 +1227,17 @@ func scopeOfClaims(c *types.Claims) string {
 		return ""
 	}
 	return c.Scope
+}
+
+// confirmationReason renders a require-confirmation error as the text
+// a channel shows the user. The sentinel prefix is stripped: "tool
+// invocation requires confirmation: rule \"x\" matched" tells the
+// operator nothing they did not already know, and the part after the
+// colon is the rule's own reason, which is what they wrote it for.
+func confirmationReason(err error) string {
+	msg := err.Error()
+	if _, rest, found := strings.Cut(msg, ErrRequireConfirm.Error()+": "); found {
+		return rest
+	}
+	return msg
 }

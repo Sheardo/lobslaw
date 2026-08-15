@@ -185,6 +185,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
 		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
+		Approvals:        n.approvals,
 		Leaser:           n.newSessionLeaser(),
 		BotToken:         botToken,
 		Mode:             mode,

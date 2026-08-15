@@ -63,7 +63,13 @@ How a single turn runs from message arrival to reply.
 
 `compute.Executor.Call(ctx, claims, tool, args)`:
 
-1. **Policy gate.** `policy.Evaluate(claims, "tool:exec", tool)` — allow / deny / require_confirmation. If require_confirmation, pause turn and ask the channel; resume when user replies.
+1. **Policy gate.** `policy.Evaluate(claims, "tool:exec", tool)` — allow / deny / require_confirmation. If require_confirmation, the turn pauses and the channel asks the user; the channel resumes it on approval.
+
+   The user can answer **Approve** (this invocation) or **Approve for this chat** (the rest of the conversation). The second records a grant that the executor checks before prompting again, so an operator is not re-asked about the same operation forever — which is how a confirmation stops being read, and then gets switched off. Grants are per conversation and per operation, held in memory, and keyed off the request-context turn identity rather than anything the model produced.
+
+   A permanent approval is a policy `allow` rule rather than a third kind of grant: once one exists, `Evaluate` returns allow and this branch is never reached.
+
+   Budget confirmations take the same path but offer only Approve/Deny — there is no operation to remember, just a spend to acknowledge.
 2. **PreToolUse hook.** `hooks.Dispatch("PreToolUse", {tool, args, claims})` — arbitrary scripts can block.
 3. **Resolve tool kind.** Builtin (path starts with `BuiltinScheme://`), skill (path is `skill://<name>/<tool>`), or MCP (path is `mcp://<server>/<tool>`).
 4. **Inject synthetic args.** Some args the agent doesn't see in the schema but get added at dispatch time: `__channel`, `__chat_id`, `__user_id`, `__user_timezone`. Used by `notify` for routing, by `commitment_create` for parse, etc.
