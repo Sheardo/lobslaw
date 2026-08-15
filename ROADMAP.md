@@ -2133,7 +2133,15 @@ before betting new work on it.**
 7. Async job plumbing: `JobDriver`, artifact resolution, commitment-
    backed poll handler.
 8. New modalities: `speak`, then `image`, then `video`.
-9. External drivers via skills.
+9. External drivers — REVISED, and deliberately unscheduled. See
+   `docs/dev/PROVIDERS.md` → "Revised: declarative first, code
+   second". A declarative template driver (endpoint, auth style,
+   request/response field paths in TOML) covers the long tail of
+   OpenAI-shaped clones with no code execution; skills remain the
+   answer only for a genuinely different protocol, and only for the
+   asynchronous modalities. Build either when a vendor appears that
+   the layer below it cannot reach — a second vendor per modality is
+   worth more today than an extension point nobody is extending.
 
 Steps 1–5 add no capability, and that is the point: they make step 8 a
 day per modality rather than a fresh argument each time.
@@ -2404,3 +2412,34 @@ Acceptance:
   `memory`, and behaves identically.
 - A test asserts the alias, so removing it later is a deliberate act.
 - `docs/` and `examples/config.toml` stop listing `policy` as a role.
+
+## R26 — a second vendor per generation modality
+
+R22 shipped speak, image and video with exactly one vendor each:
+OpenAI-shaped speech, OpenAI-shaped images, DashScope video. One
+implementation always fits its own interface, which is the reason the
+chat waist got a second driver (Anthropic) before it was trusted.
+
+The generation modalities have not had that test. Until a second
+vendor lands behind each, the failover chains built in R22 step 6
+route between providers that all speak the same protocol, and the
+artifact resolver has only ever seen the delivery modes those three
+vendors happen to use.
+
+Worth more than an extension point: a second vendor exercises the
+waist for real, and is immediately useful to an operator who has an
+account with the other one.
+
+Candidates, chosen to be un-alike rather than convenient:
+- speak: a self-hosted Kokoro or Piper behind the same shape (proves
+  the driver is not quietly OpenAI-specific), or ElevenLabs (proves it
+  is, if it breaks).
+- image: an operator-bucket writer, so `ArtifactMount` sees real use.
+  Today only the mock produces one.
+- video: Veo or Bedrock, whose handles are an operation resource name
+  and an ARN. Both were surveyed for R22 and neither has been
+  implemented, so `JobHandle`'s opacity is still only asserted.
+
+Acceptance: each new driver passes the existing conformance suite
+unchanged. A suite that needs editing to admit the second driver is
+the finding, not the driver.
