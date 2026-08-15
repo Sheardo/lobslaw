@@ -46,7 +46,7 @@ func RegisterCommitmentBuiltins(b *Builtins, cfg CommitmentConfig) error {
 	if err := b.Register("commitment_list", newCommitmentListHandler(cfg.Store)); err != nil {
 		return err
 	}
-	return b.Register("commitment_cancel", newCommitmentCancelHandler(cfg.Raft))
+	return b.Register("commitment_cancel", newCommitmentCancelHandler(cfg.Store, cfg.Raft))
 }
 
 func CommitmentToolDefs() []*types.ToolDef {
@@ -154,6 +154,7 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 			HandlerRef: CommitmentHandlerRef,
 			Params:     params,
 			CreatedFor: userID,
+			Owner:      identityOwner(ctx),
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -201,6 +202,12 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 			if err := proto.Unmarshal(raw, &c); err != nil {
 				return nil
 			}
+			// Someone else's commitment is not this caller's business,
+			// and it must not even reach the hidden counter — that
+			// would leak how many other people have things scheduled.
+			if !ownedByCaller(ctx, c.Owner) {
+				return nil
+			}
 			// Default-hide anything that's not actively pending. The
 			// scheduler stamps fired commitments to "done"; older or
 			// custom states (cancelled, errored, etc.) are also
@@ -235,11 +242,22 @@ func newCommitmentListHandler(store *memory.Store) BuiltinFunc {
 	}
 }
 
-func newCommitmentCancelHandler(raft memoryRaftApplier) BuiltinFunc {
+func newCommitmentCancelHandler(store *memory.Store, raft memoryRaftApplier) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		id := strings.TrimSpace(args["id"])
 		if id == "" {
 			return nil, 2, errors.New("commitment_cancel: id is required")
+		}
+		// Cancellation is a write, and ids are guessable — commitment_list
+		// hands them out. Refusing looks identical to "no such
+		// commitment" so this cannot be used to probe for another
+		// person's schedule.
+		ok, err := commitmentActionable(ctx, store, id)
+		if err != nil {
+			return nil, 1, fmt.Errorf("commitment_cancel: %w", err)
+		}
+		if !ok {
+			return nil, 2, errors.New("commitment_cancel: no pending commitment with that id")
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_DELETE,
@@ -315,4 +333,53 @@ func identityTimezone(ctx context.Context) string {
 		return ""
 	}
 	return identity.Timezone
+}
+
+// identityOwner is the canonical principal to stamp on a record the
+// turn is creating. Empty for an anonymous turn, which writes an
+// unowned record — actionable by anyone, exactly like the records that
+// predate ownership.
+func identityOwner(ctx context.Context) string {
+	turn, _ := TurnIdentityFrom(ctx)
+	return turn.Principal.String()
+}
+
+// ownedByCaller reports whether this turn may see or act on a record
+// with the given owner.
+//
+// An empty owner is legacy — written before commitments had one — and
+// stays actionable, for the same reason legacy memories stay readable:
+// the alternative is that an upgrade silently orphans every commitment
+// already scheduled, and a reminder that never fires is worse than one
+// visible to the wrong person on a single-user node.
+func ownedByCaller(ctx context.Context, owner string) bool {
+	if owner == "" {
+		return true
+	}
+	turn, ok := TurnIdentityFrom(ctx)
+	if !ok || turn.Principal.IsZero() {
+		return false
+	}
+	return owner == turn.Principal.String()
+}
+
+// commitmentActionable loads a commitment and reports whether this turn
+// may act on it. A missing record reports false, so callers give the
+// same answer for "not yours" and "not there".
+func commitmentActionable(ctx context.Context, store *memory.Store, id string) (bool, error) {
+	if store == nil {
+		return true, nil
+	}
+	raw, err := store.Get(memory.BucketCommitments, id)
+	if err != nil {
+		if memory.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var c lobslawv1.AgentCommitment
+	if err := proto.Unmarshal(raw, &c); err != nil {
+		return false, fmt.Errorf("unmarshal commitment %q: %w", id, err)
+	}
+	return ownedByCaller(ctx, c.Owner), nil
 }

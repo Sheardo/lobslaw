@@ -3,13 +3,17 @@ package memory
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/jmylchreest/lobslaw/internal/identity"
 
 	"github.com/jmylchreest/lobslaw/internal/logging"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -287,6 +291,14 @@ func (s *Service) Forget(ctx context.Context, req *lobslawv1.ForgetRequest) (*lo
 		}
 	}
 
+	// Drop anything the requester may not read before anything is
+	// deleted. Forget cascades through SourceIds and is irreversible,
+	// so this has to happen before the cascade, not after: a record
+	// filtered out here must not pull its consolidations down with it.
+	if err := retainForgettable(s.store, matched, forgetAudience(req.Requester)); err != nil {
+		return nil, status.Errorf(codes.Internal, "forget scope: %v", err)
+	}
+
 	swept, err := forgetCascade(s.store, matched)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "forget cascade: %v", err)
@@ -370,4 +382,64 @@ func (s *Service) applyEntry(e *lobslawv1.LogEntry) error {
 		return status.Errorf(codes.Internal, "fsm apply: %v", fsmErr)
 	}
 	return nil
+}
+
+// forgetAudience maps the request's requester onto an Audience. Empty
+// is unrestricted: operator tooling and peer nodes reach this RPC over
+// mTLS and carry no principal. The agent's memory_forget always sets
+// one, so the model never reaches the unrestricted path.
+func forgetAudience(requester string) Audience {
+	if strings.TrimSpace(requester) == "" {
+		return Everyone()
+	}
+	return For(identity.Principal(requester))
+}
+
+// retainForgettable removes ids the audience may not read from the
+// matched set, in place.
+//
+// A record that cannot be found is left in the set: it is either
+// already gone or in a bucket this lookup does not cover, and removing
+// it here would silently skip a delete the caller asked for.
+func retainForgettable(store *Store, matched map[string]struct{}, audience Audience) error {
+	for id := range matched {
+		vis, found, err := recordVisibility(store, id)
+		if err != nil {
+			return err
+		}
+		if found && !audience.allows(vis.owner, vis.visibility) {
+			delete(matched, id)
+		}
+	}
+	return nil
+}
+
+type recordOwnership struct {
+	owner      string
+	visibility lobslawv1.Visibility
+}
+
+// recordVisibility reads a record's ownership from whichever bucket
+// holds it. Vector and episodic records share an id space, so both are
+// tried — the same reason deleteFromBothBuckets exists.
+func recordVisibility(store *Store, id string) (recordOwnership, bool, error) {
+	if raw, err := store.Get(BucketVectorRecords, id); err == nil {
+		var v lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &v); err != nil {
+			return recordOwnership{}, false, fmt.Errorf("unmarshal vector %q: %w", id, err)
+		}
+		return recordOwnership{owner: v.Owner, visibility: v.Visibility}, true, nil
+	} else if !IsNotFound(err) {
+		return recordOwnership{}, false, err
+	}
+	if raw, err := store.Get(BucketEpisodicRecords, id); err == nil {
+		var e lobslawv1.EpisodicRecord
+		if err := proto.Unmarshal(raw, &e); err != nil {
+			return recordOwnership{}, false, fmt.Errorf("unmarshal episodic %q: %w", id, err)
+		}
+		return recordOwnership{owner: e.Owner, visibility: e.Visibility}, true, nil
+	} else if !IsNotFound(err) {
+		return recordOwnership{}, false, err
+	}
+	return recordOwnership{}, false, nil
 }

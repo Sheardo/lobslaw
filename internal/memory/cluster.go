@@ -98,6 +98,16 @@ func findClusters(store *Store, req clusterQuery) ([]*lobslawv1.Cluster, error) 
 				// embedding models can never be "near-duplicates."
 				continue
 			}
+			// Never cluster across owners. Consolidation replaces a
+			// cluster's members with one summary carrying all their
+			// SourceIds, so a cross-owner cluster would mint a record
+			// containing two people's memories and owned by neither —
+			// a leak created by the merge itself, which no read-side
+			// filter can undo afterwards. Two similar memories held by
+			// two people are not duplicates; they are a coincidence.
+			if candidates[i].record.Owner != candidates[j].record.Owner {
+				continue
+			}
 			sim := dot(candidates[i].record.Embedding, candidates[j].record.Embedding) / (norms[i] * norms[j])
 			if sim >= req.threshold {
 				uf.union(i, j)

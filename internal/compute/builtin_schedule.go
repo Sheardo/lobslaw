@@ -53,7 +53,7 @@ func RegisterScheduleBuiltins(b *Builtins, cfg ScheduleConfig) error {
 	if err := b.Register("schedule_get", newScheduleGetHandler(cfg.Store)); err != nil {
 		return err
 	}
-	return b.Register("schedule_delete", newScheduleDeleteHandler(cfg.Raft))
+	return b.Register("schedule_delete", newScheduleDeleteHandler(cfg.Store, cfg.Raft))
 }
 
 func ScheduleToolDefs() []*types.ToolDef {
@@ -156,6 +156,7 @@ func newScheduleCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 			},
 			Enabled:   true,
 			CreatedAt: timestamppb.Now(),
+			Owner:     identityOwner(ctx),
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -195,6 +196,9 @@ func newScheduleListHandler(store *memory.Store) BuiltinFunc {
 		err := store.ForEach(memory.BucketScheduledTasks, func(_ string, raw []byte) error {
 			var t lobslawv1.ScheduledTaskRecord
 			if err := proto.Unmarshal(raw, &t); err != nil {
+				return nil
+			}
+			if !ownedByCaller(ctx, t.Owner) {
 				return nil
 			}
 			v := view{
@@ -239,6 +243,11 @@ func newScheduleGetHandler(store *memory.Store) BuiltinFunc {
 		if err := proto.Unmarshal(raw, &t); err != nil {
 			return nil, 1, fmt.Errorf("schedule_get: decode: %w", err)
 		}
+		// Same answer for "not yours" as for "not there", so an id
+		// probe cannot map another person's schedule.
+		if !ownedByCaller(ctx, t.Owner) {
+			return nil, 2, fmt.Errorf("schedule_get: task %q not found", id)
+		}
 		view := map[string]any{
 			"id":       t.Id,
 			"name":     t.Name,
@@ -257,7 +266,7 @@ func newScheduleGetHandler(store *memory.Store) BuiltinFunc {
 	}
 }
 
-func newScheduleDeleteHandler(raft memoryRaftApplier) BuiltinFunc {
+func newScheduleDeleteHandler(store *memory.Store, raft memoryRaftApplier) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		id := strings.TrimSpace(args["id"])
 		if id == "" {
@@ -266,6 +275,13 @@ func newScheduleDeleteHandler(raft memoryRaftApplier) BuiltinFunc {
 		// Payload shape disambiguates the bucket for the FSM's
 		// applyDelete — same pattern memory.Service uses for its
 		// ForgetRequest handling.
+		ok, err := scheduleActionable(ctx, store, id)
+		if err != nil {
+			return nil, 1, fmt.Errorf("schedule_delete: %w", err)
+		}
+		if !ok {
+			return nil, 2, fmt.Errorf("schedule_delete: task %q not found", id)
+		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_DELETE,
 			Id: id,
@@ -339,4 +355,25 @@ func normaliseToCron(when string) (string, error) {
 		return fmt.Sprintf("%d %d * * *", min, h), nil
 	}
 	return "", fmt.Errorf("don't know how to parse %q as a schedule; pass a cron expression or 'every Nm', 'every Nh', 'daily HH:MM', 'hourly'", when)
+}
+
+// scheduleActionable mirrors commitmentActionable for scheduled tasks:
+// a missing record and someone else's record give the same answer, so
+// deletion cannot be used to probe for what exists.
+func scheduleActionable(ctx context.Context, store *memory.Store, id string) (bool, error) {
+	if store == nil {
+		return true, nil
+	}
+	raw, err := store.Get(memory.BucketScheduledTasks, id)
+	if err != nil {
+		if memory.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	var t lobslawv1.ScheduledTaskRecord
+	if err := proto.Unmarshal(raw, &t); err != nil {
+		return false, fmt.Errorf("unmarshal scheduled task %q: %w", id, err)
+	}
+	return ownedByCaller(ctx, t.Owner), nil
 }

@@ -217,3 +217,21 @@ Scheduler is constructed on any Raft-hosting node. A compute-only node without R
 - **AddScheduledTask / RemoveScheduledTask RPCs.** Scheduled tasks are operator-defined, expected to come from config. If the user-facing "tell me to re-run this every Monday" flow lands, we'll add them then.
 - **`InFlightWork` / `CheckBackThreads`** fields on `GetPlanResponse`. Currently empty. Populated when the agent gains an in-flight tracker (Phase 10-ish) and the audit bridge lands (Phase 11).
 - **Idempotency middleware.** See partition caveats — planned as handler wrapping once real side effects (messaging, audit writes) start being scheduled.
+
+## Ownership
+
+Commitments and scheduled tasks carry an `owner` — the canonical principal from
+`[identity.aliases]`, distinct from the `created_for` / `created_by` fields
+beside them, which hold the raw per-channel id and so cannot be compared across
+channels.
+
+`commitment_list` / `schedule_list` show only the caller's own records plus
+unowned ones, and `commitment_cancel` / `schedule_delete` / `schedule_get`
+refuse anything else. The refusal is worded identically to "no such record":
+ids are handed out by the list tools and are otherwise guessable, so a
+distinguishable error would be an oracle for what other people have scheduled.
+
+Records written before ownership existed have an empty owner and stay
+actionable by anyone — the alternative is that an upgrade silently orphans every
+commitment already scheduled, and a reminder that never fires is worse than one
+visible to the wrong person on a node that probably has one user.

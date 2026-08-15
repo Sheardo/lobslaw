@@ -332,6 +332,26 @@ private: a writer that forgets the field must not silently publish.
 `default`), and `Claims.Scope` is a permission tier — neither identifies a
 person, and overloading either a third time is how the original bug hid.
 
+#### Consolidation and forgetting
+
+Dream **never clusters across owners**. Consolidation replaces a cluster's
+members with one summary carrying all their `SourceIds`, so a cross-owner
+cluster would mint a record holding two people's memories and owned by neither
+— and unowned reads as legacy, so everyone would see it. No read-side filter can
+undo a merge after the fact. Two similar memories held by two people are not
+duplicates; they are a coincidence. `applyMerge` re-checks and refuses rather
+than trusting that guarantee, because the cost of it failing is unrecoverable.
+
+A consolidation inherits its members' owner and the **most restrictive** of
+their visibilities: a summary of anything private is private, or one shared
+member in a cluster would publish the rest.
+
+`Forget` takes a `requester` and will not delete what that principal cannot
+read. The scoping happens *before* the `SourceIds` cascade, so a record filtered
+out cannot pull its consolidations down with it. An empty requester is
+unrestricted for operator tooling and peer nodes; the agent's `memory_forget`
+always sets one, so the model never reaches that path.
+
 ### Where identity comes from
 
 `TurnIdentity` travels on the request context, attached once per turn in
