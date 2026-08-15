@@ -2342,3 +2342,65 @@ Sources: [Wan text-to-video API reference](https://www.alibabacloud.com/help/en/
 [Bedrock StartAsyncInvoke](https://docs.aws.amazon.com/de_de/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html) ·
 [Nova Reel text-to-video](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_Scenario_AmazonNova_TextToVideo_section.html) ·
 [Vertex AI authentication](https://docs.cloud.google.com/vertex-ai/docs/authentication)
+
+## R25 — retire the node functions that do not select anything
+
+`[cluster].functions` advertises five roles. Three of them do not
+independently select behaviour, and one of those actively misleads.
+
+What each gate resolves to today (`internal/node/wire.go`):
+
+| function | gate | wires |
+|---|---|---|
+| `compute` | `gateCompute` | agent, tool registry, builtins |
+| `gateway` | `gateGateway` (function **and** `Gateway.Enabled`) | Telegram, HTTP |
+| `storage` | `gateRaftAnd(gateStorage)` | mounts, storage service |
+| `memory` | `gateRaft` | raft, store, memory service |
+| `policy` | `gateRaft` | *the same stages as `memory`* |
+
+Findings:
+
+1. **`policy` selects nothing of its own.** `needsRaft = memory ||
+   policy`, and both `policy-svc` and `memory-svc` sit behind it, so
+   the two bits are indistinguishable: `functions = ["policy"]` yields
+   a memory node. Enforcement is not gated on it either — the engine is
+   built in `wireCompute` on `n.store != nil`. An operator setting it
+   gets something other than what it says, with no warning.
+
+2. **`gateway` is implied by `compute`.** `wireGateway` returns
+   "gateway requires compute function" without an agent, so it is never
+   independently deployable, and `Gateway.Enabled` is already the real
+   switch. Two knobs for one decision.
+
+3. **`memory` and `storage` are mutually required.** Config validation
+   rejects memory without storage; the storage stage is gated behind
+   raft, which only memory (or policy) provides. Neither can be
+   deployed without the other, so they are one role spelled two ways.
+
+4. **Splitting compute from memory does not work today.**
+   `MemoryServiceClient` is generated but has no call site, so a
+   compute node cannot reach another node's store. A "compute-only"
+   node is not a node using remote memory; it is a node with no memory
+   at all. Extra memory nodes are useful as raft replicas for
+   durability, not as a service other nodes consume.
+
+So the five bits express two real roles: raft-backed state
+(memory+storage+policy) and agent (compute+gateway).
+
+**Decision: retire `policy` now** — accept it in config as a
+deprecated alias for `memory` so existing configs keep working, warn at
+boot, and drop it after a release.
+
+**Deferred, deliberately:** `gateway`, and collapsing
+`memory`+`storage`. Both are correct simplifications today and both
+become wrong the moment remote memory lands — at which point `memory`
+as a separately addressable role is exactly the thing that makes a
+compute node useful without a local store. Decide these together with
+the cluster-gRPC-principal work (R7 gap 7), which is the same
+conversation about what a non-state node is allowed to do.
+
+Acceptance:
+- `functions = ["policy"]` boots, logs a deprecation warning naming
+  `memory`, and behaves identically.
+- A test asserts the alias, so removing it later is a deliberate act.
+- `docs/` and `examples/config.toml` stop listing `policy` as a role.
