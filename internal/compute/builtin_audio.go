@@ -54,29 +54,38 @@ type AudioConfig struct {
 
 // RegisterAudioBuiltin installs read_audio. Required-fields check
 // matches the vision builtin so misconfigurations surface loudly.
-func RegisterAudioBuiltin(b *Builtins, cfg AudioConfig) error {
-	if cfg.Endpoint == "" || cfg.APIKey == "" {
-		return errors.New("read_audio: Endpoint and APIKey both required")
+// Variadic for the same reason as vision: one config is a single
+// provider, several are a failover chain in the order given.
+func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
+	if len(cfgs) == 0 {
+		return errors.New("read_audio: at least one provider config required")
 	}
-	if cfg.Model == "" {
-		return errors.New("read_audio: Model required (e.g. \"whisper-1\", \"speech-01\", \"google/gemini-2.0-flash-001\")")
+	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Endpoint == "" || cfg.APIKey == "" {
+			return errors.New("read_audio: Endpoint and APIKey both required")
+		}
+		if cfg.Model == "" {
+			return errors.New("read_audio: Model required (e.g. \"whisper-1\", \"speech-01\", \"google/gemini-2.0-flash-001\")")
+		}
+		if cfg.Format == "" {
+			cfg.Format = AudioFormatWhisper
+		}
+		switch cfg.Format {
+		case AudioFormatWhisper, AudioFormatChatMultimodal:
+		default:
+			return fmt.Errorf("read_audio: unknown format %q (want openai|openrouter)", cfg.Format)
+		}
+		if cfg.AllowedRoot == "" {
+			cfg.AllowedRoot = "/workspace/incoming"
+		}
+		client := cfg.HTTPClient
+		if client == nil {
+			client = &http.Client{Timeout: 120 * time.Second}
+		}
+		handlers = append(handlers, newReadAudioHandler(cfg, client))
 	}
-	if cfg.Format == "" {
-		cfg.Format = AudioFormatWhisper
-	}
-	switch cfg.Format {
-	case AudioFormatWhisper, AudioFormatChatMultimodal:
-	default:
-		return fmt.Errorf("read_audio: unknown format %q (want openai|openrouter)", cfg.Format)
-	}
-	if cfg.AllowedRoot == "" {
-		cfg.AllowedRoot = "/workspace/incoming"
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
-	}
-	return b.Register("read_audio", newReadAudioHandler(cfg, client))
+	return b.Register("read_audio", failoverBuiltin("read_audio", nil, handlers...))
 }
 
 // AudioToolDef is the ToolDef registered alongside the builtin.
@@ -192,12 +201,15 @@ func audioWhisperTranscribe(ctx context.Context, client *http.Client, cfg AudioC
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("read_audio: http: %w", err)
+		return "", Transient(fmt.Errorf("read_audio: http: %w", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))
+		return "", &DriverError{
+			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
+			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+		}
 	}
 	var decoded struct {
 		Text string `json:"text"`
@@ -240,12 +252,15 @@ func audioChatMultimodalTranscribe(ctx context.Context, client *http.Client, cfg
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("read_audio: http: %w", err)
+		return "", Transient(fmt.Errorf("read_audio: http: %w", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))
+		return "", &DriverError{
+			Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
+			Err:   fmt.Errorf("read_audio: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+		}
 	}
 	var decoded struct {
 		Choices []struct {
