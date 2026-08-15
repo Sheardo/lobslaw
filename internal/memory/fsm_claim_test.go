@@ -43,6 +43,11 @@ func applyEntry(t *testing.T, f *FSM, entry *lobslawv1.LogEntry) any {
 	return f.Apply(&raft.Log{Data: data})
 }
 
+// rev is the pointer form LogEntry.expected_revision takes. It is
+// explicitly optional so that a CLAIM with no condition is refused
+// rather than silently unconditional — see applyClaim.
+func rev(n uint64) *uint64 { return &n }
+
 func TestFSMApplyClaimFreshInsertWithEmptyExpected(t *testing.T) {
 	t.Parallel()
 	_, fsm := newClaimTestStore(t)
@@ -58,7 +63,8 @@ func TestFSMApplyClaimFreshInsertWithEmptyExpected(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(0),
 	})
 	if err, ok := res.(error); ok && err != nil {
 		t.Fatalf("fresh claim failed: %v", err)
@@ -85,10 +91,13 @@ func TestFSMApplyClaimRejectsMismatch(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(0),
 	}))
 
 	// node-b tries to claim expecting unclaimed — must be rejected.
+	// It passes the CURRENT revision so the rejection is attributable
+	// to the claimer check rather than to staleness.
 	res := applyEntry(t, fsm, &lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_CLAIM,
 		Id: "task-1",
@@ -98,7 +107,8 @@ func TestFSMApplyClaimRejectsMismatch(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(1),
 	})
 	err, ok := res.(error)
 	if !ok || err == nil {
@@ -131,7 +141,8 @@ func TestFSMApplyClaimExactCASIgnoresExpiry(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(-time.Hour)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(0),
 	})
 	if err, ok := expired.(error); ok && err != nil {
 		t.Fatal(err)
@@ -149,7 +160,8 @@ func TestFSMApplyClaimExactCASIgnoresExpiry(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(1),
 	})
 	if err, ok := res.(error); !ok || err == nil {
 		t.Errorf("expected ErrClaimConflict (FSM CAS is exact, no expiry magic); got %v", res)
@@ -167,7 +179,8 @@ func TestFSMApplyClaimExactCASIgnoresExpiry(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "crashed-node",
+		ExpectedClaimer:  "crashed-node",
+		ExpectedRevision: rev(1),
 	})
 	if err, ok := res.(error); ok && err != nil {
 		t.Errorf("exact-CAS take-over with ExpectedClaimer=crashed-node should succeed; got %v", err)
@@ -194,7 +207,8 @@ func TestFSMApplyClaimReleaseByCurrentOwner(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(0),
 	}))
 
 	// node-a releases (expected=node-a, new claim empty).
@@ -204,7 +218,8 @@ func TestFSMApplyClaimReleaseByCurrentOwner(t *testing.T) {
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: &lobslawv1.ScheduledTaskRecord{Id: "t"},
 		},
-		ExpectedClaimer: "node-a",
+		ExpectedClaimer:  "node-a",
+		ExpectedRevision: rev(1),
 	}))
 
 	// node-b can now claim from empty.
@@ -217,7 +232,8 @@ func TestFSMApplyClaimReleaseByCurrentOwner(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(2),
 	}))
 }
 
@@ -233,7 +249,8 @@ func TestFSMApplyClaimCommitmentBucket(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(0),
 	})
 	if err, ok := res.(error); ok && err != nil {
 		t.Errorf("commitment CAS should work: %v", err)
@@ -287,6 +304,7 @@ func TestFSMSchedulerChangeCallbackFires(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
+		ExpectedRevision: rev(0),
 	})
 	if fired != 2 {
 		t.Errorf("fired=%d after commitments CLAIM; want 2", fired)
@@ -327,6 +345,7 @@ func TestFSMSchedulerChangeCallbackSkipsOnFailedApply(t *testing.T) {
 				ClaimExpiresAt: timestamppb.New(time.Now().Add(time.Minute)),
 			},
 		},
+		ExpectedRevision: rev(0),
 	}))
 
 	var fired int
@@ -339,7 +358,8 @@ func TestFSMSchedulerChangeCallbackSkipsOnFailedApply(t *testing.T) {
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: &lobslawv1.ScheduledTaskRecord{Id: "t", ClaimedBy: "b"},
 		},
-		ExpectedClaimer: "",
+		ExpectedClaimer:  "",
+		ExpectedRevision: rev(1),
 	})
 	if _, ok := res.(error); !ok {
 		t.Fatal("expected CAS conflict")

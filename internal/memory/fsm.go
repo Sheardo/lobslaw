@@ -179,11 +179,70 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if p, ok := payload.(*lobslawv1.VectorRecord); ok && p.Norm == 0 {
 		p.Norm = norm(p.Embedding)
 	}
+	// Revision is FSM-assigned for the same reason: a producer that
+	// forgets to bump it would silently disarm every conditional write
+	// against that record. Deterministic — it is a function of what is
+	// already in the store, so every replica computes the same value.
+	if err := f.bumpRevision(bucket, entry.Id, payload); err != nil {
+		return err
+	}
 	bytes, err := proto.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)
 	}
 	return f.store.Put(bucket, entry.Id, bytes)
+}
+
+// bumpRevision sets payload's revision to one past what is stored,
+// for the record types that carry one. Everything else is untouched.
+func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
+	if _, carries := revisionOf(payload); !carries {
+		return nil
+	}
+	current, err := f.currentRevision(bucket, id)
+	if err != nil {
+		return err
+	}
+	setRevision(payload, current+1)
+	return nil
+}
+
+// revisionOf and setRevision are a type switch rather than an
+// interface because protoc-gen-go emits getters but no setters.
+func revisionOf(m proto.Message) (uint64, bool) {
+	switch p := m.(type) {
+	case *lobslawv1.ScheduledTaskRecord:
+		return p.Revision, true
+	case *lobslawv1.AgentCommitment:
+		return p.Revision, true
+	default:
+		return 0, false
+	}
+}
+
+func setRevision(m proto.Message, rev uint64) {
+	switch p := m.(type) {
+	case *lobslawv1.ScheduledTaskRecord:
+		p.Revision = rev
+	case *lobslawv1.AgentCommitment:
+		p.Revision = rev
+	}
+}
+
+// currentRevision reads the stored revision for a key. A missing
+// record is revision 0, so the first write lands on 1 — and a caller
+// can never legitimately claim to have read revision 0, which keeps
+// "I read nothing" from passing as "I read the current state".
+func (f *FSM) currentRevision(bucket, id string) (uint64, error) {
+	raw, err := f.store.Get(bucket, id)
+	if err != nil {
+		return 0, nil //nolint:nilerr // absent record = revision 0
+	}
+	existing, err := decodeClaimable(bucket, raw)
+	if err != nil {
+		return 0, fmt.Errorf("read current revision of %s/%s: %w", bucket, id, err)
+	}
+	return existing.GetRevision(), nil
 }
 
 func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
@@ -303,22 +362,52 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 		return fmt.Errorf("CLAIM %s: bucket does not support claim semantics", bucket)
 	}
 
+	// A CLAIM without an expected revision is refused rather than
+	// treated as unconditional. A uint64 whose zero value means "no
+	// check" would hand the unsafe behaviour to anyone who forgot the
+	// field, which is the shape of bug this codebase has already paid
+	// for once (scopeFilter="" meaning "everything").
+	if entry.ExpectedRevision == nil {
+		return fmt.Errorf("CLAIM %s/%s: expected_revision is required; "+
+			"a conditional write with no condition is not a claim", bucket, entry.Id)
+	}
+	expectedRev := entry.GetExpectedRevision()
+
 	raw, getErr := f.store.Get(bucket, entry.Id)
 	if getErr != nil {
 		if entry.ExpectedClaimer != "" {
 			return fmt.Errorf("CLAIM %s/%s: record missing, expected prior claimer %q",
 				bucket, entry.Id, entry.ExpectedClaimer)
 		}
+		if expectedRev != 0 {
+			return fmt.Errorf("%w: %s/%s record missing, expected revision %d",
+				ErrClaimConflict, bucket, entry.Id, expectedRev)
+		}
 	} else {
-		currentClaimer, err := extractClaimerExact(bucket, raw)
+		current, err := decodeClaimable(bucket, raw)
 		if err != nil {
 			return fmt.Errorf("CLAIM %s/%s: inspect current: %w", bucket, entry.Id, err)
 		}
-		if currentClaimer != entry.ExpectedClaimer {
+		// Revision first: it subsumes the claimer check and gives the
+		// more useful error. claimed_by alone cannot distinguish
+		// "nobody holds this" from "somebody held it, finished, and
+		// released it" — so a claimer working from a read taken before
+		// that whole cycle would pass the claimer check, re-fire the
+		// work, and write its stale copy back over the completion.
+		if current.GetRevision() != expectedRev {
+			return fmt.Errorf("%w: %s/%s stale read, expected revision %d current %d",
+				ErrClaimConflict, bucket, entry.Id, expectedRev, current.GetRevision())
+		}
+		if current.GetClaimedBy() != entry.ExpectedClaimer {
 			return fmt.Errorf("%w: %s/%s expected=%q current=%q",
-				ErrClaimConflict, bucket, entry.Id, entry.ExpectedClaimer, currentClaimer)
+				ErrClaimConflict, bucket, entry.Id, entry.ExpectedClaimer, current.GetClaimedBy())
 		}
 	}
+
+	// The claimer's payload is written wholesale, which is only safe
+	// because the revision check above proved it was built from the
+	// current record.
+	setRevision(newPayload, expectedRev+1)
 
 	bytes, err := proto.Marshal(newPayload)
 	if err != nil {
@@ -327,26 +416,40 @@ func (f *FSM) applyClaim(entry *lobslawv1.LogEntry) error {
 	return f.store.Put(bucket, entry.Id, bytes)
 }
 
-// extractClaimerExact pulls the current claimed_by value out of a
-// serialized ScheduledTaskRecord or AgentCommitment. Returns the
-// raw value WITHOUT any expiry-based reinterpretation — see the
-// applyClaim doc for why this matters (replay determinism).
-func extractClaimerExact(bucket string, raw []byte) (string, error) {
+// claimable is the shape shared by the records that support CLAIM.
+// Getters only — see setRevision for why writes use a type switch.
+type claimable interface {
+	GetClaimedBy() string
+	GetRevision() uint64
+}
+
+// decodeClaimable unmarshals a stored record from a claim-bearing
+// bucket. Refusing other buckets here is what keeps CAS semantics
+// from being silently requested against a record that has no claim
+// or revision to compare.
+//
+// The values it returns are exact: claimed_by is NOT reinterpreted
+// against claim_expires_at. Expiry is wall-clock, and the FSM must
+// produce the same result on every replica and on every replay, so
+// "an expired claim counts as unclaimed" belongs at the scheduler
+// scan layer. A node taking over a dead holder's claim passes that
+// holder's id as expected_claimer.
+func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 	switch bucket {
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
-			return "", err
+			return nil, err
 		}
-		return r.ClaimedBy, nil
+		return &r, nil
 	case BucketCommitments:
 		var r lobslawv1.AgentCommitment
 		if err := proto.Unmarshal(raw, &r); err != nil {
-			return "", err
+			return nil, err
 		}
-		return r.ClaimedBy, nil
+		return &r, nil
 	default:
-		return "", fmt.Errorf("bucket %q not claimable", bucket)
+		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
 }
 

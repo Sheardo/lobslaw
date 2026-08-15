@@ -68,9 +68,30 @@ Skipped on failed applies (a rejected CAS leaves the store unchanged; nothing to
 
 ## CAS claim
 
-`LOG_OP_CLAIM` is a third `LogOp` alongside `LOG_OP_PUT` and `LOG_OP_DELETE`. The FSM's `applyClaim` reads the record, compares its `ClaimedBy` to `LogEntry.ExpectedClaimer`, and only writes on match. Mismatch returns `ErrClaimConflict` through the Raft `Apply` response.
+`LOG_OP_CLAIM` is a third `LogOp` alongside `LOG_OP_PUT` and `LOG_OP_DELETE`. The FSM's `applyClaim` compares **two** things against the stored record and only writes when both match:
+
+- `LogEntry.ExpectedRevision` against the record's `Revision`, and
+- `LogEntry.ExpectedClaimer` against its `ClaimedBy`.
+
+Mismatch on either returns `ErrClaimConflict` through the Raft `Apply` response.
 
 Expiry bypass: a claim whose `ClaimExpiresAt` is in the past counts as unclaimed. Gives a crashed node's abandoned work time to be picked up by the next tick without operator intervention.
+
+### Why the revision, and not just the claimer
+
+`ClaimedBy` cannot distinguish *"nobody holds this"* from *"somebody held it, did the work, and released it"* — both are the empty string. Every write also replaces the whole record from the writer's own read. Together those let a writer whose read had gone stale pass the check, which produced three bugs:
+
+- **Double fire.** A and B both scan and see an unclaimed, due task. A claims, runs it, and completes, clearing the claim. B then claims from its original read, succeeds, and the task runs twice.
+- **Lost update.** B's write is its entire stale record, so it also rolls `NextRun` back into the past and drops `LastRun` — and the task fires again on the very next scan.
+- **Reverted operator edits.** The completion path writes a record cloned at *claim* time, so disabling a task or changing its schedule while the handler ran was silently undone.
+
+`Revision` is assigned by the FSM and bumped on every write to that record, so it detects staleness directly rather than through a proxy. A successful CAS always writes `expected + 1`, which lets a caller track the new revision without reading it back — necessary, because a write forwarded to the leader returns no FSM response.
+
+`ExpectedRevision` is **required** on `CLAIM` and explicitly optional in the proto rather than defaulting to "no check": a `uint64` whose zero value meant unconditional would hand the unsafe behaviour to anyone who forgot the field.
+
+Dueness stays out of the FSM. Whether a task should fire is a scheduling decision needing a clock the FSM must not read; the revision check already guarantees the scheduler decided against the current record, which is the only thing it was missing.
+
+On conflict, `completeTask` re-reads and retries onto current state rather than giving up — otherwise a lost race leaves `NextRun` un-advanced and the claim held until TTL, stalling the task and then re-firing it. It stops as soon as the record shows the claim is no longer this node's.
 
 ### The exactly-one-fires guarantee
 

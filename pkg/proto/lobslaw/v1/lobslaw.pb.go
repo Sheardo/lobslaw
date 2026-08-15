@@ -3610,7 +3610,9 @@ type AgentCommitment struct {
 	// ("user:alice"). created_for above is the raw channel id it was
 	// made for, which is per-channel and so cannot be compared across
 	// them. Empty on records written before ownership existed.
-	Owner         string `protobuf:"bytes,12,opt,name=owner,proto3" json:"owner,omitempty"`
+	Owner string `protobuf:"bytes,12,opt,name=owner,proto3" json:"owner,omitempty"`
+	// revision — see ScheduledTaskRecord.revision.
+	Revision      uint64 `protobuf:"varint,13,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3729,6 +3731,13 @@ func (x *AgentCommitment) GetOwner() string {
 	return ""
 }
 
+func (x *AgentCommitment) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 type ScheduledTaskRecord struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -3746,7 +3755,11 @@ type ScheduledTaskRecord struct {
 	ClaimExpiresAt *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=claim_expires_at,json=claimExpiresAt,proto3" json:"claim_expires_at,omitempty"`
 	// owner is the canonical principal, as on AgentCommitment.
 	// created_by above is the raw channel id.
-	Owner         string `protobuf:"bytes,13,opt,name=owner,proto3" json:"owner,omitempty"`
+	Owner string `protobuf:"bytes,13,opt,name=owner,proto3" json:"owner,omitempty"`
+	// revision is assigned by the FSM and bumped on every write to this
+	// record. Conditional writes carry the revision they read and are
+	// rejected if it has moved. See LogEntry.expected_revision.
+	Revision      uint64 `protobuf:"varint,14,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3870,6 +3883,13 @@ func (x *ScheduledTaskRecord) GetOwner() string {
 		return x.Owner
 	}
 	return ""
+}
+
+func (x *ScheduledTaskRecord) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
 }
 
 type InFlightWork struct {
@@ -6192,8 +6212,23 @@ type LogEntry struct {
 	// claimed_by field before we write. Used to enforce CAS semantics.
 	// Ignored for PUT / DELETE.
 	ExpectedClaimer string `protobuf:"bytes,20,opt,name=expected_claimer,json=expectedClaimer,proto3" json:"expected_claimer,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// expected_revision is the record revision the writer read before
+	// building this entry. The FSM rejects the write if the stored
+	// revision has moved, which is what makes a read-modify-write safe:
+	// claimed_by alone cannot tell "nobody holds this" apart from
+	// "somebody held it, finished, and released it", so a claimer
+	// working from a stale read would both re-fire the task and write
+	// its stale copy back over the completion.
+	//
+	// Explicitly optional rather than defaulting to "no check". A
+	// uint64 whose zero value means unconditional would make the unsafe
+	// behaviour what a caller gets by forgetting the field — the same
+	// shape as the scopeFilter="" bug that memory.Audience exists to
+	// prevent. LOG_OP_CLAIM requires it and is rejected without it;
+	// PUT / DELETE ignore it, since a create has no prior revision.
+	ExpectedRevision *uint64 `protobuf:"varint,24,opt,name=expected_revision,json=expectedRevision,proto3,oneof" json:"expected_revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *LogEntry) Reset() {
@@ -6369,6 +6404,13 @@ func (x *LogEntry) GetExpectedClaimer() string {
 		return x.ExpectedClaimer
 	}
 	return ""
+}
+
+func (x *LogEntry) GetExpectedRevision() uint64 {
+	if x != nil && x.ExpectedRevision != nil {
+		return *x.ExpectedRevision
+	}
+	return 0
 }
 
 type isLogEntry_Payload interface {
@@ -6719,7 +6761,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\atimeout\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\atimeout\"R\n" +
 	"\x0ePromptResponse\x12#\n" +
 	"\rchosen_option\x18\x01 \x01(\tR\fchosenOption\x12\x1b\n" +
-	"\ttimed_out\x18\x02 \x01(\bR\btimedOut\"\x83\x04\n" +
+	"\ttimed_out\x18\x02 \x01(\bR\btimedOut\"\x9f\x04\n" +
 	"\x0fAgentCommitment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x121\n" +
 	"\x06due_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05dueAt\x12\x18\n" +
@@ -6736,10 +6778,11 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"claimed_by\x18\n" +
 	" \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x14\n" +
-	"\x05owner\x18\f \x01(\tR\x05owner\x1a9\n" +
+	"\x05owner\x18\f \x01(\tR\x05owner\x12\x1a\n" +
+	"\brevision\x18\r \x01(\x04R\brevision\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd3\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xef\x04\n" +
 	"\x13ScheduledTaskRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -6758,7 +6801,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"claimed_by\x18\v \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x14\n" +
-	"\x05owner\x18\r \x01(\tR\x05owner\x1a9\n" +
+	"\x05owner\x18\r \x01(\tR\x05owner\x12\x1a\n" +
+	"\brevision\x18\x0e \x01(\x04R\brevision\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x01\n" +
@@ -6961,7 +7005,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\asession\x18\x01 \x01(\v2\x19.lobslaw.v1.SessionRecordR\asession\x126\n" +
 	"\bmessages\x18\x02 \x03(\v2\x1a.lobslaw.v1.SessionMessageR\bmessages\x12\x1d\n" +
 	"\n" +
-	"evict_keys\x18\x03 \x03(\tR\tevictKeys\"\xbc\a\n" +
+	"evict_keys\x18\x03 \x03(\tR\tevictKeys\"\x84\b\n" +
 	"\bLogEntry\x12!\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x11.lobslaw.v1.LogOpR\x02op\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x129\n" +
@@ -6986,8 +7030,10 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"user_prefs\x18\x15 \x01(\v2\x1b.lobslaw.v1.UserPreferencesH\x00R\tuserPrefs\x12H\n" +
 	"\x0esession_append\x18\x16 \x01(\v2\x1f.lobslaw.v1.SessionAppendRecordH\x00R\rsessionAppend\x125\n" +
 	"\asession\x18\x17 \x01(\v2\x19.lobslaw.v1.SessionRecordH\x00R\asession\x12)\n" +
-	"\x10expected_claimer\x18\x14 \x01(\tR\x0fexpectedClaimerB\t\n" +
-	"\apayload*W\n" +
+	"\x10expected_claimer\x18\x14 \x01(\tR\x0fexpectedClaimer\x120\n" +
+	"\x11expected_revision\x18\x18 \x01(\x04H\x01R\x10expectedRevision\x88\x01\x01B\t\n" +
+	"\apayloadB\x14\n" +
+	"\x12_expected_revision*W\n" +
 	"\n" +
 	"Visibility\x12\x1a\n" +
 	"\x16VISIBILITY_UNSPECIFIED\x10\x00\x12\x16\n" +
