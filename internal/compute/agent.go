@@ -530,6 +530,15 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 }
 
 func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
+	// Tools that read across users — the session_* family — need to
+	// know whose turn this is, and the tool-call arguments can't tell
+	// them: those come from the model. Attached here rather than at
+	// each entry point so a resumed confirmation is scoped exactly
+	// like the turn it resumes, and unconditionally rather than only
+	// when Claims are present — a turn with no caller is an anonymous
+	// caller, not an unscoped one.
+	ctx = WithSessionScope(ctx, sessionScopeForTurn(req))
+
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))
@@ -906,6 +915,27 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 	return false
 }
 
+// sessionScopeForTurn derives the transcript-visibility scope from
+// the turn. Channel + ChannelID are the conversation the user is
+// already in; scheduler and research turns leave them empty and fall
+// back to pure ownership, which is right — they carry the claims of
+// the person the work is being done for (see Node.schedulerClaims),
+// not of a chat.
+func sessionScopeForTurn(req ProcessMessageRequest) SessionScope {
+	s := SessionScope{
+		Current: SessionKey{Channel: req.Channel, ChannelID: req.ChannelID},
+	}
+	if req.Claims != nil {
+		s.UserID = req.Claims.UserID
+	}
+	return s
+}
+
+// syntheticArgPrefix marks tool arguments the agent injects rather
+// than the model supplying. Reserved: anything arriving from the model
+// under this prefix is discarded.
+const syntheticArgPrefix = "__"
+
 // runToolCall dispatches one tool call through the Executor.
 // Executor internally handles policy evaluation, PreToolUse +
 // PostToolUse hooks, and the sandbox. On budget exceed, returns a
@@ -935,6 +965,17 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 	// benefits from the synthetic context.
 	if params == nil {
 		params = make(map[string]string)
+	}
+	// Drop anything the model put under the synthetic prefix before
+	// injecting the real values. The injections below are conditional
+	// on the request carrying each field, so without this a turn with
+	// no channel origin (scheduler, webhook) leaves the model free to
+	// supply its own __chat_id / __user_id — and notify, commitment
+	// and oauth_start all attribute work from those keys.
+	for k := range params {
+		if strings.HasPrefix(k, syntheticArgPrefix) {
+			delete(params, k)
+		}
 	}
 	if req.Channel != "" {
 		params["__channel"] = req.Channel

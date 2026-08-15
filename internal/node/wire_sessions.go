@@ -86,8 +86,13 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 }
 
 // registerSessionTools exposes session_search / session_list /
-// session_read to the agent. Read-only over data the operator already
-// stores, so they seed default-allow like other builtins.
+// session_read to the agent. They seed default-allow like other
+// builtins: read-only, and scoped to the turn's own user by
+// compute.SessionScope, which the agent loop attaches per turn. That
+// scoping is what makes default-allow defensible on a shared node —
+// "read-only over data the operator already stores" is only true when
+// the operator is the only user, and Telegram's UserIDScopes exists
+// precisely because they often aren't.
 func (n *Node) registerSessionTools() error {
 	if n.raft == nil || n.store == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
 		return nil
@@ -217,6 +222,7 @@ func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBro
 		UserID:             q.UserID,
 		Limit:              q.Limit,
 		SnippetsPerSession: q.SnippetsPerSession,
+		Visible:            toRecordPredicate(q.Visible),
 	})
 	if err != nil {
 		return nil, err
@@ -234,7 +240,7 @@ func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBro
 	return out, nil
 }
 
-func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int) ([]compute.SessionBrowseInfo, error) {
+func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible compute.SessionVisibleFunc) ([]compute.SessionBrowseInfo, error) {
 	recs, err := a.inner.List(ctx)
 	if err != nil {
 		return nil, err
@@ -242,14 +248,40 @@ func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int) ([]comput
 	sort.Slice(recs, func(i, j int) bool {
 		return recs[i].UpdatedAt.AsTime().After(recs[j].UpdatedAt.AsTime())
 	})
-	if limit > 0 && len(recs) > limit {
-		recs = recs[:limit]
-	}
 	out := make([]compute.SessionBrowseInfo, 0, len(recs))
 	for _, r := range recs {
-		out = append(out, toBrowseInfo(r))
+		info := toBrowseInfo(r)
+		// Filtered before the limit, not after: otherwise a busy
+		// shared node fills the caller's whole window with other
+		// people's threads and then discards them.
+		if visible != nil && !visible(info) {
+			continue
+		}
+		out = append(out, info)
+		if limit > 0 && len(out) == limit {
+			break
+		}
 	}
 	return out, nil
+}
+
+func (a *sessionBrowserAdapter) Info(ctx context.Context, k compute.SessionKey) (compute.SessionBrowseInfo, bool, error) {
+	rec, err := a.inner.Describe(ctx, toMemoryKey(k))
+	if err != nil || rec == nil {
+		return compute.SessionBrowseInfo{}, false, err
+	}
+	return toBrowseInfo(rec), true, nil
+}
+
+// toRecordPredicate lifts the compute-side visibility rule onto the
+// stored record so memory can apply it while it still has the full
+// candidate set. The rule itself stays in compute — this only changes
+// what it's handed.
+func toRecordPredicate(visible compute.SessionVisibleFunc) func(*lobslawv1.SessionRecord) bool {
+	if visible == nil {
+		return nil
+	}
+	return func(r *lobslawv1.SessionRecord) bool { return visible(toBrowseInfo(r)) }
 }
 
 func (a *sessionBrowserAdapter) Read(ctx context.Context, k compute.SessionKey, fromSeq uint64, limit int) ([]compute.Message, error) {

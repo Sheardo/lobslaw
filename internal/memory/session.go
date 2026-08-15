@@ -473,6 +473,22 @@ func (s *SessionService) List(_ context.Context) ([]*lobslawv1.SessionRecord, er
 	return out, nil
 }
 
+// Describe returns one session's index record — its owner, title and
+// counters — without decoding the transcript. (nil, nil) for a
+// conversation that has never been written; callers that need to know
+// who owns an address treat that as "no such conversation", not as an
+// error.
+func (s *SessionService) Describe(_ context.Context, ref SessionRef) (*lobslawv1.SessionRecord, error) {
+	if s.store == nil {
+		return nil, errors.New("session: store not wired")
+	}
+	id, err := sessionID(ref.Channel, ref.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	return s.loadRecord(id)
+}
+
 // loadRecord fetches the index record, returning (nil, nil) when the
 // session doesn't exist yet.
 func (s *SessionService) loadRecord(id string) (*lobslawv1.SessionRecord, error) {
@@ -535,6 +551,12 @@ type SessionSearchQuery struct {
 	Channel string
 	// UserID, when set, restricts to sessions opened by that user.
 	UserID string
+	// Visible, when non-nil, gates which sessions are searched at
+	// all. Broader than UserID: the agent's scoping rule also lets a
+	// caller see the conversation they're currently in, whoever
+	// opened it. Applied before Limit truncates, so a caller's own
+	// results can't be displaced by hits they may not see.
+	Visible func(*lobslawv1.SessionRecord) bool
 	// Limit caps the number of SESSIONS returned (not messages).
 	// <= 0 takes DefaultSessionSearchLimit.
 	Limit int
@@ -604,6 +626,9 @@ func (s *SessionService) SearchTranscripts(_ context.Context, q SessionSearchQue
 			continue
 		}
 		if q.UserID != "" && rec.UserId != q.UserID {
+			continue
+		}
+		if q.Visible != nil && !q.Visible(rec) {
 			continue
 		}
 		hit := SessionSearchHit{Session: rec}
