@@ -9,6 +9,8 @@ import (
 // switch on without parsing MimeType. Stable + small.
 type AttachmentKind string
 
+// The attachment kinds. Channels map their native media types onto
+// these; anything unrecognised becomes AttachmentDocument.
 const (
 	AttachmentImage    AttachmentKind = "image"
 	AttachmentVoice    AttachmentKind = "voice"

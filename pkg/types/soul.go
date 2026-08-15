@@ -30,6 +30,8 @@ type SoulConfig struct {
 	Fragments []string `yaml:"fragments,omitempty" json:"fragments,omitempty"`
 }
 
+// Language controls which language the agent replies in. When Detect
+// is set, the incoming message's language wins over Default.
 type Language struct {
 	Default string `yaml:"default" json:"default"`
 	Detect  bool   `yaml:"detect" json:"detect"`
@@ -47,13 +49,19 @@ type EmotiveStyle struct {
 	Humor      int    `yaml:"humor" json:"humor"`
 }
 
+// Adjustments bounds the dynamic tuning of EmotiveStyle.
+// FeedbackCoefficient scales how far a single piece of feedback can
+// move a dimension; CooldownPeriod is the minimum gap between two
+// adjustments of the same dimension.
 type Adjustments struct {
 	FeedbackCoefficient float64       `yaml:"feedback_coefficient" json:"feedback_coefficient"`
 	CooldownPeriod      time.Duration `yaml:"cooldown_period" json:"cooldown_period"`
 }
 
-// FeedbackConfig.Classifier is "llm" (fast-tier provider call) or
-// "regex" (pattern dictionary). Default "llm" with regex fallback.
+// FeedbackConfig selects how user feedback is classified before it
+// feeds into soul adjustment. Classifier is "llm" (fast-tier
+// provider call) or "regex" (pattern dictionary); the default is
+// "llm" with a regex fallback.
 type FeedbackConfig struct {
 	Classifier string `yaml:"classifier" json:"classifier"`
 }

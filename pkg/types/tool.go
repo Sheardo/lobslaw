@@ -27,6 +27,9 @@ type ToolDef struct {
 	RiskTier         RiskTier        `json:"risk_tier"`
 }
 
+// ToolPermission is a per-tool grant attached to a role or session.
+// AllowedPaths further narrows a filesystem-touching tool to a
+// subtree; empty means the tool's own default applies.
 type ToolPermission struct {
 	Tool         string   `json:"tool"`
 	Effect       Effect   `json:"effect"`

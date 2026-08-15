@@ -20,6 +20,8 @@ type AuditEntry struct {
 	PrevHash   string    `json:"prev_hash"`
 }
 
+// AuditFilter narrows an audit-log query. Zero-valued fields are
+// ignored, so the zero filter matches everything up to Limit.
 type AuditFilter struct {
 	ActorScope string    `json:"actor_scope,omitempty"`
 	Action     string    `json:"action,omitempty"`

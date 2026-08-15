@@ -5,6 +5,9 @@ package types
 // Claude Code plugins drop in unchanged.
 type HookEvent string
 
+// The Claude Code-compatible events. Names and payload schema match
+// Claude Code exactly so an existing plugin runs unmodified; do not
+// rename these to fit lobslaw's internal vocabulary.
 const (
 	HookPreToolUse       HookEvent = "PreToolUse"
 	HookPostToolUse      HookEvent = "PostToolUse"
@@ -15,6 +18,9 @@ const (
 	HookNotification     HookEvent = "Notification"
 	HookPreCompact       HookEvent = "PreCompact"
 
+	// The lobslaw-specific events, covering the subsystems Claude Code
+	// has no equivalent for: direct LLM calls, the memory layer, and
+	// the scheduler.
 	HookPreLLMCall        HookEvent = "PreLLMCall"
 	HookPostLLMCall       HookEvent = "PostLLMCall"
 	HookPreMemoryWrite    HookEvent = "PreMemoryWrite"
@@ -34,14 +40,24 @@ type HookConfig struct {
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty" toml:"timeout_seconds,omitempty"`
 }
 
+// HookDecision is a hook's verdict on the event it observed. An
+// empty decision means "no opinion" and leaves the flow untouched.
 type HookDecision string
 
+// The verdicts a hook can return.
 const (
+	// HookApprove lets the action proceed.
 	HookApprove HookDecision = "approve"
-	HookBlock   HookDecision = "block"
-	HookModify  HookDecision = "modify"
+	// HookBlock stops the action; Reason is surfaced to the agent.
+	HookBlock HookDecision = "block"
+	// HookModify lets the action proceed with the substitutions in
+	// HookSpecificOutput applied.
+	HookModify HookDecision = "modify"
 )
 
+// HookResponse is the JSON a hook subprocess writes to stdout. The
+// field names are Claude Code's, including the camelCase
+// hookSpecificOutput, so plugins remain portable.
 type HookResponse struct {
 	Decision           HookDecision   `json:"decision,omitempty"`
 	Reason             string         `json:"reason,omitempty"`

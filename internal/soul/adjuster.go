@@ -328,4 +328,3 @@ func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 	}
 	return cooldown - elapsed
 }
-

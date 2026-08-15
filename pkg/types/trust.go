@@ -3,12 +3,24 @@ package types
 // TrustTier classifies an LLM provider's data-handling posture.
 type TrustTier string
 
+// The trust tiers, most to least trusted. A role's configured floor
+// is compared against these with AtLeast, so the ordering below is
+// load-bearing — see rank.
 const (
-	TrustLocal   TrustTier = "local"
+	// TrustLocal is inference on hardware the operator controls;
+	// prompt content never leaves the host.
+	TrustLocal TrustTier = "local"
+	// TrustPrivate is a third-party provider under a contract that
+	// excludes training on submitted data.
 	TrustPrivate TrustTier = "private"
-	TrustPublic  TrustTier = "public"
+	// TrustPublic is any provider with no such guarantee. Roles that
+	// see sensitive context should set a floor above this.
+	TrustPublic TrustTier = "public"
 )
 
+// IsValid reports whether t is one of the three known tiers, so a
+// typo in a provider's configured trust fails at boot rather than
+// silently ranking as zero and failing every AtLeast check.
 func (t TrustTier) IsValid() bool {
 	switch t {
 	case TrustLocal, TrustPrivate, TrustPublic:
