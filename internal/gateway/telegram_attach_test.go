@@ -106,21 +106,25 @@ func TestSendAttachmentsUploadsTheFile(t *testing.T) {
 	}
 }
 
-// A voice note only renders as one for OGG. Sending an mp3 to
-// sendVoice fails, so it is downgraded to a playable track rather
-// than lost.
-func TestNonOggVoiceIsDowngradedRatherThanFailed(t *testing.T) {
+// Voice goes to sendVoice whatever the container. Telegram renders an
+// mp3 sent this way as a waveform, identically to an OGG; routing it
+// to sendAudio instead produces a file row with a filename, which is
+// the wrong thing for someone who asked to hear something.
+// TestLiveTelegramAcceptsMP3AsVoice is the check against the real API.
+func TestVoiceAlwaysUsesSendVoice(t *testing.T) {
 	t.Parallel()
-	srv, got := fakeBotAPI(t, http.StatusOK)
-	h := attachHandler(t, srv.URL)
+	for _, mimeType := range []string{"audio/ogg", "audio/mpeg", "audio/wav"} {
+		srv, got := fakeBotAPI(t, http.StatusOK)
+		h := attachHandler(t, srv.URL)
 
-	h.SendAttachments(1, []types.Attachment{{
-		Kind: types.AttachmentVoice, MimeType: "audio/mpeg",
-		Reference: "store:a.mp3", Filename: "a.mp3",
-	}}, openerFor("MP3"))
+		h.SendAttachments(1, []types.Attachment{{
+			Kind: types.AttachmentVoice, MimeType: mimeType,
+			Reference: "store:a", Filename: "a",
+		}}, openerFor("AUDIO"))
 
-	if len(*got) != 1 || (*got)[0].method != "sendAudio" {
-		t.Errorf("uploads=%+v, want a single sendAudio", *got)
+		if len(*got) != 1 || (*got)[0].method != "sendVoice" {
+			t.Errorf("%s → %+v, want a single sendVoice", mimeType, *got)
+		}
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"mime/multipart"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -43,12 +42,6 @@ func telegramMethodFor(kind types.AttachmentKind) (method, field string) {
 	}
 }
 
-// telegramVoiceMIME is the only container Telegram will render as a
-// playable voice note. Anything else sent to sendVoice is rejected or
-// silently degraded, so a non-OGG "voice" is downgraded to audio
-// rather than failing.
-const telegramVoiceMIME = "audio/ogg"
-
 // SendAttachments delivers the files a turn produced.
 //
 // Best-effort per attachment: one that fails is logged and the rest
@@ -71,13 +64,7 @@ func (h *TelegramHandler) SendAttachments(chatID int64, atts []types.Attachment,
 }
 
 func (h *TelegramHandler) sendAttachment(chatID int64, a types.Attachment, open ArtifactOpener) error {
-	kind := a.Kind
-	if kind == types.AttachmentVoice && !strings.EqualFold(a.MimeType, telegramVoiceMIME) {
-		// Downgrade rather than fail: an mp3 still reaches the user as
-		// a playable track, which beats an error they cannot act on.
-		kind = types.AttachmentAudio
-	}
-	method, field := telegramMethodFor(kind)
+	method, field := telegramMethodFor(a.Kind)
 
 	rc, err := open(a.Reference)
 	if err != nil {
