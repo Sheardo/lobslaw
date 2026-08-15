@@ -173,6 +173,12 @@ func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("PUT %s: empty id", bucket)
 	}
+	// Derived state is computed here rather than at each producer, so a
+	// new write path can't forget it. Deterministic: same embedding, same
+	// float ops in the same order, same result on every replica.
+	if p, ok := payload.(*lobslawv1.VectorRecord); ok && p.Norm == 0 {
+		p.Norm = norm(p.Embedding)
+	}
 	bytes, err := proto.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal %s payload: %w", bucket, err)

@@ -152,6 +152,37 @@ message VectorRecord {
   // Empty means a record written before ownership existed.
   string owner = 9;
   Visibility visibility = 10;
+  // norm is the precomputed L2 norm of embedding. Derived state, written
+  // by the FSM so no producer can forget it; a zero value means "not yet
+  // computed" and readers fall back to computing it. Exists because
+  // recomputing it per record per query was measurably wasteful on the
+  // recall hot path.
+  float norm = 11;
+}
+
+// VectorScanEntry is a narrow VIEW over VectorRecord's wire format: the
+// field numbers below are deliberately identical to VectorRecord's, so
+// VectorRecord bytes unmarshal directly into this message. Combined with
+// proto.UnmarshalOptions{DiscardUnknown: true}, the fields not listed
+// here — notably text (3) and metadata (4) — are skipped without being
+// decoded or retained.
+//
+// This exists for the recall scan, which reads only what it needs to
+// filter and score. Decoding the full record for every candidate spent
+// most of a query's time and allocation on text that was then discarded.
+// Adding a field here is a deliberate act: it widens the hot path.
+//
+// INVARIANT: every field number must match VectorRecord exactly. A
+// mismatch silently decodes the wrong data rather than failing, so it is
+// covered by a test that marshals a VectorRecord and asserts the view
+// round-trips the shared fields.
+message VectorScanEntry {
+  repeated float embedding = 2;
+  string scope = 5;
+  Retention retention = 6;
+  string owner = 9;
+  Visibility visibility = 10;
+  float norm = 11;
 }
 
 message EpisodicRecord {
