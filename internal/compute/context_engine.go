@@ -115,8 +115,9 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 	// Everyone(); nothing else does, including a caller who merely
 	// holds role:operator.
 	turn, _ := TurnIdentityFrom(ctx)
+	audience := readAudience(ctx, turn, e.crossOwner)
 	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
-		readAudience(ctx, turn, e.crossOwner), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		e.log.Warn("context-engine: vector search failed",
 			"err", err)
@@ -141,6 +142,13 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 			}
 			var epi lobslawv1.EpisodicRecord
 			if err := proto.Unmarshal(raw, &epi); err != nil {
+				continue
+			}
+			// Re-checked rather than inherited from the vector that
+			// pointed here: a legacy or shared vector can carry
+			// SourceIds into a private episodic record, and this is
+			// the path that puts recalled text into the system prompt.
+			if !audience.AllowsEpisodic(&epi) {
 				continue
 			}
 			entries = append(entries, recallEntry{rec: &epi, score: h.Score()})

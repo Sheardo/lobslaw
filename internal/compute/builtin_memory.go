@@ -75,7 +75,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft)); err != nil {
 		return err
 	}
-	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store)); err != nil {
+	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store, cfg.CrossOwner)); err != nil {
 		return err
 	}
 	if err := b.Register("dream_recap", newDreamRecapHandler(cfg.Store)); err != nil {
@@ -823,8 +823,15 @@ func newDreamNapHandler(svc memoryDreamer) BuiltinFunc {
 // Read-only: no Raft proposal, safe on followers. Returns fact-dense
 // enumerable JSON — the agent is instructed (via humanisation rule)
 // to render this as a table/bullets, not narration.
-func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+func newMemoryRecentHandler(store *memory.Store, authz CrossOwnerAuthorizer) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		// memory_recent walks the episodic bucket directly rather than
+		// going through vector search, so it needs the audience applied
+		// here. This is the same leak the substring path had: scoping
+		// the vector index does not scope a reader that never touches
+		// it.
+		turn, _ := TurnIdentityFrom(ctx)
+		audience := readAudience(ctx, turn, authz)
 		limit := 20
 		if raw, ok := args["limit"]; ok && raw != "" {
 			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
@@ -861,6 +868,9 @@ func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
 		err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 			var rec lobslawv1.EpisodicRecord
 			if err := proto.Unmarshal(raw, &rec); err != nil {
+				return nil
+			}
+			if !audience.AllowsEpisodic(&rec) {
 				return nil
 			}
 			if retentionFilterEnum != lobslawv1.Retention_RETENTION_UNSPECIFIED && rec.Retention != retentionFilterEnum {
