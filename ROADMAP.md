@@ -43,7 +43,9 @@ The comparison's one-line conclusion, which sets the ordering below:
 | **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🔴 P0 | M | — |
 | **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | 🔴 P0 | XS | — |
 | **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | 🔴 P0 | M | — |
-| **R6** | [Hybrid recall](#r6--hybrid-recall) | 🟠 P1 | L | — |
+| **R6** | [Retrieval mechanics](#r6--retrieval-mechanics) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | L | — |
+| **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | M | — |
+| **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | S | — |
 | **R7** | [Principal identity](#r7--principal-identity) | 🟠 P1 | M | — |
 | **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | 🟠 P1 | M | — |
 | **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | 🟠 P1 | S | — |
@@ -56,6 +58,10 @@ The comparison's one-line conclusion, which sets the ordering below:
 | **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | 🟡 P2 | M | R17 |
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | 🟡 P2 | M | — |
 | **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟠 P1 | L | R15, R17 |
+| **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | 🔴 P0 | S | — |
+
+**R19 is exploitable today** and depends on nothing. It belongs with R4 in the
+"land independently, first" set.
 
 R13–R17 are the self-learning group, derived from reading hermes-agent's implementation
 (`agent/background_review.py`, `agent/curator.py`, `tools/memory_tool.py`,
@@ -69,16 +75,22 @@ alongside it.
 
 ### Status drift
 
-Written before Phase-12-era work landed. Reconcile before scheduling:
+Written before Phase-12-era work landed. Re-verified against the code on
+2026-08-15 — the table below is what the tree actually does, not what the
+sections further down propose:
 
 | # | State |
 |---|---|
 | R1 | **Largely landed** — `BucketSessions` + `BucketSessionMessages`, `internal/memory/session.go`, `internal/gateway/conversation.go`, `compute.ContextBudget`, rolling summary, `session_search`/`session_list`/`session_read`. Note the shipped design keeps messages in their own bucket rather than inline on the session record as proposed below |
+| R4 | **Done.** `Engine.Evaluate` returns `EffectDeny`/"no rule matched (default-deny)" at the bottom, denies nil claims, and unknown condition types fail their rule. One hole left: a condition that *errors* skips the rule (`engine.go:111`), so a **deny** rule whose condition errors falls through to whatever lower-priority rule matches next. Fail-closed for allow rules, fail-open for deny ones |
+| R19 | **Mostly done.** `internal/skills/signing.go` + `ParseWithPolicy` enforce detached ed25519 signatures over the manifest and its referenced files, with an Off/Warn/Required policy. The third acceptance item is **not** met: `Invoker.Invoke` executes the handler off disk with no re-verification, so tamper between registry load and exec is uncaught |
 | R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
-| R0, R2, R3, R4, R5 | Not started. R4 is still `continue` at `internal/policy/engine.go:111` |
+| R7 | **Partial** — see the status note on the section itself |
+| R0, R2, R3 | Not started. Non-leader writes return `"not the raft leader; retry at %s"` rather than forwarding (`memory/service.go:234,266,370`); `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record; turns are dispatched straight into `go func()` at `gateway/conversation.go:178` |
+| R5 | Partial — `internal/soul/trust.go` and skill signing exist; the single trust contract and ingest scanning do not |
 
-R4 and R5 are P0 on security grounds and are independent of everything else — land them first if
-R0/R1 slip. R4 is a handful of lines.
+R5 is P0 on security grounds and independent of everything else. Of the
+remaining P0s, R0 is the smallest and unblocks R1/R2/R3.
 
 ---
 
@@ -575,72 +587,354 @@ for `ghp_`, `sk-`, `xoxb-`, bearer tokens and PEM blocks before they reach logs 
 
 ---
 
-## R6 — Hybrid recall
+# Retrieval — R6, R20, R21
 
-Addresses review §3.4.
+One body of work, three landable pieces. Addresses review §3.4.
 
-### Problem
+**Rewritten 2026-08-15** after reading hermes-agent's and nullclaw's retrieval source, re-reading
+what lobslaw actually ships, and — for the first time — **measuring it**.
 
-`docs/dev/MEMORY.md`: *"No text-based search. `SearchRequest.Text` returns `Unimplemented`."*
-Recall is pure cosine over a full scan, top-3 per turn, with no lexical path and no recency
-weighting.
+## Ground rule: Raft only
 
-Embeddings are weakest at exactly what users ask: *"what was that error code"*, *"the PR number you
-mentioned"*, *"what did we call that function"*. Both references have a lexical path — hermes uses
-SQLite FTS5 behind a `session_search` tool; nullclaw's markdown profile does *"hybrid retrieval with
-temporal decay (half-life 30 days)"*.
+Per `lobslaw-retrieval-raft-only`: every index and every derived structure in this section lives in
+the Raft-replicated store. **No external vector database, no pluggable `VectorStore` vtable, no
+sidecar.** nullclaw offers qdrant / pgvector / lancedb behind a vtable; that is explicitly *not* the
+direction here — it would be a second unreplicated source of truth, an egress and
+data-classification event, and a sidecar this project just finished removing.
 
-Separately: `EpisodicTurn` stores only `(user message, assistant reply)`. Tool trajectories,
-decisions and outcomes — the part worth recalling — are discarded.
+Anything that cannot be expressed as Raft-resident derived state is out of scope for retrieval.
+
+## Measured baseline
+
+`internal/memory/search_bench_test.go` (new — first benchmark this path has ever had). D=1536,
+sealed bbolt store, `go test ./internal/memory -run '^$' -bench Vector -benchmem`:
+
+| N | ns/op | per record | B/op |
+|---|---|---|---|
+| 100 | 1.33 ms | 13.3 µs | 1.4 MB |
+| 1,000 | 13.9 ms | 13.9 µs | 13.8 MB |
+| 10,000 | **125.5 ms** | 12.6 µs | **138.8 MB** |
+
+Exactly linear, ~12.5 µs and ~13.9 KB **per record per query** — and `ContextEngine` calls this
+passively on every turn. The comment in `search.go:47` says *"Fine for personal scale (< ~100k
+records)"*. Extrapolated, 100k records is **~1.25 s and ~1.4 GB of allocation per user message.**
+That claim is wrong by a wide margin and should be deleted along with the fix.
+
+### Where the time actually goes (N=10,000, D=1536)
+
+| Layer | ns/op | share | B/op |
+|---|---|---|---|
+| decrypt only — `ForEach` with a no-op body | 88.8 ms | **~71%** | 68.1 MB |
+| \+ `proto.Unmarshal` | 113.6 ms | ~91% | 138.1 MB |
+| cosine arithmetic alone, no I/O | 19.6 ms | ~16% | 0 |
+| └ of which the redundant `norm()` | 3.3 ms | ~3% | 0 |
+| `sort.Slice` over all candidates vs top-3 | 1.3 ms | ~1% | — |
+
+**The cost is not the cosine.** The arithmetic the algorithm actually needs is its *smallest*
+component. Every query secretbox-decrypts and proto-decodes the entire corpus, including
+`VectorRecord.Text`, which scoring never reads.
+
+Dimension scaling confirms it — at N=2,000, 4× the width costs only 2.3× the time
+(D=384 → 12.5 ms, D=768 → 17.9 ms, D=1536 → 28.3 ms), so roughly half the per-record cost is
+dimension-independent overhead.
+
+> **This changes the ANN design.** A band prefilter only helps if the band lookup **avoids the
+> decrypt**. Signatures stored inside the sealed `VectorRecord` would require decrypting everything
+> to read them — zero benefit for real added complexity. See R20.
+
+The codebase already solved this exact problem once, for transcripts —
+`Store.ForEachPrefix`: *"a full ForEach would decrypt every message in the cluster to read one
+conversation. The bbolt cursor seeks straight to the range."* Vector search needs the same move.
+
+## R6 — Retrieval mechanics
+
+### What the first draft got wrong
+
+Three corrections, because they change the work:
+
+1. **The architecture is not the problem.** lobslaw's layering — verbatim transcript
+   (`BucketSessionMessages`) / distilled + embedded + consolidated (`EpisodicRecord` + `VectorRecord`
+   + Dream) / pinned curated (R14) — is better than either reference. hermes has a raw log plus
+   hand-curated markdown files and *nothing between them*, so importance, retention, consolidation
+   and ownership have nowhere to live. Do not restructure. Fix the mechanics.
+2. **There is already a de-facto hybrid.** `memory_search` runs semantic first and augments with
+   tokenised substring when semantic under-delivers, reporting which ran
+   (`semantic` / `semantic+substring` / `tokenised-substring`). What is missing is a *fused ranking*,
+   not a second strategy.
+3. **The trajectory is not lost — it is linked.** `EpisodicRecord.session_ref`
+   (`"<channel>:<channel_id>:<seq>"`) already points a recall hit at its transcript position, with
+   the right advisory caveat. So the earlier "fatten `EpisodicTurn` with tool trajectories"
+   recommendation is withdrawn: it would store the trajectory twice. Index the transcript instead.
+
+**The actual problem is that nothing is indexed.** Three separate full scans:
+
+| Path | Cost |
+|---|---|
+| `SessionService.SearchTranscripts` | every session × every message in it |
+| `memory_search` (both strategies) | `ForEach` over the whole episodic bucket |
+| `VectorSearch` | full cosine scan |
+
+### Reference points
+
+nullclaw is far ahead of both here — `src/memory/retrieval/` is a real IR pipeline with a declared
+stage order:
+
+```
+query_expansion → keyword → vector → merge_rrf → min_relevance
+    → temporal_decay → mmr → llm_rerank → limit
+```
+
+Worth taking from it:
+
+- **RRF instead of a weighted sum.** The first draft proposed `α·bm25_norm + (1-α)·cosine_norm`.
+  That needs both scores normalised onto a comparable scale, and BM25 (unbounded, corpus-dependent)
+  against cosine ([0,1]) does not normalise stably. Reciprocal rank fusion sidesteps it entirely by
+  merging *ranks*: `Σ 1/(k + rank)`, nullclaw using the canonical `k = 60`. Fewer knobs, no
+  calibration, and it degrades gracefully when one source returns nothing. **Use RRF.**
+- **Temporal decay as a multiplier**, `score *= exp(-ln2 · age_days / half_life)`, half-life 30d —
+  plus nullclaw's `isEvergreen()` exemption, because some memories legitimately must not decay.
+  lobslaw's `Retention` field is the natural signal for that.
+- **MMR diversity reranking**, so top-K is not three near-duplicates of one memory. Directly relevant
+  given Dream clusters near-duplicates but does not always merge them.
+- **SimHash + band prefilter for vectors** (see below) — the most transferable idea of the three
+  projects.
+
+From hermes, only the negative lesson: it has **no vector store and no embeddings in core at all**,
+and its BM25 needed a hand-written C SQLite tokenizer (`native/fts5_cjk/fts5_cjk.c`) plus
+watermark-gated triggers to keep an external-content FTS5 index from corrupting. That is a strong
+argument *against* SQLite here, not for it.
 
 ### Proposal
 
-**Lexical index in bbolt, inside the FSM.** Not SQLite: the pure-Go / no-CGO constraint is a
-recorded decision and worth keeping. A new bucket:
+**1 · Lexical index in bbolt, inside the FSM.** Pure-Go / no-CGO is a recorded decision worth keeping.
 
 ```go
-BucketTermPostings = "term_postings"  // term -> posting list (record IDs + term freq)
-BucketDocStats     = "doc_stats"      // record ID -> length; plus corpus totals for BM25 idf
+BucketTermPostings = "term_postings"  // term -> posting list (doc ID + term freq)
+BucketDocStats     = "doc_stats"      // doc ID -> length; plus corpus totals for IDF
 ```
+
+Indexes **both** episodic records and session messages, under one posting namespace with a doc-kind
+prefix, so one query can rank across distilled memory and verbatim transcript.
 
 > **FSM invariant, and the one way to get this wrong:** index updates must happen *inside*
 > `FSM.Apply` for the record's own log entry, derived from it — never as a second `raft.Apply`.
-> A crash between two applies would leave replicas with different indexes, and a divergent FSM is
-> unrecoverable without a snapshot restore. Same rule the existing derived state follows.
+> A crash between two applies leaves replicas with different indexes, and a divergent FSM is
+> unrecoverable without a snapshot restore.
 
-BM25 scored at query time from postings + doc stats.
+**2 · Approximate vector search — moved to [R20](#r20--vector-scan-cost)**, because the measured
+breakdown says the prefilter has to be designed around the decrypt, not around the arithmetic.
 
-**Fusion.** Normalise both scores to [0,1], then:
+**3 · Fix transcript search.** Five independent fixes, none of which need the index:
 
-```
-score = (α · bm25_norm + (1-α) · cosine_norm) · decay(age) · importance_boost
-decay(age) = exp(-ln2 · age / half_life)      // half_life default 30d, per nullclaw
-```
+| Fix | Detail |
+|---|---|
+| Tokenise | `SearchTranscripts` matches a single literal lowercase substring, so `"docker compose up"` misses `"docker-compose up"`. `memory_search` already tokenises; make them consistent |
+| **Keep the CJK property** | `strings.Index` over lowercased content handles space-free scripts *by construction* — the thing hermes needed a C extension for. Any tokeniser must keep an n-gram path or this regresses. `lingua-go` is already in the tree, so CJK content is expected |
+| Use `hit.Matches` | Counted at `session.go:641` and then discarded. Ordering is currently *most-recently-updated session first* with no relevance component at all |
+| Best-N snippets | Snippets are the first N in sequence order, so an early throwaway mention beats the substantive later one |
+| Source dimension | hermes hit "recall blindness" (#19434) where repetitive cron vocabulary dominated BM25 and starved interactive sessions; it **demotes rather than excludes**. lobslaw will hit this once scheduler-originated turns accumulate and has no source signal to fix it with |
 
-`α` default 0.4 — vector-leaning, since semantic recall is the existing strength and lexical is
-there to catch what it misses. Configurable under `[memory.recall]`.
+**4 · API.** Implement `SearchRequest.Text` (currently `Unimplemented`), and add
+`SearchRequest.Mode = vector | lexical | hybrid`, `hybrid` being the default for the `ContextEngine`
+hot path. Keep the existing `strategy` reporting — it is good observability and should name the
+fusion, not just the fallback.
 
-**API.** Implement `SearchRequest.Text` as lexical-only (it currently returns `Unimplemented`, so
-this is additive), and add `SearchRequest.Mode = vector | lexical | hybrid` with `hybrid` the default
-for the `ContextEngine` hot path.
-
-**Surfaces**, which also serve R12:
-
-- `session_search` builtin — the agent can answer "did we discuss X last week?" itself.
-- `lobslaw history list | show <session> | search <query>` — nullclaw's `history list`/`show <id>`
-  shape, which is the right CLI vocabulary.
-
-**Richer episodes.** Extend `EpisodicTurn` with a tool trajectory: tool name, argument **digest**
-(never raw args — they carry paths and secrets), outcome, duration. Plus explicit decision capture
-when the turn produced one. This is what makes "why did we do it that way" answerable.
+**5 · Surfaces**, which also serve R12: `lobslaw history list | show <session> | search <query>`.
+The `session_search` / `session_list` / `session_read` builtins already shipped.
 
 ### Acceptance
 
 - [ ] An exact-token query ("ERR_2291", a PR number) retrieves the right record where vector search
       does not.
-- [ ] Recall favours a recent record over an older near-identical one.
+- [ ] No recall path performs a full bucket scan at steady state.
+- [ ] A CJK query still matches after tokenisation lands.
+- [ ] Transcript hits are ordered by relevance with recency as a decay multiplier, not as the primary key.
+- [ ] Top-K contains no two near-duplicate memories (MMR).
+- [ ] Scheduler-originated turns are demoted, not excluded, and are still reachable when they are the
+      only match.
 - [ ] Index rebuild from snapshot produces byte-identical postings on every replica.
-- [ ] `history search` finds a discussion from a session outside the active window.
+
+---
+
+## R20 — Vector scan cost
+
+Ordered cheapest-first. The first three are hours of work each and need no new concepts; the fourth
+is the structural fix. Re-run `search_bench_test.go` after each and record the delta.
+
+### 20a · Store the norm (≈3% of scan time, trivial)
+
+`norm(v.Embedding)` is a property of the stored vector, recomputed on every query for every record.
+Add `float32 norm = 11` to `VectorRecord`, populate at write time, fall back to computing it when
+absent so old records still work.
+
+### 20b · Decode only what scoring reads (≈20% of scan time, 70 MB/query of allocation)
+
+`proto.Unmarshal` decodes the whole record — `Text`, `metadata`, everything — and scoring reads only
+`embedding`, `scope`, `retention`, `owner`, `visibility`. Two options, in preference order:
+
+1. **Split the payload.** Keep the embedding plus filter fields in a narrow `VectorIndexEntry` in its
+   own bucket, with the text and metadata in the existing record fetched only for the surviving
+   top-K. Best win, and it composes with 20d.
+2. Hand-rolled partial decode of just the needed field numbers. Cheaper to build, uglier, and it
+   couples to field numbering.
+
+### 20c · Bounded top-K instead of sort-everything (≈1% time, O(N) → O(K) memory)
+
+`vectorSearch` appends every passing record then `sort.Slice`s the lot for a top-3 result. A
+`container/heap` of size K is O(N log K) time and O(K) memory. The time win is small; the allocation
+win is not, and allocation is what is generating 138 MB of GC pressure per query.
+
+### 20d · Prefilter that never touches the sealed payload (the structural fix)
+
+nullclaw's `SqliteAnnVectorStore` computes a 64-bit SimHash per embedding, splits it into 4× 16-bit
+bands, prefilters by band match, then runs exact cosine on candidates, falling back to an exact scan
+when candidate recall is insufficient (`ANN_DEFAULT_CANDIDATE_MULTIPLIER = 12`,
+`ANN_DEFAULT_MIN_CANDIDATES = 64`).
+
+For lobslaw the band must be reachable **without decrypting anything**, or it saves nothing:
+
+```go
+BucketVectorBands = "vector_bands"  // key: "<hmac(band_i)>:<record_id>" -> nil
+```
+
+- The band index is a **key-space** structure, so a lookup is a bbolt prefix seek — the
+  `ForEachPrefix` pattern already in the tree.
+- **Band values are HMAC'd with the cluster MemoryKey.** bbolt *keys* are not sealed, and a raw
+  SimHash band is a coarse content fingerprint: someone with the file but not the key could learn
+  which records are semantically similar, or test a guessed plaintext against it. HMAC is
+  deterministic, so exact-match band lookup still works — banding needs equality, never ordering —
+  and the fingerprint stops being plaintext. This costs nothing and closes a leak that the obvious
+  implementation would open.
+- Built inside `FSM.Apply` for the record's own entry, per the R6 invariant.
+- Recall must be **measured against exact scan**, with automatic fallback when it degrades. An ANN
+  that silently loses recall is worse than a slow exact scan, because the failure is invisible.
+
+### Also worth fixing here
+
+- **Delete the "fine for personal scale (< ~100k records)" comment** at `search.go:47`. It is off by
+  roughly three orders of magnitude in cost terms and it is the reason this was never looked at.
+- **Add a minimum score floor.** Nothing anywhere applies one, so a query with no good match still
+  injects the top-3 least-bad records into the prompt as *"Relevant context from prior
+  conversations"*. Cosine 0.1 noise presented as relevant context is an effectiveness bug, not a
+  performance one. `TestCosineAccumulationPrecision` notes the precision caveat that becomes relevant
+  once an absolute threshold exists (float32 accumulator, measured rel. error 4.6e-07 at D=4096 —
+  fine for a floor, worth knowing about).
+- **Surface dimension mismatch.** `vectorSearch` silently skips records whose width differs from the
+  query. Changing embedding model therefore makes the entire existing corpus invisible with no error,
+  no warning and no metric. Count them and log once per query at WARN.
+
+### Acceptance
+
+- [ ] `BenchmarkVectorSearch/N=10000` improves by at least an order of magnitude.
+- [ ] Allocation per query is O(K), not O(N).
+- [ ] Band lookup performs no `crypto.Open` on non-candidate records — asserted, not assumed.
+- [ ] Band keys are not raw content fingerprints.
+- [ ] ANN recall vs exact scan is measured, with automatic fallback on degradation.
+- [ ] A dimension-mismatched corpus produces a warning, not silence.
+- [ ] A query with no good match returns nothing rather than the least-bad three.
+
+---
+
+## R21 — Embedding outbox
+
+### Problem
+
+`episodic_ingest.go:156`:
+
+```go
+if vec, verr := i.embedder.Embed(ctx, embedText); verr == nil {
+```
+
+An embedding failure is **silently skipped**. The `EpisodicRecord` is written; its `VectorRecord` is
+not. There is no retry, no queue, and **no backfill** — `builtin_memory.go:308` reasons about "once
+the backfill runs", but nothing implements one.
+
+So an embedding-provider outage permanently leaves those turns semantically unsearchable. Nothing
+reports it, and the only thing masking it is the substring augment path in `memory_search` — which
+means that fallback is compensating for a **durability** gap, not the ranking gap it was designed for.
+
+This is the second silent path to unsearchable memory, alongside the dimension-mismatch skip in R20.
+
+### Proposal
+
+nullclaw solves this with `src/memory/vector/outbox.zig` plus `circuit_breaker.zig`. Same shape here,
+Raft-resident:
+
+```go
+BucketEmbedOutbox = "embed_outbox"  // key: "<ts>:<record_id>" -> pending entry
+```
+
+- Ingest writes the outbox entry in the **same Raft entry** as the episodic record, so "record exists
+  without embedding" is never an unrecorded state.
+- **Dream drains it** — it already runs periodically and is already leader-gated, so no new scheduler
+  machinery. Successful embed writes the `VectorRecord` and deletes the outbox entry.
+- **Circuit breaker** on the embedding provider: consecutive failures back off rather than retrying
+  every cycle. Composes with R8's provider health tracking — same concept, same place to put it.
+- Entries carry an attempt count; past a threshold they are marked `failed` and **stay visible**
+  rather than being dropped. A queue that silently empties itself reproduces the bug it exists to fix.
+- `debug_memory` (or the R12 surface) reports outbox depth and failed count, so "recall is degraded"
+  is observable instead of inferred.
+
+**Backfill is the same mechanism.** Records that predate embeddings, or that were skipped during an
+outage, are enqueued by a one-shot scan — so 21 delivers the backfill that `builtin_memory.go`
+already assumes exists.
+
+### Acceptance
+
+- [ ] An embedding-provider outage during ingest leaves a pending outbox entry, not a silent gap.
+- [ ] Dream drains the outbox and the affected turns become semantically searchable with no operator
+      action.
+- [ ] A persistently failing entry is visible as failed, never silently discarded.
+- [ ] A one-shot backfill enqueues every episodic record lacking a vector.
+- [ ] Outbox depth is observable.
+
+---
+
+## R19 — Sign and pin the skill handler
+
+🔴 **Exploitable today. Independent of R15 and R18 — do not wait for either.**
+
+### Problem
+
+The skill supply-chain story protects the manifest and not the code:
+
+| Artefact | Signed? | Pinned? |
+|---|---|---|
+| `manifest.yaml` | ✅ detached ed25519 (`signing.go: readSignature` → `Verify(data, sig)`) | ✅ `Skill.SHA256` — *"hex-encoded manifest-file digest"* (`skill.go:140`) |
+| **handler script** | ❌ | ❌ |
+| reference files | ❌ | ❌ |
+
+`Manifest.Handler` is a *relative path*. The `SHA256` field that does exist in the manifest
+(`skill.go:108`, checked at `:272` as `b.SHA256`) belongs to **binary declarations**, not the handler.
+
+**So: replace the handler script, leave `manifest.yaml` untouched, and both signature verification
+and the digest check still pass.** The manifest is protected; the code that executes is not.
+
+`lobslaw-skill-trust` claimed *"a SHA-256 of the manifest+handler tree"* — the shipped code covers
+only the manifest, and that decision has been amended to say so.
+
+### Proposal
+
+- Add `handler_sha256` plus per-reference-file digests to the manifest, and make them **required**
+  under `SigningPrefer` and `SigningRequire`.
+- Extend the signed payload from manifest bytes to a canonical digest root over
+  `name + version + manifest digest + handler digest + sorted(file digests) + declared binary digests`
+  — the same `approved_root` as `lobslaw-skill-approval-lifecycle`, computed once and used for both
+  signature verification and approval pinning.
+- Verify at parse **and** immediately before invoke, so a post-load tamper is caught.
+- Under `SigningOff`, still compute and record the root so the approval pin is meaningful without
+  signatures.
+
+**Migration:** existing unsigned skills gain digests on first parse (trust-on-first-use). Signed
+skills need re-signing to gain handler coverage — so `SigningRequire` deployments need a grace mode
+that warns on manifest-only signatures before it starts rejecting them.
+
+### Acceptance
+
+- [ ] A modified handler fails verification with the manifest untouched.
+- [ ] A modified reference file fails verification.
+- [ ] Tamper between load and invoke is caught before execution.
+- [ ] A manifest-only signature warns under a grace flag and is rejected once it is cleared.
 
 ---
 
@@ -687,13 +981,18 @@ Addresses review §3.6.
 > 4. **No migration from `UserIDScopes`.** Existing entries do not seed
 >    identities, so a deployment using them gets no aliasing until an operator
 >    writes the map by hand.
-> 5. **Records written before ownership are unowned** and therefore readable by
->    everyone. That is deliberate — the alternative is that an upgrade hides a
->    single-user node's whole memory — but it is a shrinking hole, not a closed
->    one, and wants a one-shot `claim` command.
-> 6. **Nothing writes `SHARED`.** The enum is honoured on read and never set,
->    so operator-seeded knowledge is invisible to a second user. Blocked on the
->    operator role from `operator-role-and-cluster-authorization`.
+> 5. ~~**Records written before ownership are unowned** and therefore readable
+>    by everyone.~~ **Closed (PR #18).** The carve-out is gone: an unowned
+>    record is now readable by nobody, and episodic ingest refuses a turn with
+>    no owner rather than writing one. No `claim` command was built and none is
+>    needed — lobslaw has never been deployed, so there is no pre-ownership
+>    data anywhere to migrate.
+> 6. **Nothing writes `SHARED` at boot.** *Partially closed (PR #20):*
+>    `lobslaw memory share` / `unshare` let an operator mark records shared by
+>    hand, so the enum is no longer write-only. What is still missing is
+>    declarative `[[memory.shared]]` seeding, so a fresh node comes up with
+>    operator knowledge already visible to everyone instead of needing a
+>    post-boot CLI pass.
 > 7. **The cluster gRPC has no principal.** `MemoryService.Search` and an
 >    empty-requester `Forget` are unrestricted, spelled out at each site. The
 >    design is recorded in `operator-role-and-cluster-authorization`; it is not
