@@ -319,6 +319,16 @@ func New(cfg Config) (*Node, error) {
 		log = slog.Default()
 	}
 
+	// Normalise before validating, so every check below — and every
+	// gate at wire time — sees one canonical set rather than
+	// rediscovering that policy and memory mean the same thing.
+	normalised, rewrote := types.NormalizeFunctions(cfg.Functions)
+	if len(rewrote) > 0 {
+		log.Warn("cluster: deprecated node function; it selects nothing of its own and is treated as \"memory\"",
+			"deprecated", rewrote, "functions", normalised)
+	}
+	cfg.Functions = normalised
+
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}

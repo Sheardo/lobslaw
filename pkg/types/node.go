@@ -17,8 +17,14 @@ const (
 	// FunctionMemory serves the vector + episodic memory store and
 	// participates in the raft group backing it.
 	FunctionMemory NodeFunction = "memory"
-	// FunctionPolicy evaluates policy rules. Also raft-backed, so the
-	// ruleset stays consistent cluster-wide.
+	// FunctionPolicy is DEPRECATED and normalised away to
+	// FunctionMemory. It never selected anything of its own: both the
+	// policy and memory gRPC services are gated on "this node hosts
+	// raft", which memory already implies, and rule enforcement is
+	// wired from the store rather than from this bit. An operator
+	// declaring it got a memory node and no warning.
+	//
+	// Accepted so existing configs keep booting. See R25.
 	FunctionPolicy NodeFunction = "policy"
 	// FunctionCompute runs the agent loop, tool registry and builtins.
 	FunctionCompute NodeFunction = "compute"
@@ -83,4 +89,27 @@ type ComponentHealth struct {
 	Name   string      `json:"name"`
 	Status HealthLevel `json:"status"`
 	Error  string      `json:"error,omitempty"`
+}
+
+// NormalizeFunctions resolves deprecated aliases and removes
+// duplicates, preserving declaration order.
+//
+// It reports the aliases it rewrote so the caller can warn once,
+// rather than every consumer of the list rediscovering that policy
+// and memory are the same thing.
+func NormalizeFunctions(fns []NodeFunction) (out []NodeFunction, rewrote []NodeFunction) {
+	seen := make(map[NodeFunction]bool, len(fns))
+	for _, f := range fns {
+		canonical := f
+		if f == FunctionPolicy {
+			canonical = FunctionMemory
+			rewrote = append(rewrote, f)
+		}
+		if seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		out = append(out, canonical)
+	}
+	return out, rewrote
 }

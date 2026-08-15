@@ -153,7 +153,6 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 func allFunctions() []types.NodeFunction {
 	return []types.NodeFunction{
 		types.FunctionMemory,
-		types.FunctionPolicy,
 		types.FunctionCompute,
 		types.FunctionGateway,
 		types.FunctionStorage,
