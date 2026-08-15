@@ -273,14 +273,27 @@ func finishReasonOrEmpty(r *openAIResponse) string {
 // wrapped with enough context (status + body excerpt) for triage.
 func classifyHTTPError(status int, body []byte) error {
 	excerpt := truncateBody(body)
+
+	var err error
 	switch status {
 	case http.StatusTooManyRequests:
-		return fmt.Errorf("%w: %s", ErrLLMRateLimit, excerpt)
+		err = fmt.Errorf("%w: %s", ErrLLMRateLimit, excerpt)
 	case http.StatusUnauthorized, http.StatusForbidden:
-		return fmt.Errorf("%w (HTTP %d): %s", ErrLLMUnauthorized, status, excerpt)
+		err = fmt.Errorf("%w (HTTP %d): %s", ErrLLMUnauthorized, status, excerpt)
 	default:
-		return fmt.Errorf("%w (HTTP %d): %s", ErrLLMHTTPStatus, status, excerpt)
+		err = fmt.Errorf("%w (HTTP %d): %s", ErrLLMHTTPStatus, status, excerpt)
 	}
+
+	// Attach the failover class. The sentinels above say what went
+	// wrong; the class says what to do about it, and they are not the
+	// same question — a 429 is transient when it is a rate limit and
+	// quota-exhausted when a plan is spent, and both arrive here
+	// wearing the same status code.
+	//
+	// Without this an unclassified error defaults to permanent, which
+	// would silently disable failover for exactly the outages it
+	// exists to cover.
+	return &DriverError{Class: ClassifyHTTPStatus(status, string(body)), Err: err}
 }
 
 // truncateBody caps a body excerpt at 512 bytes so error messages
