@@ -509,6 +509,8 @@ message AgentCommitment {
   // made for, which is per-channel and so cannot be compared across
   // them. Empty on records written before ownership existed.
   string owner = 12;
+  // revision — see ScheduledTaskRecord.revision.
+  uint64 revision = 13;
 }
 
 message ScheduledTaskRecord {
@@ -528,6 +530,10 @@ message ScheduledTaskRecord {
   // owner is the canonical principal, as on AgentCommitment.
   // created_by above is the raw channel id.
   string owner = 13;
+  // revision is assigned by the FSM and bumped on every write to this
+  // record. Conditional writes carry the revision they read and are
+  // rejected if it has moved. See LogEntry.expected_revision.
+  uint64 revision = 14;
 }
 
 message InFlightWork {
@@ -929,4 +935,20 @@ message LogEntry {
   // claimed_by field before we write. Used to enforce CAS semantics.
   // Ignored for PUT / DELETE.
   string expected_claimer = 20;
+
+  // expected_revision is the record revision the writer read before
+  // building this entry. The FSM rejects the write if the stored
+  // revision has moved, which is what makes a read-modify-write safe:
+  // claimed_by alone cannot tell "nobody holds this" apart from
+  // "somebody held it, finished, and released it", so a claimer
+  // working from a stale read would both re-fire the task and write
+  // its stale copy back over the completion.
+  //
+  // Explicitly optional rather than defaulting to "no check". A
+  // uint64 whose zero value means unconditional would make the unsafe
+  // behaviour what a caller gets by forgetting the field — the same
+  // shape as the scopeFilter="" bug that memory.Audience exists to
+  // prevent. LOG_OP_CLAIM requires it and is rejected without it;
+  // PUT / DELETE ignore it, since a create has no prior revision.
+  optional uint64 expected_revision = 24;
 }

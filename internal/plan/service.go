@@ -172,10 +172,16 @@ func (s *Service) CancelCommitment(_ context.Context, req *lobslawv1.CancelCommi
 	updated.ClaimExpiresAt = nil
 
 	entry := &lobslawv1.LogEntry{
-		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
-		Id:              current.Id,
-		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: expected,
+		Op:      lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:      current.Id,
+		Payload: &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		// The revision read above is what makes this cancel safe
+		// against a scheduler that claims and completes the same
+		// commitment in the window between our read and our write:
+		// ClaimedBy would be back to "" by then, so the claimer check
+		// alone would let us write "cancelled" over a completion.
+		ExpectedClaimer:  expected,
+		ExpectedRevision: &current.Revision,
 	}
 	if err := s.apply(entry); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {

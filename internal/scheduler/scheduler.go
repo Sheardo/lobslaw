@@ -446,7 +446,8 @@ func (s *Scheduler) tryFireTask(ctx context.Context, t *lobslawv1.ScheduledTaskR
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: updated,
 		},
-		ExpectedClaimer: t.ClaimedBy,
+		ExpectedClaimer:  t.ClaimedBy,
+		ExpectedRevision: &t.Revision,
 	}); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {
 			s.log.Debug("scheduler: task claimed by another node", "task_id", t.Id)
@@ -455,6 +456,12 @@ func (s *Scheduler) tryFireTask(ctx context.Context, t *lobslawv1.ScheduledTaskR
 		s.log.Warn("scheduler: task claim failed", "task_id", t.Id, "err", err)
 		return
 	}
+	// A successful CAS wrote expected+1. Track it locally rather than
+	// reading it back: the FSM's return value does not survive a
+	// forwarded write, and re-reading would race with anything else
+	// touching the record. The increment is an invariant of the CAS,
+	// not a guess.
+	updated.Revision = t.Revision + 1
 
 	go s.runTaskHandler(ctx, updated, now)
 }
@@ -501,11 +508,79 @@ func (s *Scheduler) completeTask(ctx context.Context, t *lobslawv1.ScheduledTask
 		Payload: &lobslawv1.LogEntry_ScheduledTask{
 			ScheduledTask: updated,
 		},
-		ExpectedClaimer: s.cfg.NodeID,
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &t.Revision,
 	})
-	if err != nil {
-		s.log.Warn("scheduler: completeTask apply failed", "task_id", t.Id, "err", err)
+	if err == nil {
+		return
 	}
+	if !errors.Is(err, memory.ErrClaimConflict) {
+		s.log.Warn("scheduler: completeTask apply failed", "task_id", t.Id, "err", err)
+		return
+	}
+
+	// The record moved under us. Logging and walking away would leave
+	// NextRun un-advanced and the claim set until TTL, so the task
+	// stalls for a full TTL and then re-fires — the failure mode this
+	// whole mechanism exists to prevent. Re-read and retry onto
+	// current state instead.
+	//
+	// Bounded, and it stops as soon as the record says the work is no
+	// longer ours: an operator edit is worth merging onto, another
+	// node's claim is not.
+	for attempt := 0; attempt < completeRetries; attempt++ {
+		current, rerr := s.loadTask(t.Id)
+		if rerr != nil || current == nil {
+			s.log.Warn("scheduler: completeTask re-read failed",
+				"task_id", t.Id, "err", rerr)
+			return
+		}
+		if current.ClaimedBy != s.cfg.NodeID {
+			s.log.Info("scheduler: completion abandoned, claim is no longer ours",
+				"task_id", t.Id, "claimed_by", current.ClaimedBy)
+			return
+		}
+		merged := proto.Clone(current).(*lobslawv1.ScheduledTaskRecord)
+		merged.LastRun = timestamppb.New(firedAt)
+		if !next.IsZero() {
+			merged.NextRun = timestamppb.New(next)
+		}
+		merged.ClaimedBy = ""
+		merged.ClaimExpiresAt = nil
+
+		err = s.applyClaim(&lobslawv1.LogEntry{
+			Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+			Id:               t.Id,
+			Payload:          &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: merged},
+			ExpectedClaimer:  s.cfg.NodeID,
+			ExpectedRevision: &current.Revision,
+		})
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, memory.ErrClaimConflict) {
+			break
+		}
+	}
+	s.log.Warn("scheduler: completeTask gave up after retries", "task_id", t.Id, "err", err)
+}
+
+// completeRetries bounds the re-read loop. Contention here is between
+// this node and an operator edit, not a stampede, so a couple of
+// attempts is plenty and an unbounded loop would be the worse bug.
+const completeRetries = 3
+
+// loadTask reads one scheduled task from the local store.
+func (s *Scheduler) loadTask(id string) (*lobslawv1.ScheduledTaskRecord, error) {
+	raw, err := s.raft.FSM().Store().Get(memory.BucketScheduledTasks, id)
+	if err != nil {
+		return nil, err
+	}
+	var rec lobslawv1.ScheduledTaskRecord
+	if err := proto.Unmarshal(raw, &rec); err != nil {
+		return nil, err
+	}
+	return &rec, nil
 }
 
 // releaseTaskClaim writes the claim back to unclaimed without
@@ -517,10 +592,11 @@ func (s *Scheduler) releaseTaskClaim(ctx context.Context, t *lobslawv1.Scheduled
 	updated.ClaimedBy = ""
 	updated.ClaimExpiresAt = nil
 	err := s.applyClaim(&lobslawv1.LogEntry{
-		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
-		Id:              t.Id,
-		Payload:         &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: updated},
-		ExpectedClaimer: s.cfg.NodeID,
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               t.Id,
+		Payload:          &lobslawv1.LogEntry_ScheduledTask{ScheduledTask: updated},
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &t.Revision,
 	})
 	if err != nil {
 		s.log.Warn("scheduler: release task claim failed", "task_id", t.Id, "err", err)
@@ -539,10 +615,11 @@ func (s *Scheduler) tryFireCommitment(ctx context.Context, c *lobslawv1.AgentCom
 	updated.ClaimExpiresAt = timestamppb.New(now.Add(s.cfg.ClaimTTL))
 
 	if err := s.applyClaim(&lobslawv1.LogEntry{
-		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
-		Id:              c.Id,
-		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: c.ClaimedBy,
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               c.Id,
+		Payload:          &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		ExpectedClaimer:  c.ClaimedBy,
+		ExpectedRevision: &c.Revision,
 	}); err != nil {
 		if errors.Is(err, memory.ErrClaimConflict) {
 			return
@@ -550,6 +627,8 @@ func (s *Scheduler) tryFireCommitment(ctx context.Context, c *lobslawv1.AgentCom
 		s.log.Warn("scheduler: commitment claim failed", "id", c.Id, "err", err)
 		return
 	}
+	updated.Revision = c.Revision + 1
+
 	go s.runCommitmentHandler(ctx, updated)
 }
 
@@ -575,10 +654,11 @@ func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.Agent
 	updated.ClaimedBy = ""
 	updated.ClaimExpiresAt = nil
 	if err := s.applyClaim(&lobslawv1.LogEntry{
-		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
-		Id:              c.Id,
-		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: s.cfg.NodeID,
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               c.Id,
+		Payload:          &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &c.Revision,
 	}); err != nil {
 		// Couldn't mark done — typically means the claim TTL expired
 		// and another node took over. Skip handler; the new claimer
@@ -599,10 +679,11 @@ func (s *Scheduler) releaseCommitmentClaim(_ context.Context, c *lobslawv1.Agent
 	updated.ClaimedBy = ""
 	updated.ClaimExpiresAt = nil
 	err := s.applyClaim(&lobslawv1.LogEntry{
-		Op:              lobslawv1.LogOp_LOG_OP_CLAIM,
-		Id:              c.Id,
-		Payload:         &lobslawv1.LogEntry_Commitment{Commitment: updated},
-		ExpectedClaimer: s.cfg.NodeID,
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               c.Id,
+		Payload:          &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &c.Revision,
 	})
 	if err != nil {
 		s.log.Warn("scheduler: release commitment claim failed", "id", c.Id, "err", err)
