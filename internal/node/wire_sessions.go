@@ -413,3 +413,48 @@ func translateSessionErr(err error) error {
 func (n *Node) identityResolver() *identity.Resolver {
 	return identity.NewResolver(n.cfg.Identity.Aliases)
 }
+
+// sessionLeaserAdapter adapts memory.LeaseService to
+// gateway.SessionLeaser. Same reason as sessionStoreAdapter: the two
+// packages cannot import each other, so the translation sits here.
+//
+// It also maps memory.ErrLeaseHeld onto gateway.ErrLeaseUnavailable,
+// which is what lets the gateway recognise "another node has this
+// conversation" without importing the memory package.
+type sessionLeaserAdapter struct {
+	inner *memory.LeaseService
+}
+
+func (a sessionLeaserAdapter) AcquireLease(ctx context.Context, key, turnID string) (gateway.LeaseHandle, error) {
+	lease, err := a.inner.Acquire(ctx, key, turnID)
+	if err != nil {
+		if errors.Is(err, memory.ErrLeaseHeld) {
+			return nil, fmt.Errorf("%w: %s", gateway.ErrLeaseUnavailable, err)
+		}
+		return nil, err
+	}
+	// A nil *memory.SessionLease is the no-raft path. Returning it
+	// straight through would produce a non-nil interface wrapping a
+	// nil pointer — which works here only because every method on
+	// SessionLease tolerates a nil receiver. Return an explicit nil
+	// instead, so the gate's `handle != nil` checks mean what they say.
+	if lease == nil {
+		return nil, nil
+	}
+	return lease, nil
+}
+
+// newSessionLeaser returns the cluster half of turn serialisation, or
+// nil when this node has no raft — a single-node gateway has no second
+// process to race with, and refusing turns would be worse than the
+// hazard it cannot have.
+func (n *Node) newSessionLeaser() gateway.SessionLeaser {
+	if n.raft == nil || n.store == nil {
+		return nil
+	}
+	return sessionLeaserAdapter{inner: memory.NewLeaseService(n.raft, n.store, memory.LeaseConfig{
+		NodeID: n.cfg.NodeID,
+		TTL:    n.cfg.Gateway.HardTimeout,
+		Logger: n.log,
+	})}
+}

@@ -44,6 +44,14 @@ const (
 	// Solo-deployment uses one record (id=owner); team/corporate
 	// deployments scale by adding records.
 	BucketUserPrefs = "user_prefs"
+
+	// BucketSessionLeases holds cluster-wide turn ownership, one
+	// record per conversation. Separate from BucketSessions because a
+	// lease is written three times per turn (claim, heartbeats,
+	// release) and the transcript is written once — sharing a record
+	// would make every lease write contend with the append made by
+	// the turn holding it.
+	BucketSessionLeases = "session_leases"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -65,4 +73,5 @@ var allBuckets = []string{
 	BucketUserPrefs,
 	BucketSessions,
 	BucketSessionMessages,
+	BucketSessionLeases,
 }

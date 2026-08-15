@@ -46,6 +46,10 @@ type TelegramConfig struct {
 	QueueMode     QueueMode
 	QueueDebounce time.Duration
 
+	// Leaser adds cluster-wide turn ownership on top of the in-process
+	// queue. Nil is correct for a single node.
+	Leaser SessionLeaser
+
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
 	// deployments.
@@ -326,7 +330,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		log:           logger,
 		client:        client,
 		base:          base,
-		gate:          NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger),
+		gate:          NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0),
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
 		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
@@ -413,7 +417,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	// same prior history and both would Append it, interleaving the
 	// transcript. In webhook mode each update arrives on its own
 	// net/http goroutine, so that is the normal case, not a rare one.
-	lease, disposition := h.gate.Acquire(ctx, cacheKey(sessionRef), turnText(msg))
+	lease, disposition := h.gate.Acquire(ctx, cacheKey(sessionRef), turnID, turnText(msg))
 	switch disposition {
 	case Folded:
 		// Another turn absorbed this message and will answer for it.
