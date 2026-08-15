@@ -78,11 +78,16 @@ The watcher is per-node (manifests live on local disk, not raft). For consistent
 
 ## Inspect
 
-`cmd/inspect/main.go` opens a stopped node's `state.db` and dumps records. Useful for forensics or debugging without needing to spin up the full cluster:
+`lobslaw memory` and `lobslaw session` open a stopped node's `state.db` and read
+(or edit) records directly. Useful for forensics or debugging without needing to
+spin up the full cluster. The node must be stopped — bbolt holds an exclusive
+file lock. See [CLI](/operating/cli) for the full flag set.
 
 ```bash
-inspect --state-db /var/lib/lobslaw/data/state.db --memory-key-ref env:LOBSLAW_MEMORY_KEY \
-        --bucket commitments --limit 20
+lobslaw memory list --state-db /var/lib/lobslaw/data/state.db \
+        --memory-key-ref env:LOBSLAW_MEMORY_KEY --kind episodic --limit 20
+
+lobslaw session search --config config.toml "connection refused"
 ```
 
 ## Reference
@@ -90,4 +95,4 @@ inspect --state-db /var/lib/lobslaw/data/state.db --memory-key-ref env:LOBSLAW_M
 - `internal/memory/store.go` — bolt wrapper
 - `internal/memory/raft.go` — raft setup
 - `internal/storage/watcher.go` — manifest watcher
-- `cmd/inspect/main.go` — offline inspection tool
+- `cmd/lobslaw/memory.go`, `cmd/lobslaw/session.go` — offline inspection subcommands

@@ -62,7 +62,7 @@ JSON output is machine-readable for downstream parsing.
 ## What it doesn't check
 
 - Runtime tool execution (no synthetic agent turns).
-- Memory store contents (use `cmd/inspect` for that).
+- Memory store contents (use `lobslaw memory list` on a stopped node for that).
 - Whether your `SOUL.md` is sensible (subjective).
 
 ## Reference

@@ -42,8 +42,8 @@ func For(p identity.Principal) Audience {
 
 // Everyone is the unrestricted read, spelled out so it can be grepped
 // and reviewed. Legitimate for Dream consolidation, the operator's
-// cmd/inspect, and compaction — callers that hold the whole store
-// already and gain nothing from being refused a view of it.
+// `lobslaw memory` CLI, and compaction — callers that hold the whole
+// store already and gain nothing from being refused a view of it.
 func Everyone() Audience {
 	return Audience{set: true, everyone: true}
 }

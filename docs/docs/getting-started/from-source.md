@@ -18,7 +18,7 @@ For developers, custom builds, or non-Linux hosts where the Docker image isn't a
 go build -o ./bin/lobslaw ./cmd/lobslaw
 ```
 
-There's also `cmd/inspect` for poking at a stopped node's bolt store, and `cmd/backfill-embeddings` if you've changed the embedding model and need to re-index.
+For poking at a stopped node's bolt store, the same binary has `lobslaw memory` and `lobslaw session` — see [CLI](/operating/cli). There's also `cmd/backfill-embeddings` if you've changed the embedding model and need to re-index.
 
 ## 2. Initialize
 

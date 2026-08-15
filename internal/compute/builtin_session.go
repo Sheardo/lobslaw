@@ -132,8 +132,8 @@ func (t TurnIdentity) isCurrent(channel, channelID string) bool {
 // reach it. Agent.runLoop attaches a scope unconditionally — including
 // for anonymous turns, which get the empty-user scope rather than no
 // scope — so nothing the model drives can arrive here without one. A
-// bare context comes from operator tooling (cmd/inspect reads the
-// store directly), the compactor, or tests: callers that already hold
+// bare context comes from operator tooling (`lobslaw session` reads
+// the store directly), the compactor, or tests: callers that already hold
 // the whole database and gain nothing from being refused a view of it.
 //
 // The corollary is that a new caller of these builtins MUST attach a

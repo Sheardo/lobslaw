@@ -21,6 +21,16 @@ lobslaw plugin             # plugin lifecycle
   plugin install <bundle>  # install a clawhub bundle
   plugin list              # list installed skills
 lobslaw audit              # query audit logs
+lobslaw memory             # read + edit the memory store (node must be STOPPED)
+  memory show <id>         # one record in full
+  memory list              # list vector + episodic records
+  memory forget            # delete records and their consolidations
+  memory share <id>...     # make owned records readable cluster-wide
+  memory unshare <id>...   # return shared records to their owner only
+lobslaw session            # read conversation transcripts (node must be STOPPED)
+  session list             # one line per conversation
+  session show <id>        # full transcript
+  session search <text>    # substring search across transcripts
 lobslaw sandbox-exec       # hidden — used by the sandbox reexec helper
 lobslaw dispatch           # hidden — used by hooks / scheduler dispatch
 ```
@@ -100,6 +110,114 @@ lobslaw audit --since "1 hour ago" --filter "decision=deny"
 ```
 
 Pretty-prints the daily JSONL audit log. Filters: `--decision`, `--subject`, `--action`, `--resource`, `--since`.
+
+## `lobslaw memory` and `lobslaw session`
+
+### Stop the node first
+
+Both groups open the node's `state.db` directly. bbolt takes an **exclusive
+file lock**, so a running node makes every subcommand in both groups fail
+after a five-second wait with:
+
+```
+state.db at /var/lib/lobslaw/data/state.db is locked by another process —
+the node is running; stop it first.
+```
+
+There is no read-only mode that gets around this. Stop the node, run the
+command, start it again.
+
+### Locating the store
+
+Every subcommand in both groups accepts the same four flags:
+
+```
+--config <path>          # reads [cluster] data_dir and [memory.encryption] key_ref
+--data-dir <path>        # data dir holding state.db; overrides --config
+--state-db <path>        # explicit file path; overrides --data-dir and --config
+--memory-key-ref <ref>   # env:VAR | file:/path; overrides the config's key_ref
+```
+
+The encryption key is resolved in that order and falls back to
+`$LOBSLAW_MEMORY_KEY`. A `.env` next to `config.toml` is loaded first, so
+the key that starts the node normally works here without re-exporting it.
+
+Every subcommand also takes `--json` for scripting.
+
+### `lobslaw memory list`
+
+```bash
+lobslaw memory list --config config.toml --kind episodic --limit 20
+```
+
+Filters: `--kind all|vector|episodic`, `--owner`, `--scope` (vector),
+`--tag` (episodic), `--unowned`, `--limit`. Newest first.
+
+Records with no owner are marked `!` and counted in the footer. Ownership is
+stamped on every record written since it existed, so an unowned record today
+is an anomaly worth chasing rather than a normal state — it belongs to no
+principal, and `share` / `unshare` refuse to touch it.
+
+### `lobslaw memory show <id>`
+
+Full field dump for one vector or episodic record, plus the list of
+consolidations that name it in their `source_ids` — i.e. exactly what a
+`forget` of this record would take down with it. The raw embedding is
+reported as a dimension count rather than printed.
+
+### `lobslaw memory forget`
+
+```bash
+# dry run — prints what would go
+lobslaw memory forget --config config.toml --query "old project"
+
+# actually delete
+lobslaw memory forget --config config.toml --query "old project" --apply
+```
+
+Filters: `--id` (repeatable), `--query`, `--before` (RFC3339 or `YYYY-MM-DD`),
+`--tag` (repeatable). At least one is required — an unfiltered forget matches
+every record in the store and is refused.
+
+Forget **cascades**: any consolidation whose `source_ids` intersect the
+matched set is swept too. Keeping a summary whose sources were deleted would
+leak the deleted content through the summary's own text and embedding, so the
+cascade is the point of the operation rather than a side effect. The dry run
+reports the matched set and the cascade separately.
+
+### `lobslaw memory share` / `lobslaw memory unshare`
+
+```bash
+lobslaw memory share --config config.toml <id> <id> --apply
+```
+
+Flips `visibility` between `SHARED` (readable by any authenticated principal)
+and `PRIVATE` (readable by the owner). Refuses the whole batch if any id is
+unknown or unowned.
+
+### `lobslaw session list` / `show` / `search`
+
+```bash
+lobslaw session list --config config.toml
+lobslaw session show --config config.toml telegram:-1001234567
+lobslaw session search --config config.toml "connection refused"
+```
+
+`search` is a substring search over stored transcripts and drives the same
+service the agent's `session_search` tool uses, so an operator sees what the
+model would have found. Filters: `--channel`, `--user`, `--limit`,
+`--snippets`.
+
+`show` prints message text in full; `--truncate N` caps it.
+
+### What is deliberately absent
+
+There is no `memory add`. A memory needs an embedding to be findable and the
+CLI has no embedder wired; operator-seeded knowledge is config-declared and
+seeded at boot instead.
+
+There is no `session forget`. Deleting a conversation is a replicated
+operation and goes through the running node.
 
 ## `lobslaw sandbox-exec`
 
