@@ -907,11 +907,20 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 	return nil, fmt.Errorf("agent: all providers in chain failed; last error: %w", lastErr)
 }
 
-// isRetryableProviderError classifies an LLM call failure as
-// transient (worth trying a backup) or permanent (surface
-// immediately). Context-cancelled errors are NOT retryable — the
-// user intent has changed or the hard-timeout fired, and retrying
-// on a backup inside the same cancelled context is wasted.
+// isRetryableProviderError decides whether to walk to the next
+// provider in the chain. Context-cancelled errors are NOT retryable —
+// the user intent has changed or the hard-timeout fired, and retrying
+// on a backup inside the same cancelled context spends the backup's
+// quota on a turn nobody is waiting for.
+//
+// A driver that classifies its failure decides this structurally.
+// Only an UNCLASSIFIED error falls through to the text scan below,
+// which predates the driver waist: it reads the error message looking
+// for "429", "500" and friends, so a correctly-classified transient
+// failure whose text happens not to contain a magic number would
+// otherwise never fail over. The scan stays for providers that do not
+// wrap their errors yet — removing it would turn their transient
+// failures permanent — but classified errors must never reach it.
 func isRetryableProviderError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
@@ -919,6 +928,24 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return false
 	}
+
+	var de *DriverError
+	if errors.As(err, &de) {
+		switch de.Class {
+		case FailureTransient:
+			return true
+		case FailureQuotaExhausted:
+			// This provider is spent; the next one has its own budget.
+			// Treating a spent plan as permanent turns "one provider ran
+			// out of credit" into "the assistant is down".
+			return true
+		default: // FailurePermanent
+			// Fails identically on the backup, so walking the chain
+			// multiplies one error into one per provider.
+			return false
+		}
+	}
+
 	msg := strings.ToLower(err.Error())
 	// Hard transient signals: rate limits, 5xx, connection
 	// refused, i/o timeout. Matching on substring is crude but
