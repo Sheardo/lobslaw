@@ -198,7 +198,7 @@ func newReadImageHandler(cfg VisionConfig, client *http.Client) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("read_image: http: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			return nil, 1, fmt.Errorf("read_image: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))

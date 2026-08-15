@@ -95,12 +95,12 @@ func mintEd25519Key(t *testing.T, kid string) (ed25519.PrivateKey, jwkEntry) {
 // jwksServer serves a mutable JWK set. Atomic counter tracks fetches
 // so tests can assert refresh behaviour.
 type jwksServer struct {
-	srv       *httptest.Server
-	mu        chan struct{} // lock channel — single-slot mutex
-	keys      []jwkEntry
-	fetches   atomic.Int64
-	httpCode  int // override response status (0 = 200)
-	rawBody   []byte
+	srv      *httptest.Server
+	mu       chan struct{} // lock channel — single-slot mutex
+	keys     []jwkEntry
+	fetches  atomic.Int64
+	httpCode int // override response status (0 = 200)
+	rawBody  []byte
 }
 
 func newJWKSServer(initial []jwkEntry) *jwksServer {

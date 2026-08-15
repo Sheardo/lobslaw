@@ -14,19 +14,6 @@ func withEnv(t *testing.T, key, val string) {
 	t.Setenv(key, val)
 }
 
-// installFromSource is a test helper that calls defaultSkillsRoot
-// + the plugins package directly to avoid the CLI's approval prompt
-// path (which reads from stdin and would hang the test).
-func installFromSource(t *testing.T, sourceDir, dstRoot string) {
-	t.Helper()
-	abs, _ := filepath.Abs(sourceDir)
-	// Skip the CLI entirely and drive the lower layer. The CLI code
-	// paths are wrapper logic over plugins.Install which is already
-	// unit-tested; the CLI test here checks dispatch wiring only.
-	_ = abs
-	_ = dstRoot
-}
-
 func TestDispatchPluginFallsThroughOnOther(t *testing.T) {
 	t.Parallel()
 	if dispatchPlugin([]string{"not-plugin"}) {

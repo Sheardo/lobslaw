@@ -8,6 +8,8 @@ type TurnBudget struct {
 	MaxEgressBytes int64   `json:"max_egress_bytes"`
 }
 
+// TurnUsage is the running tally for a turn, compared against a
+// TurnBudget via Exceeded.
 type TurnUsage struct {
 	ToolCalls   int     `json:"tool_calls"`
 	SpendUSD    float64 `json:"spend_usd"`

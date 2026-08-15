@@ -89,4 +89,3 @@ func TestDeniedByPolicyNoMatch(t *testing.T) {
 		t.Error("empty error should yield empty reason")
 	}
 }
-

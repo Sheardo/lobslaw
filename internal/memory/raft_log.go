@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"io"
 	stdlog "log"
@@ -28,14 +29,14 @@ func newHCLogAdapter(base *slog.Logger, name string) hclog.Logger {
 }
 
 func (h *hclogToSlog) emit(level slog.Level, msg string, args []any) {
-	if !h.base.Enabled(nil, level) {
+	if !h.base.Enabled(context.Background(), level) {
 		return
 	}
 	merged := args
 	if len(h.implied) > 0 {
 		merged = append(append([]any{}, h.implied...), args...)
 	}
-	h.base.Log(nil, level, msg, resolveHCLogArgs(merged)...)
+	h.base.Log(context.Background(), level, msg, resolveHCLogArgs(merged)...)
 }
 
 // resolveHCLogArgs walks a hclog-style key/value slice and unwraps
@@ -69,11 +70,11 @@ func (h *hclogToSlog) Info(msg string, args ...any)  { h.emit(slog.LevelInfo, ms
 func (h *hclogToSlog) Warn(msg string, args ...any)  { h.emit(slog.LevelWarn, msg, args) }
 func (h *hclogToSlog) Error(msg string, args ...any) { h.emit(slog.LevelError, msg, args) }
 
-func (h *hclogToSlog) IsTrace() bool { return h.base.Enabled(nil, slog.LevelDebug) }
-func (h *hclogToSlog) IsDebug() bool { return h.base.Enabled(nil, slog.LevelDebug) }
-func (h *hclogToSlog) IsInfo() bool  { return h.base.Enabled(nil, slog.LevelInfo) }
-func (h *hclogToSlog) IsWarn() bool  { return h.base.Enabled(nil, slog.LevelWarn) }
-func (h *hclogToSlog) IsError() bool { return h.base.Enabled(nil, slog.LevelError) }
+func (h *hclogToSlog) IsTrace() bool { return h.base.Enabled(context.Background(), slog.LevelDebug) }
+func (h *hclogToSlog) IsDebug() bool { return h.base.Enabled(context.Background(), slog.LevelDebug) }
+func (h *hclogToSlog) IsInfo() bool  { return h.base.Enabled(context.Background(), slog.LevelInfo) }
+func (h *hclogToSlog) IsWarn() bool  { return h.base.Enabled(context.Background(), slog.LevelWarn) }
+func (h *hclogToSlog) IsError() bool { return h.base.Enabled(context.Background(), slog.LevelError) }
 
 func (h *hclogToSlog) ImpliedArgs() []any { return h.implied }
 
@@ -102,11 +103,11 @@ func (h *hclogToSlog) ResetNamed(name string) hclog.Logger {
 func (h *hclogToSlog) SetLevel(hclog.Level) {}
 func (h *hclogToSlog) GetLevel() hclog.Level {
 	switch {
-	case h.base.Enabled(nil, slog.LevelDebug):
+	case h.base.Enabled(context.Background(), slog.LevelDebug):
 		return hclog.Debug
-	case h.base.Enabled(nil, slog.LevelInfo):
+	case h.base.Enabled(context.Background(), slog.LevelInfo):
 		return hclog.Info
-	case h.base.Enabled(nil, slog.LevelWarn):
+	case h.base.Enabled(context.Background(), slog.LevelWarn):
 		return hclog.Warn
 	default:
 		return hclog.Error

@@ -137,10 +137,10 @@ func TestParseDotenvQuotedCommentNotStripped(t *testing.T) {
 func TestParseDotenvInvalidKey(t *testing.T) {
 	t.Parallel()
 	cases := []string{
-		"1FOO=bar",       // starts with digit
-		"FOO-BAR=baz",    // hyphen not allowed
-		"=value",         // empty key
-		"FOO BAR=x",      // space in key
+		"1FOO=bar",    // starts with digit
+		"FOO-BAR=baz", // hyphen not allowed
+		"=value",      // empty key
+		"FOO BAR=x",   // space in key
 	}
 	for _, in := range cases {
 		_, err := parseDotenvString(t, in)

@@ -201,11 +201,11 @@ func readManifestName(path string) (string, error) {
 // from the install dir at turn time.
 func writeSyntheticManifest(stagingDir string, fm *SkillFrontmatter, cb ClawdbotMetadata) error {
 	manifest := syntheticManifest{
-		SchemaVersion: 1,
-		Name:          fm.Name,
-		Description:   fm.Description,
-		Runtime:       "bash",
-		Handler:       "handler.sh",
+		SchemaVersion:  1,
+		Name:           fm.Name,
+		Description:    fm.Description,
+		Runtime:        "bash",
+		Handler:        "handler.sh",
 		RequiresBinary: append([]string(nil), cb.Requires.Bins...),
 	}
 	if len(cb.Requires.Bins) > 0 {

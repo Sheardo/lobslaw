@@ -11,8 +11,12 @@ import (
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
+// Sizes fixed by nacl/secretbox. Both are in bytes.
 const (
-	KeySize   = 32
+	// KeySize is the length of a secretbox symmetric key.
+	KeySize = 32
+	// NonceSize is the length of the per-message nonce, which is
+	// prepended to every ciphertext this package produces.
 	NonceSize = 24
 )
 

@@ -46,9 +46,13 @@ const (
 // context is almost always more relevant than long-term recall).
 type ContextCategory string
 
+// The context categories. Budgeting trims long-term blocks before
+// short-term ones when the context window is under pressure.
 const (
+	// CategoryShortTerm is current-session context.
 	CategoryShortTerm ContextCategory = "short-term"
-	CategoryLongTerm  ContextCategory = "long-term"
+	// CategoryLongTerm is recalled context from earlier sessions.
+	CategoryLongTerm ContextCategory = "long-term"
 )
 
 // ContextBlock is a labelled chunk of data the agent wants to

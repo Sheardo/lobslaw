@@ -68,7 +68,7 @@ func TestSigningPolicyIsValid(t *testing.T) {
 		}
 	}
 	for _, p := range []SigningPolicy{"", "yes", "true", "REQUIRE_YES"} {
-		if SigningPolicy(p).IsValid() {
+		if p.IsValid() {
 			t.Errorf("%q should not be valid", p)
 		}
 	}
@@ -358,11 +358,11 @@ func TestRegistryHigherSemverStillBeatsSignedOlder(t *testing.T) {
 	t.Parallel()
 	r := NewRegistryWithPolicy(nil, SigningPrefer)
 	signedOld := &Skill{
-		Manifest: Manifest{Name: "s", Version: "1.0.0"},
+		Manifest:    Manifest{Name: "s", Version: "1.0.0"},
 		ManifestDir: "/mnt/a", IsSigned: true,
 	}
 	unsignedNew := &Skill{
-		Manifest: Manifest{Name: "s", Version: "2.0.0"},
+		Manifest:    Manifest{Name: "s", Version: "2.0.0"},
 		ManifestDir: "/mnt/b",
 	}
 	r.Put(signedOld)

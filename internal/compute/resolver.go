@@ -320,10 +320,7 @@ func triggerMatches(t config.ChainTriggerConfig, req ResolveRequest) bool {
 		}
 	}
 	if len(t.Domains) > 0 {
-		if !anyDomainOverlap(t.Domains, req.Domains) {
-			return false
-		}
-		return true
+		return anyDomainOverlap(t.Domains, req.Domains)
 	}
 	// No trigger fields set → this chain never matches automatically.
 	// (Use default_chain for the "no-trigger fallback" case.)

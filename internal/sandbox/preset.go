@@ -349,7 +349,7 @@ func expandAndCanonicalise(rules []PathRule) ([]PathRule, error) {
 func mergeByRealpath(rules []PathRule) []PathRule {
 	dedup := make(map[string]Access, len(rules))
 	for _, r := range rules {
-		dedup[r.Path] = dedup[r.Path] | r.Access
+		dedup[r.Path] |= r.Access
 	}
 	out := make([]PathRule, 0, len(dedup))
 	for path, access := range dedup {

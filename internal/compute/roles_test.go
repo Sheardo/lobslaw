@@ -4,13 +4,9 @@ import (
 	"testing"
 )
 
-// stubProvider is a trivial LLMProvider for role-map tests.
-type stubProvider struct{ id string }
-
-func (s *stubProvider) Chat(_ any, _ any) (any, error) { return nil, nil }
-
-// Match the LLMProvider interface. Because Chat has a specific
-// signature we can't satisfy trivially, reuse a MockProvider.
+// newStubProvider returns a minimal LLMProvider for role-map tests.
+// Backed by MockProvider rather than a hand-rolled stub so it stays
+// in step with the LLMProvider interface.
 func newStubProvider(t *testing.T, id string) LLMProvider {
 	t.Helper()
 	return NewMockProvider(MockResponse{Content: id})

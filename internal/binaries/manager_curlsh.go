@@ -24,20 +24,15 @@ type curlShManager struct {
 }
 
 // NewCurlShManager returns a curl-sh manager wired to the given
-// HTTP client. The client should be the egress-aware client for
-// the "binaries-install" role so the script download flows through
-// smokescreen.
+// HTTP client. The client must be the egress-aware client for the
+// "binaries-install" role so the script download flows through
+// smokescreen; a nil client makes Install fail closed rather than
+// falling back to a direct, unproxied fetch.
 func NewCurlShManager(client *http.Client) Manager {
-	if client == nil {
-		client = http.DefaultClient
-	}
 	return curlShManager{client: client}
 }
 
 func newCurlShManagerWithPrefix(client *http.Client, prefix string) Manager {
-	if client == nil {
-		client = http.DefaultClient
-	}
 	return curlShManager{client: client, prefix: prefix}
 }
 
@@ -93,7 +88,8 @@ func (m curlShManager) Install(ctx context.Context, spec InstallSpec, runner Pro
 	if err != nil {
 		return fmt.Errorf("curl-sh: tempfile: %w", err)
 	}
-	defer os.Remove(tmp.Name())
+	// Best-effort cleanup of the downloaded install script.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("curl-sh: write tempfile: %w", err)
@@ -130,6 +126,14 @@ func (m curlShManager) Install(ctx context.Context, spec InstallSpec, runner Pro
 }
 
 func (m curlShManager) fetch(ctx context.Context, urlStr string) ([]byte, error) {
+	// Fail closed, matching gh-release and runBootstrap. This path
+	// downloads a shell script that is then executed (sometimes under
+	// sudo), so silently falling back to an unproxied client would
+	// bypass the binaries-install egress allowlist at exactly the
+	// point it matters most.
+	if m.client == nil {
+		return nil, errors.New("curl-sh: fetch requires HTTPClient")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
@@ -138,7 +142,7 @@ func (m curlShManager) fetch(ctx context.Context, urlStr string) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}

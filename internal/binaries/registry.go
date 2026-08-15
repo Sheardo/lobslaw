@@ -147,9 +147,9 @@ func (s *Satisfier) SatisfyOpts(ctx context.Context, name string, installs []Ins
 	}
 
 	var (
-		triedManagers   []string
-		skipReasons     []string
-		bootstrappable  []string
+		triedManagers  []string
+		skipReasons    []string
+		bootstrappable []string
 	)
 	for _, spec := range osMatches {
 		if err := spec.Validate(); err != nil {
@@ -254,15 +254,6 @@ func (s *Satisfier) HostsFor(installs []InstallSpec) []string {
 		}
 	}
 	return out
-}
-
-func pickSpec(installs []InstallSpec) (InstallSpec, bool) {
-	for _, spec := range installs {
-		if spec.Match() {
-			return spec, true
-		}
-	}
-	return InstallSpec{}, false
 }
 
 // LookPath resolves a binary name against the supplied prefix's bin

@@ -42,7 +42,7 @@ freeform body here
 		t.Fatal(err)
 	}
 	store := NewMemoryTuneStore()
-	a, err := NewAdjuster(AdjusterConfig{Soul: s, Store: store, Now: func() time.Time { return time.Now() }})
+	a, err := NewAdjuster(AdjusterConfig{Soul: s, Store: store, Now: time.Now})
 	if err != nil {
 		t.Fatal(err)
 	}

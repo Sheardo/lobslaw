@@ -53,7 +53,7 @@ func Watch(ctx context.Context, opts WatchOptions, onChange func([]fsnotify.Even
 	if err != nil {
 		return fmt.Errorf("config.Watch: %w", err)
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	// Watch each file's parent directory so editors that replace via
 	// rename pattern (vim, many IDEs) don't break the watch.

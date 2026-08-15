@@ -144,7 +144,7 @@ func (c *Client) askJoin(ctx context.Context, addr string, perDialTimeout time.D
 	if err != nil {
 		return "", fmt.Errorf("dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := lobslawv1.NewNodeServiceClient(conn)
 	resp, err := client.AddMember(dialCtx, &lobslawv1.AddMemberRequest{
@@ -171,7 +171,7 @@ func (c *Client) dialOne(ctx context.Context, addr string, perDialTimeout time.D
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := lobslawv1.NewNodeServiceClient(conn)
 

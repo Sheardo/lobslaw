@@ -307,4 +307,3 @@ func filterMatcher(f types.AuditFilter) func(types.AuditEntry) bool {
 		return true
 	}
 }
-

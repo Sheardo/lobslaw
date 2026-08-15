@@ -2,8 +2,14 @@ package types
 
 import "time"
 
+// ParameterMap is the free-form argument bag carried by scheduled
+// tasks and commitments. Values survive a JSON round-trip through
+// the raft log, so callers should stick to JSON-native types.
 type ParameterMap map[string]any
 
+// RetryPolicy controls how a failed scheduled task or commitment is
+// retried. Backoff names the strategy ("fixed", "exponential") and
+// InitialSecs seeds it.
 type RetryPolicy struct {
 	MaxAttempts int    `json:"max_attempts"`
 	Backoff     string `json:"backoff"`
@@ -29,11 +35,18 @@ type ScheduledTaskRecord struct {
 	ClaimExpiresAt time.Time    `json:"claim_expires_at,omitempty"`
 }
 
+// CommitmentStatus tracks an AgentCommitment through its one-shot
+// lifecycle.
 type CommitmentStatus string
 
+// The commitment lifecycle states. Pending is the only one the
+// scheduler will claim and fire; the other two are terminal.
 const (
-	CommitmentPending   CommitmentStatus = "pending"
-	CommitmentDone      CommitmentStatus = "done"
+	// CommitmentPending is due but not yet fired.
+	CommitmentPending CommitmentStatus = "pending"
+	// CommitmentDone fired and completed.
+	CommitmentDone CommitmentStatus = "done"
+	// CommitmentCancelled was withdrawn before firing.
 	CommitmentCancelled CommitmentStatus = "cancelled"
 )
 
@@ -63,6 +76,8 @@ type Plan struct {
 	CheckBackThreads []CheckBack           `json:"check_back_threads,omitempty"`
 }
 
+// InFlightWork is a long-running goal the agent is part-way through,
+// surfaced in Plan so the agent can see its own outstanding work.
 type InFlightWork struct {
 	ID           string    `json:"id"`
 	Goal         string    `json:"goal"`
@@ -71,6 +86,8 @@ type InFlightWork struct {
 	Blockers     []string  `json:"blockers,omitempty"`
 }
 
+// CheckBack is a conversation the agent promised to return to,
+// carrying enough of the original request to resume it cold.
 type CheckBack struct {
 	ID              string    `json:"id"`
 	OriginalRequest string    `json:"original_request"`

@@ -235,7 +235,7 @@ paths = ["/tmp:rw"]
 // files still load. Regression guard against "one bad file poisons
 // the whole watcher".
 func TestWatcherPermRejectIsLoggedNotFatal(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("mode-bit checks don't apply on Windows")
 	}
 	t.Parallel()

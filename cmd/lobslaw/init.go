@@ -386,8 +386,8 @@ func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, no
 	if err != nil {
 		return fmt.Errorf("create %q: %w", path, err)
 	}
-	defer f.Close()
-	return tmpl.Execute(f, map[string]string{
+	defer func() { _ = f.Close() }()
+	if err := tmpl.Execute(f, map[string]string{
 		"DataDir":          dataDir,
 		"AuditDir":         auditDir,
 		"CACert":           caCert,
@@ -398,5 +398,16 @@ func writeConfigTOML(path string, ans initAnswers, dataDir, auditDir, caCert, no
 		"ProviderModel":    ans.ProviderModel,
 		"ProviderKeyVar":   providerKeyVar,
 		"SoulPath":         filepath.Join(ans.Dir, "SOUL.md"),
-	})
+	}); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	// Close explicitly: this is a write handle, so the closing flush
+	// can fail after Execute has already returned success. Reporting
+	// nil there would tell the operator `lobslaw init` wrote a config
+	// that is actually truncated. The deferred Close stays as the
+	// error-path safety net and no-ops on the second call.
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close %q: %w", path, err)
+	}
+	return nil
 }

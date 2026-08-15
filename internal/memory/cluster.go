@@ -366,11 +366,12 @@ func (u *unionFind) union(a, b int) {
 	if ra == rb {
 		return
 	}
-	if u.rank[ra] < u.rank[rb] {
+	switch {
+	case u.rank[ra] < u.rank[rb]:
 		u.parent[ra] = rb
-	} else if u.rank[ra] > u.rank[rb] {
+	case u.rank[ra] > u.rank[rb]:
 		u.parent[rb] = ra
-	} else {
+	default:
 		u.parent[rb] = ra
 		u.rank[ra]++
 	}

@@ -91,7 +91,12 @@ var errSudoNotAllowed = errors.New("install requires sudo but lobslaw is not roo
 
 // errManagerNotAvailable is returned when the manager binary isn't
 // in PATH or the OS doesn't support it.
-var errManagerNotAvailable = errors.New("manager binary not available on this host")
+//
+// Declared but not yet returned by any manager: today each manager
+// signals this through Available() plus its own ad-hoc Install
+// error text. Kept as the intended sentinel for that taxonomy rather
+// than deleted, so the inconsistency stays visible.
+var errManagerNotAvailable = errors.New("manager binary not available on this host") //nolint:unused // sentinel not yet adopted by the managers
 
 // runManagerCmd is the typical "shell out to the manager" wrapper
 // shared by apt/brew/pacman/dnf/etc. It honours sudo, passes args,

@@ -150,12 +150,12 @@ type Request struct {
 // Result is the synthesised output. Saved to memory as a single
 // episodic record tagged "research:<task_id>" + "report".
 type Result struct {
-	TaskID    string
-	Question  string
-	Report    string
-	MemoryID  string
+	TaskID     string
+	Question   string
+	Report     string
+	MemoryID   string
 	Subqueries []string
-	Duration  time.Duration
+	Duration   time.Duration
 }
 
 // Run executes the full research pipeline:

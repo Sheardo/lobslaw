@@ -88,7 +88,7 @@ func (m ghReleaseManager) ResolveLatest(ctx context.Context, urlPattern string) 
 	if err != nil {
 		return "", fmt.Errorf("gh-release: GET %s: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("gh-release: GET %s HTTP %d", endpoint, resp.StatusCode)
 	}
@@ -201,7 +201,10 @@ func (m ghReleaseManager) Install(ctx context.Context, spec InstallSpec, _ Proce
 
 	target := binDir + "/" + spec.Package
 	tmp := target + ".part"
-	defer os.Remove(tmp)
+	// Best-effort cleanup of the ".part" staging file. On the success
+	// path it has already been renamed over the target, so this is
+	// expected to fail with ENOENT.
+	defer func() { _ = os.Remove(tmp) }()
 
 	switch detectArchive(body) {
 	case "tar.gz":
@@ -256,7 +259,7 @@ func fetchAsset(ctx context.Context, client *http.Client, urlStr string) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
@@ -269,7 +272,7 @@ func extractFromTarGz(body []byte, innerPath, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 	return extractFromTar(gz, innerPath, dst)
 }
 
@@ -313,7 +316,7 @@ func extractFromZip(body []byte, innerPath, dst string) error {
 				if err != nil {
 					return err
 				}
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				return writeStreamToFile(rc, dst)
 			}
 		}
@@ -326,7 +329,7 @@ func writeStreamToFile(r io.Reader, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 	if _, err := io.Copy(out, r); err != nil {
 		return err
 	}

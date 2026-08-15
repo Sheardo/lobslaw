@@ -17,6 +17,8 @@ type Claims struct {
 	Scope     string    `json:"scope,omitempty"`
 }
 
+// HasRole reports whether the token carries the named role. Roles
+// are compared exactly — there is no hierarchy or wildcard.
 func (c *Claims) HasRole(role string) bool {
 	for _, r := range c.Roles {
 		if r == role {

@@ -10,8 +10,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -410,7 +410,7 @@ func (s *CredentialService) decrypt(rec *lobslawv1.CredentialRecord) (*Plaintext
 		Provider:      rec.Provider,
 		Subject:       rec.Subject,
 		AccessToken:   string(access),
-		RefreshToken: string(refresh),
+		RefreshToken:  string(refresh),
 		Scopes:        append([]string(nil), rec.Scopes...),
 		AllowedSkills: append([]string(nil), rec.AllowedSkills...),
 	}

@@ -698,10 +698,6 @@ func (h *TelegramHandler) resolveScope(from *tgUser) (string, bool) {
 	return "", false
 }
 
-// sendText POSTs to the Bot API's sendMessage endpoint. Errors are
-// logged but don't propagate — there's nothing useful to do with a
-// failed send at this layer. Telegram will deliver eventually if
-// it's a transient network issue.
 // Send is the public proactive-message entry point. Identical to
 // sendText except errors propagate to the caller instead of being
 // logged and swallowed. Used by the compute-layer notify_telegram
@@ -1119,7 +1115,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1186,7 +1182,7 @@ func (h *TelegramHandler) deleteWebhook(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("deleteWebhook: HTTP %d", resp.StatusCode)

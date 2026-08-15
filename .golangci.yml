@@ -29,9 +29,85 @@ linters:
       # rule only matters for production code paths.
       - path: _test\.go$
         linters: [forbidigo]
+      # Table-driven tests repeat their fixture strings by design —
+      # "alice", "pending", "windows". Hoisting those into constants
+      # makes the table harder to read and couples unrelated cases
+      # to a shared name. goconst only earns its keep in production
+      # code, where a repeated literal is a value that can drift.
+      - path: _test\.go$
+        linters: [goconst]
+      # The OpenAI chat-completions vocabulary — message roles and
+      # finish_reason values. These are an external protocol's fixed
+      # strings, not lobslaw values that could drift, and they are
+      # already documented in one place on compute.Message.Role.
+      # Hoisting them into constants would touch ~30 call sites
+      # through the agent loop to protect against a typo the provider
+      # would reject on the first request anyway. Contrast the soul
+      # dimension names, which ARE now constants: those are our own
+      # vocabulary and a typo there silently no-ops instead of
+      # failing.
+      - path: ^internal/compute/
+        text: 'string `(tool|tool_calls|assistant|user|system|stop)` has'
+        linters: [goconst]
+      # revive's `exported` rule is enforced on pkg/ (see the
+      # doc-comment pass) but not here. Identifiers under internal/
+      # and cmd/ are unreachable outside this module, so "exported"
+      # is a package-boundary detail rather than public API, and a
+      # doc comment on every one of them is noise with no audience.
+      # Godoc for these packages is the package comment plus the
+      # comments that already exist where the intent is non-obvious.
+      - path: ^(internal|cmd)/
+        text: '^exported:'
+        linters: [revive]
+      # pkg/crypto shadows the stdlib `crypto` name. That is
+      # deliberate and long-standing: it is this project's crypto
+      # package, always imported as a lobslaw path, and renaming it
+      # would churn every call site to satisfy a naming opinion.
+      - path: ^pkg/crypto/
+        text: 'avoid package names that conflict'
+        linters: [revive]
+      # pkg/types is flagged as a "meaningless" package name. It is
+      # the deliberate shared-vocabulary layer described in its own
+      # doc.go — the one package that imports nothing from internal/
+      # — and the name is load-bearing documentation, not laziness.
+      - path: ^pkg/types/
+        text: 'avoid meaningless package names'
+        linters: [revive]
   settings:
     gocyclo:
-      min-complexity: 15
+      # Raised from 15. gocyclo counts every switch case, and this
+      # codebase leans on wide flat dispatch switches — config
+      # parsing, provider selection, builtin routing — that score
+      # 16-25 while staying entirely readable. 38 of the 60 findings
+      # at 15 were in that 16-20 band and refactoring them would be
+      # churn that makes the code worse.
+      #
+      # 30 is the point where a finding reliably means "this function
+      # is genuinely doing too much". Three functions still exceed it
+      # and carry a nolint naming the reason; they are real debt and
+      # should come down rather than have this number raised again.
+      min-complexity: 30
+    goconst:
+      # Default is 3, which fires on any incidental triple. At 4 the
+      # remaining production findings are all values that genuinely
+      # want a single definition.
+      min-occurrences: 4
+    misspell:
+      ignore-rules:
+        # "hardlinked" is the filesystem term, not a misspelling of
+        # "hardline".
+        - hardlinked
+    staticcheck:
+      checks:
+        - all
+        # QF1001 rewrites `!(a && b)` into `!a || !b`. Both forms are
+        # correct, and the negated-conjunction reading is usually the
+        # clearer one — every instance here is an ordering assertion
+        # of the form `!(posA < posB && posB < posC)`, which De
+        # Morgan turns into a chain of `>=` that has to be re-derived
+        # to check. Declining a style opinion; the rest of
+        # staticcheck stays on.
+        - -QF1001
     forbidigo:
       # Egress chokepoint: every outbound HTTPS must go via
       # internal/egress/. Block direct http.Client construction +

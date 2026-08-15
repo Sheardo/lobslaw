@@ -861,7 +861,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 			}
 			return resp, nil
 		}
-		if !isRetryableProviderError(err, ctx) {
+		if !isRetryableProviderError(ctx, err) {
 			return nil, err
 		}
 		a.cfg.Logger.Warn("agent: provider failed; walking backup chain",
@@ -876,7 +876,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 // immediately). Context-cancelled errors are NOT retryable — the
 // user intent has changed or the hard-timeout fired, and retrying
 // on a backup inside the same cancelled context is wasted.
-func isRetryableProviderError(err error, ctx context.Context) bool {
+func isRetryableProviderError(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}

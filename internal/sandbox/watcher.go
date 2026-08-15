@@ -128,7 +128,7 @@ func (w *Watcher) Start(ctx context.Context) error {
 // loop pumps fsnotify events through a debounce timer and triggers
 // reloadNow at debounce-window-end. Runs until ctx is cancelled.
 func (w *Watcher) loop(ctx context.Context, fw *fsnotify.Watcher) {
-	defer fw.Close()
+	defer func() { _ = fw.Close() }()
 
 	// pending is non-nil when a reload is scheduled. Refreshing it
 	// on every event gives us the "quiet for debounce ms" behaviour.

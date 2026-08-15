@@ -1,3 +1,14 @@
+// Command lobslaw is the single binary for every node function.
+//
+// Which functions a process actually serves — memory, policy,
+// compute, gateway, storage — comes from [cluster].functions in the
+// config rather than from separate binaries, so a single-node
+// deployment and a five-node cluster run the same executable.
+//
+// Beyond starting a node, the binary hosts the operator subcommands:
+// init to scaffold a config, doctor to check the environment,
+// cluster for membership and certificates, plugin for skill
+// management, and audit to verify the local log's hash chain.
 package main
 
 import (
@@ -298,7 +309,12 @@ func main() {
 
 	if err := n.Start(ctx); err != nil {
 		logger.Error("node.Start", "error", err)
-		os.Exit(1)
+		// gocritic exitAfterDefer: the deferred signal.Stop(hupCh) is
+		// knowingly skipped. Unregistering a signal handler
+		// immediately before the process exits has no observable
+		// effect, and restructuring main to return an exit code just
+		// to satisfy the check is not worth the control-flow change.
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: signal.Stop is moot at process exit
 	}
 	logger.Info("lobslaw stopped")
 }
@@ -449,7 +465,7 @@ func containsFn(fns []types.NodeFunction, target types.NodeFunction) bool {
 // are present — same "last write wins" as Registry.SetPolicy):
 //
 //  1. Default discovery    — ~/.config/lobslaw/policy.d,
-//                            <configDir>/policy.d, <cwd>/policy.d
+//     <configDir>/policy.d, <cwd>/policy.d
 //  2. Config file's policy_dirs  — replaces #1 entirely if set
 //  3. CLI --policy-dir (repeated) — replaces #1 and #2 if set
 //

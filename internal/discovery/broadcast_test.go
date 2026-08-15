@@ -94,8 +94,8 @@ func TestBroadcasterLoopback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go a.Start(ctx)
-	go b.Start(ctx)
+	go func() { _ = a.Start(ctx) }()
+	go func() { _ = b.Start(ctx) }()
 
 	// Wait up to 2 seconds for at least one side to learn about the
 	// other. This loopback-via-limited-broadcast arrangement doesn't

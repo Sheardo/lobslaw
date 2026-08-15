@@ -53,7 +53,11 @@ func (n *Node) runWireStages(stages []WireStage) error {
 // gateAlways is the explicit "always run" sentinel — equivalent to
 // leaving Gate nil but useful when a stage's intent is "explicitly
 // runs regardless of node role" rather than "I forgot to set Gate."
-func gateAlways(_ Config) bool { return true }
+//
+// No stage uses it yet; every unconditional stage still leaves Gate
+// nil, which is exactly the ambiguity this was added to remove.
+// Kept so the distinction can be adopted rather than re-invented.
+func gateAlways(_ Config) bool { return true } //nolint:unused // sentinel not yet adopted by the wire stages
 
 // gateRaft selects stages that need the raft stack — anything that
 // touches the FSM or replicates state.

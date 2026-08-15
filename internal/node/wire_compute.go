@@ -30,7 +30,14 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-func (n *Node) wireCompute() error {
+// gocyclo: 128, far past the configured 30 and by a wide margin the
+// worst function in the tree. This is real debt, not a linter
+// artefact: it is one straight-line function that wires every
+// compute dependency in sequence, each behind its own config check.
+// Splitting it per subsystem is the obvious fix but touches node
+// startup ordering, so it wants its own change with its own testing
+// rather than riding along with a lint sweep.
+func (n *Node) wireCompute() error { //nolint:gocyclo // known outlier; split per-subsystem in a dedicated change
 	// hooks.Dispatcher from config.Hooks. NewDispatcher expects the
 	// keyed-by-event map shape; the config's HooksConfig already
 	// matches modulo a string→HookEvent conversion.

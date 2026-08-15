@@ -76,4 +76,3 @@ func dedupByRealpath(paths []string) []string {
 	}
 	return out
 }
-

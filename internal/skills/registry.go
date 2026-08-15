@@ -177,9 +177,9 @@ func (r *Registry) recomputeWinnerLocked(name string) {
 
 // candidateBeats returns true when c should replace best under the
 // registry's current policy. Order of preference:
-//   1. Higher semver wins.
-//   2. When semver ties AND preferSigned is on, signed beats unsigned.
-//   3. Same-signing, same-version: lexicographic ManifestDir.
+//  1. Higher semver wins.
+//  2. When semver ties AND preferSigned is on, signed beats unsigned.
+//  3. Same-signing, same-version: lexicographic ManifestDir.
 func (r *Registry) candidateBeats(c, best *Skill) bool {
 	cmp := compareVersion(c.Manifest.Version, best.Manifest.Version)
 	if cmp > 0 {

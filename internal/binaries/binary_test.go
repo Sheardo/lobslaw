@@ -29,14 +29,14 @@ func TestBinaryValidate(t *testing.T) {
 		{
 			name: "empty OS is wildcard (matches brew on any host)",
 			bin: Binary{
-				Name: "gh",
+				Name:    "gh",
 				Install: []InstallSpec{{Manager: "brew", Package: "gh"}},
 			},
 		},
 		{
 			name: "bad name char",
 			bin: Binary{
-				Name: "gh!",
+				Name:    "gh!",
 				Install: []InstallSpec{{OS: "linux", Manager: "apt", Package: "gh"}},
 			},
 			wantErr: "lowercase",
@@ -49,7 +49,7 @@ func TestBinaryValidate(t *testing.T) {
 		{
 			name: "unknown manager",
 			bin: Binary{
-				Name: "gh",
+				Name:    "gh",
 				Install: []InstallSpec{{OS: "linux", Manager: "snap", Package: "gh"}},
 			},
 			wantErr: "unknown manager",
@@ -80,7 +80,7 @@ func TestBinaryValidate(t *testing.T) {
 		{
 			name: "apt missing package",
 			bin: Binary{
-				Name: "gh",
+				Name:    "gh",
 				Install: []InstallSpec{{OS: "linux", Manager: "apt"}},
 			},
 			wantErr: "requires package",

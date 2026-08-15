@@ -207,7 +207,7 @@ func estimateTokens(m Message) int {
 	return n + perMessageOverhead
 }
 
-// SummariseBudget renders the budget for logs.
+// String renders the budget for logs.
 func (b ContextBudget) String() string {
 	var parts []string
 	if b.TailTokens > 0 {

@@ -61,16 +61,16 @@ func (ExecRunner) Run(ctx context.Context, name string, env []string, args ...st
 // `<remote>:<bucket>[/<path>]`; Remote + Bucket produce the source
 // arg, Path (optional) appends after the bucket separator.
 type Config struct {
-	Label           string
-	Remote          string            // rclone remote name (e.g. "s3-prod")
-	Bucket          string            // object-store bucket (optional for local-style remotes)
-	Path            string            // sub-path within the bucket (optional)
-	MountRoot       string            // "/cluster/store" default
-	VFSCacheMode    string            // "off" | "minimal" | "writes" | "full"; default "full"
-	VFSCachePoll    time.Duration     // poll interval for the VFS cache
-	Options         map[string]string // arbitrary rclone flags (key→value); "" value = bare flag
-	SecretRefs      map[string]string // env-var name → secret ref (e.g. RCLONE_CONFIG_S3_PROD_ACCESS_KEY_ID → env:AWS_KEY)
-	SecretResolver  SecretResolver    // required when SecretRefs non-empty
+	Label          string
+	Remote         string            // rclone remote name (e.g. "s3-prod")
+	Bucket         string            // object-store bucket (optional for local-style remotes)
+	Path           string            // sub-path within the bucket (optional)
+	MountRoot      string            // "/cluster/store" default
+	VFSCacheMode   string            // "off" | "minimal" | "writes" | "full"; default "full"
+	VFSCachePoll   time.Duration     // poll interval for the VFS cache
+	Options        map[string]string // arbitrary rclone flags (key→value); "" value = bare flag
+	SecretRefs     map[string]string // env-var name → secret ref (e.g. RCLONE_CONFIG_S3_PROD_ACCESS_KEY_ID → env:AWS_KEY)
+	SecretResolver SecretResolver    // required when SecretRefs non-empty
 }
 
 // Mount is the rclone-backend implementation of storage.Mount.

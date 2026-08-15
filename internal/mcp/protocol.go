@@ -81,7 +81,7 @@ type InitializeResult struct {
 // Tools is consumed today; resources / prompts / logging / sampling
 // are reserved for future expansion.
 type ServerCapabilities struct {
-	Tools     *ToolsCapability          `json:"tools,omitempty"`
+	Tools     *ToolsCapability           `json:"tools,omitempty"`
 	Resources map[string]json.RawMessage `json:"resources,omitempty"`
 	Prompts   map[string]json.RawMessage `json:"prompts,omitempty"`
 }

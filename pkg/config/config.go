@@ -52,6 +52,9 @@ func (c *Config) Dir() string {
 	return filepath.Dir(c.resolvedPath)
 }
 
+// MemoryConfig is the [memory] section: the vector + episodic store
+// and the background passes that maintain it. Disabled nodes still
+// parse the section but wire nothing.
 type MemoryConfig struct {
 	Enabled    bool             `koanf:"enabled"`
 	Encryption EncryptionConfig `koanf:"encryption"`
@@ -80,16 +83,24 @@ type SessionConfig struct {
 	MaxAge time.Duration `koanf:"max_age"`
 }
 
+// EncryptionConfig is [memory.encryption]. KeyRef is a secret
+// reference (not the key itself) resolved via ResolveSecret at boot;
+// memory records are encrypted at rest under it.
 type EncryptionConfig struct {
 	KeyRef string `koanf:"key_ref"`
 }
 
+// SnapshotConfig is [memory.snapshot], controlling where raft
+// snapshots are shipped and how long they are kept. Target is a
+// storage-mount label; empty disables off-node snapshotting.
 type SnapshotConfig struct {
 	Target    string        `koanf:"target"`
 	Cadence   time.Duration `koanf:"cadence"`
 	Retention string        `koanf:"retention"`
 }
 
+// DreamConfig is [memory.dream], governing the REM-sleep
+// consolidation pass that folds many episodic records into summaries.
 type DreamConfig struct {
 	// Enabled controls whether lobslaw auto-seeds a recurring Dream
 	// pass at boot. *bool so we can distinguish "operator left it
@@ -105,11 +116,17 @@ type DreamConfig struct {
 	Schedule string `koanf:"schedule"`
 }
 
+// StorageConfig is the [storage] section: the object store and the
+// set of mounts exposed to the agent as a sandboxed filesystem.
 type StorageConfig struct {
 	Enabled bool                 `koanf:"enabled"`
 	Mounts  []StorageMountConfig `koanf:"mounts"`
 }
 
+// StorageMountConfig is one [[storage.mounts]] entry. Type selects
+// the backend ("local", "s3", "minio", "r2"); the credential and
+// bucket fields below are backend-specific and ignored by backends
+// that do not use them.
 type StorageMountConfig struct {
 	Label string `koanf:"label"`
 	Type  string `koanf:"type"`
@@ -140,6 +157,8 @@ type StorageMountConfig struct {
 	ExtraOpts        map[string]string `koanf:"extra_opts,omitempty"`
 }
 
+// PolicyConfig is the [policy] section: whether this node evaluates
+// policy, plus the rules seeded into raft at boot.
 type PolicyConfig struct {
 	Enabled bool `koanf:"enabled"`
 	// Rules are operator-declared [[policy.rules]] entries seeded
@@ -152,6 +171,9 @@ type PolicyConfig struct {
 	Rules []PolicyRuleConfig `koanf:"rules,omitempty"`
 }
 
+// PolicyRuleConfig is one [[policy.rules]] entry, mirroring the
+// fields of lobslawv1.PolicyRule. See PolicyConfig.Rules for the
+// subject-format and priority rules that apply here.
 type PolicyRuleConfig struct {
 	ID       string `koanf:"id"`
 	Subject  string `koanf:"subject"`
@@ -161,6 +183,9 @@ type PolicyRuleConfig struct {
 	Priority int32  `koanf:"priority,omitempty"` // higher wins
 }
 
+// ComputeConfig is the [compute] section: LLM providers, the chains
+// that route between them, per-turn limits, and the plugin and
+// modality settings layered on top.
 type ComputeConfig struct {
 	Enabled             bool             `koanf:"enabled"`
 	Providers           []ProviderConfig `koanf:"providers"`
@@ -305,6 +330,20 @@ type WebSearchConfig struct {
 	Endpoint  string `koanf:"endpoint,omitempty"`
 }
 
+// ModalityOverride pins a modality builtin to one specific provider
+// label, bypassing capability auto-discovery. Empty Provider →
+// auto-discovery picks from [[compute.providers]] entries tagged
+// with the matching capability (highest Priority wins). Operators
+// only need this when they have multiple capability-matching
+// providers and want a non-priority pick for a specific modality.
+//
+// VisionConfig, AudioConfig and PDFConfig below are thin shells over
+// this type. 99% of operators leave them empty — declaring a
+// provider with capabilities = ["vision"] (etc) is enough.
+type ModalityOverride struct {
+	Provider string `koanf:"provider,omitempty"`
+}
+
 // VisionConfig enables the read_image builtin — a tool the agent
 // calls to get a textual description of an image at a local path.
 // Required when the main LLM is text-only (e.g. MiniMax-M2):
@@ -318,22 +357,14 @@ type WebSearchConfig struct {
 // prompt). Any vision-capable provider works: MiniMax's
 // abab6.5s-chat / MiniMax-VL-01, Google Gemini Flash, OpenAI
 // gpt-4o-mini, Anthropic claude-3-5-haiku, etc.
-//
-// ModalityOverride pins a modality builtin to one specific provider
-// label, bypassing capability auto-discovery. Empty Provider →
-// auto-discovery picks from [[compute.providers]] entries tagged
-// with the matching capability (highest Priority wins). Operators
-// only need this when they have multiple capability-matching
-// providers and want a non-priority pick for a specific modality.
-type ModalityOverride struct {
-	Provider string `koanf:"provider,omitempty"`
-}
-
-// VisionConfig / AudioConfig / PDFConfig are thin override shells.
-// 99% of operators leave them empty — declaring a provider with
-// capabilities = ["vision"] (etc) is enough.
 type VisionConfig = ModalityOverride
+
+// AudioConfig selects the provider backing the audio modality
+// builtins (transcription of inbound voice notes and audio files).
 type AudioConfig = ModalityOverride
+
+// PDFConfig selects the provider backing the PDF modality builtin,
+// which extracts text from documents the agent is handed a path to.
 type PDFConfig = ModalityOverride
 
 // EmbeddingsConfig points at an embeddings endpoint. Empty
@@ -422,6 +453,9 @@ type ServerToolSpec struct {
 	Parameters map[string]any `koanf:"parameters,omitempty"`
 }
 
+// ChainConfig is one [[compute.chains]] entry — an ordered pipeline
+// of provider/role steps selected by Trigger. MinTrustTier refuses
+// the chain when the resolved provider sits below the floor.
 type ChainConfig struct {
 	Label        string             `koanf:"label"`
 	Steps        []ChainStepConfig  `koanf:"steps"`
@@ -429,12 +463,19 @@ type ChainConfig struct {
 	MinTrustTier types.TrustTier    `koanf:"min_trust_tier,omitempty"`
 }
 
+// ChainStepConfig is one step of a chain: which provider label to
+// call and in which role, optionally with a prompt template that
+// overrides the role default.
 type ChainStepConfig struct {
 	Provider       string `koanf:"provider"`
 	Role           string `koanf:"role"`
 	PromptTemplate string `koanf:"prompt_template,omitempty"`
 }
 
+// ChainTriggerConfig decides whether a chain matches a request.
+// Always wins outright; otherwise MinComplexity and Domains both
+// have to be satisfied, and a trigger with neither set never matches
+// automatically (use default_chain for the fallback).
 type ChainTriggerConfig struct {
 	MinComplexity int      `koanf:"min_complexity,omitempty"`
 	Domains       []string `koanf:"domains,omitempty"`
@@ -499,6 +540,9 @@ type LimitsConfig struct {
 	MaxToolCallsPerTurn int `koanf:"max_tool_calls_per_turn"`
 }
 
+// PluginConfig is one [[compute.plugins]] entry. Source is a
+// clawhub reference or a local path; AutoInstallBinary lets the
+// plugin's declared binary dependency be installed on first use.
 type PluginConfig struct {
 	Name              string `koanf:"name"`
 	Source            string `koanf:"source"`
@@ -510,6 +554,9 @@ type PluginConfig struct {
 // Each event may have multiple subprocess hooks.
 type HooksConfig map[string][]types.HookConfig
 
+// GatewayConfig is the [gateway] section: the inbound listeners and
+// the channels mounted on them, plus the defaults applied to turns
+// those channels dispatch.
 type GatewayConfig struct {
 	Enabled             bool                   `koanf:"enabled"`
 	GRPCPort            int                    `koanf:"grpc_port"`
@@ -574,6 +621,9 @@ type UserChannelAddrConfig struct {
 	Address string `koanf:"address"`
 }
 
+// GatewayChannelConfig is one [[gateway.channels]] entry. Type
+// selects the channel implementation ("telegram", "webhook", …) and
+// determines which of the fields below are consulted.
 type GatewayChannelConfig struct {
 	Type string `koanf:"type"`
 	// Mode picks "webhook" (default) or "poll" for telegram. Poll
@@ -604,6 +654,10 @@ type GatewayChannelConfig struct {
 	Scope           string `koanf:"scope,omitempty"`
 }
 
+// DiscoveryConfig is the [discovery] section: how this node finds
+// its peers. SeedNodes is the explicit list; Broadcast additionally
+// enables LAN auto-discovery, which suits a home deployment but
+// should stay off anywhere the broadcast domain is untrusted.
 type DiscoveryConfig struct {
 	SeedNodes          []string      `koanf:"seed_nodes"`
 	Broadcast          bool          `koanf:"broadcast"`
@@ -613,6 +667,9 @@ type DiscoveryConfig struct {
 	BroadcastInterval  time.Duration `koanf:"broadcast_interval"` // default 30s
 }
 
+// ClusterConfig is the [cluster] section: this node's identity, the
+// addresses it listens on and advertises, where its state lives, and
+// which functions it enables.
 type ClusterConfig struct {
 	// ListenAddr is host:port for the cluster-internal gRPC listener.
 	// All cluster services (NodeService, MemoryService, PolicyService,
@@ -656,11 +713,18 @@ type MTLSConfig struct {
 	NodeKey  string `koanf:"node_key"`
 }
 
+// SoulLoaderConfig is the [soul] section, pointing at the SOUL.md
+// that defines the agent's persona. Scope selects which portion of
+// the file applies when one file serves several deployments.
 type SoulLoaderConfig struct {
 	Path  string `koanf:"path"`
 	Scope string `koanf:"scope"`
 }
 
+// AuthConfig is the [auth] section: JWT validation for inbound
+// requests. Issuer and JWKSURL cover the normal asymmetric case;
+// JWTSecretRef plus AllowHS256 exist for symmetric-signing setups
+// and should stay off unless deliberately chosen.
 type AuthConfig struct {
 	Issuer       string `koanf:"issuer"`
 	JWKSURL      string `koanf:"jwks_url"`
@@ -677,6 +741,9 @@ type AuthConfig struct {
 	RequireAuth bool `koanf:"require_auth"`
 }
 
+// SandboxConfig is the [sandbox] section: the default Landlock,
+// seccomp and network confinement applied to skills and
+// shell_command. Storage-mount modes layer on top of these.
 type SandboxConfig struct {
 	AllowedPaths       []string `koanf:"allowed_paths"`
 	ReadOnlyPaths      []string `koanf:"read_only_paths"`
@@ -711,17 +778,26 @@ type SandboxConfig struct {
 	HotReloadOptOut bool `koanf:"hot_reload_opt_out"`
 }
 
+// AuditConfig is the [audit] section. The two sinks are independent
+// and may both be enabled: raft replicates the log cluster-wide,
+// local keeps a rotated on-disk copy that survives losing quorum.
 type AuditConfig struct {
 	Raft  AuditRaftConfig  `koanf:"raft"`
 	Local AuditLocalConfig `koanf:"local"`
 }
 
+// AuditRaftConfig is [audit.raft], the replicated audit sink.
+// AnchorTarget and AnchorCadence control periodic publication of the
+// hash-chain head so tampering with history is detectable.
 type AuditRaftConfig struct {
 	Enabled       bool          `koanf:"enabled"`
 	AnchorTarget  string        `koanf:"anchor_target"`
 	AnchorCadence time.Duration `koanf:"anchor_cadence"`
 }
 
+// AuditLocalConfig is [audit.local], the on-disk audit sink. Size
+// and file counts bound the rotated set; the anchor fields mirror
+// AuditRaftConfig.
 type AuditLocalConfig struct {
 	Enabled       bool          `koanf:"enabled"`
 	Path          string        `koanf:"path"`
@@ -731,6 +807,8 @@ type AuditLocalConfig struct {
 	AnchorCadence time.Duration `koanf:"anchor_cadence,omitempty"`
 }
 
+// SkillsConfig is the [skills] section: where skill manifests are
+// loaded from and how their signatures are treated.
 type SkillsConfig struct {
 	// SigningPolicy gates manifest signatures: "off" | "prefer" |
 	// "require". Empty / unrecognised → "prefer" (accept both but
@@ -938,6 +1016,11 @@ type BinaryConfig struct {
 	PostInstall string `koanf:"post_install,omitempty"`
 }
 
+// BinaryInstallConfig is one [[binary.install]] entry — a single
+// candidate recipe for installing a binary. The OS, Arch and Distro
+// fields are the match predicate (empty matches anything); Manager
+// picks the installer and determines which of the remaining fields
+// it consumes.
 type BinaryInstallConfig struct {
 	OS       string   `koanf:"os,omitempty"`
 	Arch     string   `koanf:"arch,omitempty"`

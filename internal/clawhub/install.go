@@ -63,10 +63,10 @@ func (i *Installer) WithSatisfyOptions(opts binaries.SatisfyOptions) *Installer 
 // don't block when absent) which matches how operators typically
 // adopt signature checks.
 type InstallerConfig struct {
-	Client    *Client
-	Storage   *storage.Manager
-	Policy    SigningPolicy
-	Verifier  BundleVerifier
+	Client   *Client
+	Storage  *storage.Manager
+	Policy   SigningPolicy
+	Verifier BundleVerifier
 	// Satisfier (optional) resolves clawhub-format bundles' declared
 	// host bin requirements via the internal/binaries Manager pool.
 	// When nil, clawhub-format bundles that declare requires.bins

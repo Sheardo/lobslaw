@@ -143,7 +143,7 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 		return marshalToolError("read_failed", "open "+path+": "+err.Error(),
 			"check the path exists and is readable")
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if fi, statErr := f.Stat(); statErr == nil && fi.IsDir() {
 		return marshalToolError("is_directory", path+" is a directory, not a file",

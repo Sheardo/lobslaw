@@ -80,7 +80,7 @@ func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *ty
 	if err != nil {
 		return "", fmt.Errorf("fetch %q: %w", fileURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("fetch %q: HTTP %d", fileURL, resp.StatusCode)
 	}
@@ -89,8 +89,18 @@ func (h *TelegramHandler) downloadOne(ctx context.Context, turnDir string, a *ty
 	if err != nil {
 		return "", fmt.Errorf("create %q: %w", dst, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = os.Remove(dst)
+		return "", fmt.Errorf("write %q: %w", dst, err)
+	}
+	// Close explicitly rather than leaning on the defer: this is a
+	// write handle, so the final flush can fail (ENOSPC, quota, I/O
+	// error) after io.Copy has already reported success. Swallowing
+	// that would hand the caller a path to a silently truncated
+	// attachment. The deferred Close above stays as the error-path
+	// safety net and no-ops on the second call.
+	if err := f.Close(); err != nil {
 		_ = os.Remove(dst)
 		return "", fmt.Errorf("write %q: %w", dst, err)
 	}
@@ -115,7 +125,7 @@ func (h *TelegramHandler) resolveFileURL(ctx context.Context, fileID string) (st
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("getFile: HTTP %d", resp.StatusCode)
 	}

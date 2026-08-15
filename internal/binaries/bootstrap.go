@@ -52,6 +52,7 @@ var knownBootstraps = map[string]bootstrapRecipe{
 //   - The bootstrapped manager's own installs (e.g. brew pulling
 //     formulae from formulae.brew.sh + ghcr.io) succeed without a
 //     follow-up config + reload.
+//
 // Operators with stricter supply-chain requirements override the
 // allowlist via [security] binaries_install_hosts (future work).
 func DefaultInstallHosts() []string {
@@ -128,7 +129,8 @@ func runBootstrap(ctx context.Context, satisfier *Satisfier, mgrName string, cli
 	if err != nil {
 		return fmt.Errorf("binaries: bootstrap %q tempfile: %w", mgrName, err)
 	}
-	defer os.Remove(tmp.Name())
+	// Best-effort cleanup of the downloaded install script.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.Write(body); err != nil {
 		_ = tmp.Close()
 		return err
@@ -193,7 +195,7 @@ func fetchBootstrapBody(ctx context.Context, client *http.Client, urlStr string)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
