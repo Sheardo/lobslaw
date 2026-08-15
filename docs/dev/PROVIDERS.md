@@ -50,12 +50,19 @@ change rarely.
 endpoint + model + credential + optional backup. There are many, and
 operators add them constantly.
 
-Naming this resolves the question of how to support "custom variants
-such as qwencloud". Qwen Cloud is not a driver — it is a *provider*
-using the `openai` driver at a different endpoint with a different
-model name. That is already how `LLMClient` works; it has simply never
-been said out loud, which is why each modality reinvented the
-distinction under a different name.
+Naming this resolves how to support "custom variants" **for chat**,
+where OpenAI compatibility is close to universal: a vendor offering an
+OpenAI-shaped chat endpoint is a *provider* using the `openai` driver
+at a different endpoint with a different model name. That is already
+how `LLMClient` works.
+
+**It does not generalise to the generation modalities**, and assuming
+it does is the trap. There is no de-facto standard for image or video
+generation: the same vendor's image and video APIs differ from each
+other, billing units differ per model, and the whole interaction shape
+differs (see [Generation is not request/response](#generation-is-not-requestresponse)).
+For those, a new provider often really does need a new driver — which
+is precisely why external drivers must be easy to write.
 
 The set of drivers lobslaw must actually implement is therefore small:
 the three or four real protocol families, plus `mock` and `external`.
@@ -104,6 +111,110 @@ The alternative — teaching the chat driver about image content parts
 per provider — pushes vendor differences into the hottest path in the
 system and makes the agent loop's behaviour depend on which model is
 selected. Rejected.
+
+---
+
+## Generation is not request/response
+
+The section above treats every modality as one shape: send a request,
+get a result. That is true for chat, embedding, vision, transcribe,
+document and speak. **It is false for image and video**, and the
+difference is structural rather than dialectal.
+
+Alibaba's Wan text-to-video is representative:
+
+```
+POST /api/v1/services/aigc/video-generation/video-synthesis
+     X-DashScope-Async: enable
+  → { task_id, task_status }
+
+GET  /api/v1/tasks/{task_id}          # poll, ~15s interval
+  → PENDING → RUNNING → SUCCEEDED | FAILED
+  → { video_url }                     # expires 24h
+```
+
+Image-to-video takes **1–5 minutes**. The task id is valid for 24
+hours; the result URL expires in 24 hours.
+
+Three consequences the request/response shape cannot absorb:
+
+**A generation driver needs a different interface.** Submit, poll,
+fetch — plus artifact retrieval, because the result is a URL with an
+expiry rather than bytes in the response. A driver interface shaped
+like `Chat` cannot express it.
+
+**A turn cannot wait.** A 1–5 minute job blocks the conversation, the
+cluster lease heartbeat, and the responsiveness hard timeout (90s) all
+at once. Generation must be *deferrable*: the tool call submits, the
+turn returns "started", and the result arrives later.
+
+**lobslaw already owns the machinery for that.** `AgentCommitment` plus
+the scheduler is exactly "work to finish later, claimed by one node,
+delivered when done" — with the revision-guarded claim CAS, the TTL,
+the takeover-on-crash and the notify path already built and tested. A
+video job is a commitment with a poll handler. Building a second job
+store beside it would be the same mistake as building a second
+permanent-approval store beside the policy engine.
+
+So: **generation modalities submit a job and register a commitment.**
+The scheduler polls; on success it downloads the artifact before the
+URL expires and notifies the channel. Nothing new is invented, and
+crash recovery, leader-pinning and at-most-once delivery come for free.
+
+Not every generator is async — OpenAI's image API returns the image in
+the response. The driver declares which shape it is, and the
+synchronous ones skip the commitment path when the expected latency is
+small enough to sit inside a turn.
+
+---
+
+## Billing is not tokens
+
+The second thing "same driver, different endpoint" hides. Generation
+providers bill in units that `Usage{PromptTokens, CompletionTokens,
+TotalTokens, CachedTokens}` cannot express:
+
+| Unit | Example |
+|---|---|
+| per token | OpenAI `gpt-image-1` — the image is encoded as tokens |
+| per image | most flat-rate image APIs |
+| per megapixel | resolution-scaled: 4K costs multiples of 1024² on the same model |
+| per second of video | Wan — *"billed per successfully generated second of video"* |
+| per second of GPU | Replicate's default for non-official models |
+| credits | Stability, Ideogram, and Alibaba's Token Plan |
+
+Today `CostRecord` multiplies token counts by a per-token price. For
+every row except the first that yields **zero**, and a cost report
+saying a video cost nothing is worse than one that says nothing at all:
+it is a confidently wrong answer, and the operator has no reason to
+doubt it.
+
+`Usage` therefore needs a unit and a quantity, with token detail as one
+case rather than the only case. Pricing follows: a provider declares
+what it charges per unit of its own unit.
+
+### Plans change the failure mode, not just the arithmetic
+
+Alibaba's Token Plan bills in **Credits** against a monthly per-seat
+quota that does not carry over, and — the important part — **when the
+quota is exhausted, API calls are blocked. No pay-as-you-go charge
+applies.**
+
+That is a third failure category, and the failover rules above have
+only two. Quota exhaustion is not transient (retrying the same provider
+will fail identically until the month rolls over) and not a request bug
+(the request is fine). It should **fall through to the backup**, which
+is typically a pay-as-you-go provider — and it must be surfaced loudly,
+because an operator whose plan ran out on the 3rd and who has been
+silently billed per-call ever since will want to have known.
+
+So the failover taxonomy is:
+
+| Class | Example | Action |
+|---|---|---|
+| Transient | 5xx, timeout, rate limit | Fall through, retry-able later |
+| Quota exhausted | plan quota spent | Fall through, **warn loudly**, do not retry this provider until reset |
+| Permanent | 400, bad model name | Fail the call — the backup will fail identically |
 
 ---
 

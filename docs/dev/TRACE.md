@@ -99,6 +99,29 @@ assembled — the agent builds the message list, so it knows exactly
 which tool results are in it. The count is bookkeeping, not
 estimation.
 
+### Cost is not always denominated in tokens
+
+`Usage{PromptTokens, CompletionTokens, TotalTokens, CachedTokens}` and
+a per-token price describe chat and embedding. They do not describe the
+generation modalities, which bill per image, per megapixel, per second
+of video, per second of GPU, or in credits against a plan — see
+[PROVIDERS](/dev/PROVIDERS#billing-is-not-tokens).
+
+Multiplying a zero token count by a per-token price yields **zero**,
+and a cost report stating that a video generation was free is worse
+than one that omits it. It is a confidently wrong number, and nothing
+about it invites doubt.
+
+So a span records a **unit and a quantity** — `tokens`, `images`,
+`megapixels`, `video_seconds`, `gpu_seconds`, `credits` — with token
+detail as one case rather than the only case. Where the provider bills
+against a plan quota rather than a balance, the span records the
+credits consumed and marks `billed_to: plan`, because the marginal USD
+really is zero and the meaningful number is the quota drawn down.
+
+An operator on a plan wants to know how fast they are consuming it, and
+a spend figure of £0 answers a question they did not ask.
+
 Two honesty constraints:
 
 - **Token counts must be measured, not guessed.** Where the provider
@@ -191,6 +214,9 @@ Three questions an operator cannot answer today:
    is not measured anywhere.
 3. *Is my primary provider being used?* — the failover chain walks
    silently; the trace names the provider that answered.
+4. *How fast am I burning my plan quota?* — plan-billed providers block
+   outright when exhausted rather than charging overage, so the useful
+   signal is consumption rate, and no spend figure conveys it.
 
 Each is a question about a harness, answerable by exporting what the
 harness already knows.

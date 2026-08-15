@@ -2097,6 +2097,15 @@ capability appears, and it is last on purpose.
       warned about at boot via the existing models.dev capability data.
 - [ ] `generate_image` can be gated by `effect =
       "require_confirmation"` with no new machinery.
+- [ ] A `generate_video` call submits a job, returns from the turn
+      immediately, and delivers the artifact later via a commitment —
+      without holding the session lease or tripping the 90s
+      responsiveness timeout.
+- [ ] A provider billed per second of video reports a non-zero cost.
+      Zero is the current answer and it is wrong.
+- [ ] A plan-billed provider whose quota is exhausted falls through to
+      its backup and warns; it is not retried until reset, and it is
+      not treated as a request error.
 
 ---
 
@@ -2196,3 +2205,47 @@ never be dropped becomes a reliability problem on the reply path.
 - [ ] Tool attribution reflects re-sent context, not just the
       producing call — verifiable on a scripted multi-tool turn.
 - [ ] Cached tokens are priced as cached, not fresh.
+- [ ] A span for a non-token-billed call carries its own unit and
+      quantity (`video_seconds`, `images`, `credits`…), not a token
+      count of zero.
+- [ ] Plan-billed calls record quota consumed and are marked as such,
+      rather than reporting a marginal spend of zero.
+
+---
+
+## Annex — provider API survey (2026-08-15)
+
+Verified against vendor documentation rather than recalled, because
+the assumption this survey overturned — "a custom variant is the same
+driver at a different endpoint" — was itself a confident recollection.
+
+**Interaction shape.** Alibaba Wan text-to-video is asynchronous:
+`POST …/video-synthesis` with `X-DashScope-Async: enable` returns a
+`task_id`; the caller polls `GET /api/v1/tasks/{task_id}` through
+`PENDING → RUNNING → SUCCEEDED | FAILED` at roughly 15-second
+intervals. Image-to-video runs **1–5 minutes**. Both the task id and
+the returned `video_url` expire after 24 hours. OpenAI's image API, by
+contrast, returns the image in the response — so both shapes are real
+and a driver must declare which it is.
+
+**Billing units.** Wan bills *per successfully generated second of
+video*. OpenAI `gpt-image-1` encodes the output image as tokens and
+bills per million. Replicate bills per second of GPU time for
+non-official models and per output unit for official ones. Stability
+and Ideogram bill in credits. Several providers bill per megapixel, so
+a 4K image costs a multiple of a 1024² one on the same model. Only the
+first of these is expressible in `Usage` today.
+
+**Plan billing.** Alibaba's Token Plan bills in Credits against a
+monthly per-seat quota that does not carry over, and **blocks API
+calls when the quota is exhausted rather than charging overage**. That
+is neither a transient failure nor a request error, which is why the
+failover taxonomy needs a third class.
+
+Sources: [Wan text-to-video API reference](https://www.alibabacloud.com/help/en/model-studio/text-to-video-api-reference) ·
+[Qwen Cloud text-to-video](https://docs.qwencloud.com/developer-guides/video-generation/text-to-video) ·
+[Model Studio Token Plan overview](https://help.aliyun.com/en/model-studio/token-plan-overview) ·
+[Savings Plans and Resource Plans](https://www.alibabacloud.com/help/en/model-studio/savings-plan-and-resource-package) ·
+[OpenAI API pricing](https://developers.openai.com/api/docs/pricing) ·
+[Replicate billing](https://dodopayments.com/blogs/replicate-billing-model) ·
+[Normalised image-model pricing survey](https://invideo.io/blog/ai-image-model-pricing/)
