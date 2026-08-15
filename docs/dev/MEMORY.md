@@ -320,13 +320,23 @@ zero `Audience` now matches nothing, so forgetting it yields empty results
 rather than everyone's memories, and `TestNoUnscopedVectorSearch` parses the
 tree and fails on a string in that argument position.
 
-**Legacy records stay readable.** Anything written before ownership existed has
-an empty owner and `UNSPECIFIED` visibility, and every audience can read it —
-because the alternative is that upgrading hides a single-user node's entire
-memory, which is a data-loss-shaped event caused by a security fix. New records
-always carry an owner, so the exception shrinks rather than standing open. Note
-an *owned* record with `UNSPECIFIED` visibility is not legacy and is treated as
-private: a writer that forgets the field must not silently publish.
+**An unowned record is readable by nobody** — only `Everyone()`, the operator
+path, reaches it, so anything that does slip through can still be cleaned up.
+
+There was briefly a carve-out making unowned readable by all, on the grounds
+that an upgrade must not hide an existing node's entire memory. lobslaw has
+never been deployed, so no records predate the owner field and that carve-out
+guarded the empty set — a standing fail-open protecting a population that
+cannot exist.
+
+Nothing writes an empty owner either: every `types.Claims` construction in the
+tree yields a user id — `anon` for unauthenticated REST, `webhook:<name>`,
+`scheduler`, the Telegram identity. So an unowned record means a bug upstream,
+and `EpisodicIngester.IngestTurn` refuses to write one rather than persisting
+something nothing can recall.
+
+An *owned* record with `UNSPECIFIED` visibility is likewise treated as private:
+a writer that forgets the field must not silently publish.
 
 `owner` is deliberately not `scope`. That field is a category (`episodic`,
 `default`), and `Claims.Scope` is a permission tier — neither identifies a

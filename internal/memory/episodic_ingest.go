@@ -79,6 +79,16 @@ func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration, embedder 
 // the neutral "keep for a while" default; dream re-scores based on
 // recall frequency.
 func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) error {
+	// An unowned record is readable by nobody, so writing one produces
+	// a memory that exists, costs storage, and can never be recalled —
+	// a silent hole rather than a visible failure. Every Claims
+	// construction in the tree yields a user id, so reaching here
+	// without an owner means a caller built a turn without identity.
+	// Refuse, loudly, rather than persisting something inert.
+	if turn.Owner == "" {
+		return fmt.Errorf("episodic ingest: turn has no owner (channel=%q user=%q); "+
+			"a record nobody owns is a record nobody can read", turn.Channel, turn.UserID)
+	}
 	id := ids.New()
 	tags := []string{}
 	if turn.Channel != "" {

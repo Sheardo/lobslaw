@@ -43,6 +43,7 @@ func TestEpisodicIngestCapturesRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = ing.IngestTurn(context.Background(), EpisodicTurn{
+		Owner:       "user:alice",
 		Channel:     "telegram",
 		ChatID:      "123",
 		UserID:      "user:alice",
@@ -92,6 +93,7 @@ func TestEpisodicIngestLongEventTruncates(t *testing.T) {
 		long += "x"
 	}
 	_ = ing.IngestTurn(context.Background(), EpisodicTurn{
+		Owner:       "user:alice",
 		UserMessage: long,
 		AssistReply: "ok",
 		CompletedAt: time.Now(),
@@ -108,6 +110,7 @@ func TestEpisodicIngestSurfacesRaftError(t *testing.T) {
 	applier := &fakeApplier{err: errors.New("no quorum")}
 	ing, _ := NewEpisodicIngester(applier, 0, nil)
 	err := ing.IngestTurn(context.Background(), EpisodicTurn{
+		Owner:       "user:alice",
 		UserMessage: "x",
 		AssistReply: "y",
 		CompletedAt: time.Now(),

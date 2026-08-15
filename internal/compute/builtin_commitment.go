@@ -347,14 +347,15 @@ func identityOwner(ctx context.Context) string {
 // ownedByCaller reports whether this turn may see or act on a record
 // with the given owner.
 //
-// An empty owner is legacy — written before commitments had one — and
-// stays actionable, for the same reason legacy memories stay readable:
-// the alternative is that an upgrade silently orphans every commitment
-// already scheduled, and a reminder that never fires is worse than one
-// visible to the wrong person on a single-user node.
+// An unowned record is actionable by nobody. The carve-out that made
+// one actionable by everybody existed for commitments scheduled before
+// the owner field, and lobslaw has never been deployed, so that
+// population is empty. Nothing writes an empty owner now — every
+// Claims construction yields one — which makes an unowned commitment a
+// bug upstream rather than a historical artefact.
 func ownedByCaller(ctx context.Context, owner string) bool {
 	if owner == "" {
-		return true
+		return false
 	}
 	turn, ok := TurnIdentityFrom(ctx)
 	if !ok || turn.Principal.IsZero() {

@@ -59,16 +59,18 @@ func TestAudienceAllows(t *testing.T) {
 		{"other sees shared", For(bob),
 			vec("user:alice", lobslawv1.Visibility_VISIBILITY_SHARED), true},
 
-		// Legacy records predate ownership. They stay readable because
-		// the alternative is that upgrading hides a single-user node's
-		// entire memory.
-		{"legacy readable by anyone", For(bob),
-			vec("", lobslawv1.Visibility_VISIBILITY_UNSPECIFIED), true},
+		// An unowned record is readable by nobody but Everyone(). The
+		// carve-out that made it readable by all was for records
+		// predating ownership, and lobslaw has never been deployed, so
+		// that population is empty — it was a fail-open guarding
+		// nothing. An unowned record now means a bug upstream.
+		{"unowned readable by nobody", For(bob),
+			vec("", lobslawv1.Visibility_VISIBILITY_UNSPECIFIED), false},
 
 		// Anonymous owns nothing but is not blind: it still sees the
 		// records nobody owns and the ones marked shared.
-		{"anonymous sees legacy", For(""),
-			vec("", lobslawv1.Visibility_VISIBILITY_UNSPECIFIED), true},
+		{"anonymous sees no unowned", For(""),
+			vec("", lobslawv1.Visibility_VISIBILITY_UNSPECIFIED), false},
 		{"anonymous sees shared", For(""),
 			vec("user:alice", lobslawv1.Visibility_VISIBILITY_SHARED), true},
 		{"anonymous sees no private", For(""),
@@ -123,8 +125,11 @@ func TestVectorSearchScopesToOwner(t *testing.T) {
 	for _, h := range hits {
 		got[h.Record().Id] = true
 	}
-	if !got["a"] || !got["legacy"] {
-		t.Errorf("alice lost her own or the legacy record: %v", got)
+	if !got["a"] {
+		t.Errorf("alice lost her own record: %v", got)
+	}
+	if got["legacy"] {
+		t.Error("an unowned record was returned; unowned is readable by nobody")
 	}
 	if got["b"] {
 		t.Error("alice was handed bob's private record")

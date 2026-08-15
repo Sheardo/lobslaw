@@ -56,23 +56,25 @@ func (a Audience) IsZero() bool { return !a.set }
 //
 // Three ways in, in order of how often they matter:
 //
-//   - Legacy. A record written before ownership existed has no owner
-//     and UNSPECIFIED visibility. Those stay readable, because the
-//     alternative is that upgrading hides a single-user node's entire
-//     memory — a data-loss-shaped event caused by a security fix. New
-//     records always carry an owner, so this shrinks over time rather
-//     than being a standing hole.
 //   - Shared. Operator-seeded knowledge and anything about the
 //     deployment rather than about a person.
 //   - Owned. The principal matches.
+//
+// An UNOWNED record is readable by nobody but Everyone(). There used to
+// be a carve-out making it readable by all, on the grounds that an
+// upgrade must not hide an existing node's whole memory — but lobslaw
+// has never been deployed, so there are no records predating ownership
+// and that carve-out was a standing fail-open guarding the empty set.
+// Nothing writes an empty owner either: every Claims construction in
+// the tree yields one ("anon" for unauthenticated REST,
+// "webhook:<name>", "scheduler", the Telegram identity), so an unowned
+// record now means a bug upstream, and being invisible is how it
+// surfaces rather than how it hides.
 func (a Audience) allows(owner string, vis lobslawv1.Visibility) bool {
 	if !a.set {
 		return false
 	}
 	if a.everyone {
-		return true
-	}
-	if owner == "" && vis == lobslawv1.Visibility_VISIBILITY_UNSPECIFIED {
 		return true
 	}
 	if vis == lobslawv1.Visibility_VISIBILITY_SHARED {

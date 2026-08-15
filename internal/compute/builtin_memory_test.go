@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -53,6 +54,12 @@ func newMemoryStoreForTest(t *testing.T) *memory.Store {
 // seedEpisodic writes a record directly via the store (bypassing
 // Raft) so tests don't need a full cluster for search-only cases.
 func seedEpisodic(t *testing.T, store *memory.Store, rec *lobslawv1.EpisodicRecord) {
+	// Owned, because production always is: an unowned record is
+	// readable by nobody, so an unowned fixture tests nothing.
+	if rec.Owner == "" {
+		rec.Owner = "user:alice"
+		rec.Visibility = lobslawv1.Visibility_VISIBILITY_PRIVATE
+	}
 	t.Helper()
 	raw, err := proto.Marshal(rec)
 	if err != nil {
@@ -93,7 +100,7 @@ func TestMemorySearchMatchesEventAndContext(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterMemoryBuiltins(b, MemoryConfig{Store: store, Raft: &fakeApplier{}})
 	fn, _ := b.Get("memory_search")
-	out, exit, err := fn(context.Background(), map[string]string{"query": "coffee"})
+	out, exit, err := fn(memTurn(), map[string]string{"query": "coffee"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +137,7 @@ func TestMemorySearchTagFilter(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterMemoryBuiltins(b, MemoryConfig{Store: store, Raft: &fakeApplier{}})
 	fn, _ := b.Get("memory_search")
-	out, _, _ := fn(context.Background(), map[string]string{"query": "alpha", "tag": "work"})
+	out, _, _ := fn(memTurn(), map[string]string{"query": "alpha", "tag": "work"})
 	var payload struct {
 		Results []map[string]any `json:"results"`
 	}
@@ -146,7 +153,7 @@ func TestMemoryWriteCommitsViaRaft(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterMemoryBuiltins(b, MemoryConfig{Store: newMemoryStoreForTest(t), Raft: applier})
 	fn, _ := b.Get("memory_write")
-	out, exit, err := fn(context.Background(), map[string]string{
+	out, exit, err := fn(memTurn(), map[string]string{
 		"event":      "user likes dark-roast coffee",
 		"context":    "Mentioned preferring French roast specifically.",
 		"importance": "8",
@@ -187,7 +194,7 @@ func TestMemoryWriteRejectsEmptyEvent(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterMemoryBuiltins(b, MemoryConfig{Store: newMemoryStoreForTest(t), Raft: &fakeApplier{}})
 	fn, _ := b.Get("memory_write")
-	_, exit, err := fn(context.Background(), map[string]string{})
+	_, exit, err := fn(memTurn(), map[string]string{})
 	if err == nil || exit == 0 {
 		t.Error("empty event should fail")
 	}
@@ -199,7 +206,7 @@ func TestMemoryWriteSurfacesRaftError(t *testing.T) {
 	b := NewBuiltins()
 	_ = RegisterMemoryBuiltins(b, MemoryConfig{Store: newMemoryStoreForTest(t), Raft: applier})
 	fn, _ := b.Get("memory_write")
-	_, _, err := fn(context.Background(), map[string]string{"event": "x"})
+	_, _, err := fn(memTurn(), map[string]string{"event": "x"})
 	if err == nil {
 		t.Error("raft error should propagate")
 	}
@@ -236,7 +243,7 @@ func TestDreamNapDispatchesAndShapesResponse(t *testing.T) {
 	if !ok {
 		t.Fatal("dream_nap not registered")
 	}
-	out, exit, err := fn(context.Background(), nil)
+	out, exit, err := fn(memTurn(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +275,7 @@ func TestDreamNapSurfacesServiceError(t *testing.T) {
 		Dreamer: dreamer,
 	})
 	fn, _ := b.Get("dream_nap")
-	_, _, err := fn(context.Background(), nil)
+	_, _, err := fn(memTurn(), nil)
 	if err == nil {
 		t.Error("service error should propagate")
 	}
@@ -284,4 +291,14 @@ func TestDreamNapSkippedWhenDreamerNil(t *testing.T) {
 	if _, ok := b.Get("dream_nap"); ok {
 		t.Error("dream_nap should not be registered when Dreamer is nil")
 	}
+}
+
+// memTurn is a turn owned by the same principal the fixtures use.
+// Production always has one; a bare context is an anonymous caller,
+// which now correctly sees nothing owned.
+func memTurn() context.Context {
+	return WithTurnIdentity(context.Background(), TurnIdentity{
+		UserID:    "alice",
+		Principal: identity.User("alice"),
+	})
 }
