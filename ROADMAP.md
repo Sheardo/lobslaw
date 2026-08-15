@@ -82,8 +82,8 @@ sections further down propose:
 | # | State |
 |---|---|
 | R1 | **Largely landed** — `BucketSessions` + `BucketSessionMessages`, `internal/memory/session.go`, `internal/gateway/conversation.go`, `compute.ContextBudget`, rolling summary, `session_search`/`session_list`/`session_read`. Note the shipped design keeps messages in their own bucket rather than inline on the session record as proposed below |
-| R4 | **Done.** `Engine.Evaluate` returns `EffectDeny`/"no rule matched (default-deny)" at the bottom, denies nil claims, and unknown condition types fail their rule. One hole left: a condition that *errors* skips the rule (`engine.go:111`), so a **deny** rule whose condition errors falls through to whatever lower-priority rule matches next. Fail-closed for allow rules, fail-open for deny ones |
-| R19 | **Mostly done.** `internal/skills/signing.go` + `ParseWithPolicy` enforce detached ed25519 signatures over the manifest and its referenced files, with an Off/Warn/Required policy. The third acceptance item is **not** met: `Invoker.Invoke` executes the handler off disk with no re-verification, so tamper between registry load and exec is uncaught |
+| R4 | **Done.** `Engine.Evaluate` returns `EffectDeny`/"no rule matched (default-deny)" at the bottom, denies nil claims, and a rule whose conditions cannot be evaluated is skipped only when it would have allowed — deny and require_confirmation apply anyway |
+| R19 | **Done for the handler.** `signing.go` + `ParseWithPolicy` enforce detached ed25519 signatures over `manifest.yaml`; the manifest pins `handler_sha256`, which is what makes the signature cover executable content, and the invoker re-hashes before exec. Signed manifests that pin nothing are rejected. Still open: only the handler is pinned, so a skill reading adjacent data files is unprotected, and there is no grace flag for migrating an existing signed corpus (nothing is deployed, so none exists) |
 | R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
 | R7 | **Partial** — see the status note on the section itself |
 | R0, R2, R3 | Not started. Non-leader writes return `"not the raft leader; retry at %s"` rather than forwarding (`memory/service.go:234,266,370`); `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record; turns are dispatched straight into `go func()` at `gateway/conversation.go:178` |
@@ -931,10 +931,10 @@ that warns on manifest-only signatures before it starts rejecting them.
 
 ### Acceptance
 
-- [ ] A modified handler fails verification with the manifest untouched.
-- [ ] A modified reference file fails verification.
-- [ ] Tamper between load and invoke is caught before execution.
-- [ ] A manifest-only signature warns under a grace flag and is rejected once it is cleared.
+- [x] A modified handler fails verification with the manifest untouched.
+- [ ] A modified reference file fails verification. *Only the handler is pinned; a skill that reads adjacent data files is still unprotected.*
+- [x] Tamper between load and invoke is caught before execution.
+- [x] ~~A manifest-only signature warns under a grace flag~~ — no grace flag. A signed manifest that pins no handler is rejected outright. The flag existed to migrate a corpus of already-signed skills; there isn't one.
 
 ---
 

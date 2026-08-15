@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,14 +23,30 @@ func generateKeypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 
 // writeSignedSkill creates a manifest + handler + detached ed25519
 // signature in dir. Returns the manifest path for convenience.
+//
+// The manifest pins the handler digest, because a signed manifest
+// without one is now refused — the signature would cover no
+// executable content.
 func writeSignedSkill(t *testing.T, dir string, priv ed25519.PrivateKey) string {
 	t.Helper()
 	writeHandler(t, dir, "h.sh", "echo")
-	body := []byte(`name: signed-skill
+	return writeSignedManifest(t, dir, priv, "signed-skill")
+}
+
+// writeSignedManifest signs a manifest for a handler that already
+// exists in dir, digesting it as a publisher would.
+func writeSignedManifest(t *testing.T, dir string, priv ed25519.PrivateKey, name string) string {
+	t.Helper()
+	sum, err := fileDigest(filepath.Join(dir, "h.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Appendf(nil, `name: %s
 version: 1.0.0
 runtime: bash
 handler: h.sh
-`)
+handler_sha256: %s
+`, name, sum)
 	manifestPath := filepath.Join(dir, "manifest.yaml")
 	if err := os.WriteFile(manifestPath, body, 0o644); err != nil {
 		t.Fatal(err)

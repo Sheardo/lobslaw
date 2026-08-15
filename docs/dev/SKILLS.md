@@ -20,6 +20,7 @@ version: 1.0.0
 description: Render today's plan in a natural voice
 runtime: python        # or: bash
 handler: handler.py    # relative to this manifest's directory
+handler_sha256: 9f86d0…  # hex SHA-256 of handler.py; required when signed
 storage:
   - label: shared
     mode: read         # default; or: write
@@ -38,6 +39,7 @@ Parse rejects manifests that violate any of:
 - **Version** non-empty. Parsed with `golang.org/x/mod/semver`; non-semver sorts lexicographically (tolerated, but a warn shows up in the registry log).
 - **Runtime** one of `python`, `bash`. Unknown runtimes reject — better than a confusing "binary not found" at invocation.
 - **Handler** resolves to a file inside the manifest directory (blocks `../` traversal in operator-authored files). The file must exist — a manifest pointing at a missing handler fails Parse, not first invocation.
+- **handler_sha256**, when present, must match the handler's actual contents. Checked under every signing policy including `off`: the digest is a claim the manifest makes about itself, and a mismatch is tampering regardless of whether provenance was demanded. Re-checked immediately before exec — see [Manifest signing](#manifest-signing).
 - **Storage** entries: non-empty label, mode in `{read, write}` (default: read). Raw paths are never accepted — operators wire a storage mount first.
 
 ---
@@ -265,6 +267,31 @@ Example with openssl:
 ```bash
 openssl pkeyutl -sign -inkey privkey.pem -rawin -in manifest.yaml > manifest.yaml.sig
 ```
+
+### What the signature actually covers
+
+The signature is over `manifest.yaml`'s bytes and nothing else. That only
+protects the handler because the manifest pins its digest — so pin it before
+signing, and re-pin whenever the handler changes:
+
+```bash
+sha256sum handler.py    # paste into handler_sha256:, then sign
+```
+
+**A signed manifest without `handler_sha256` is rejected.** It would otherwise
+be worse than an unsigned one: the registry prefers signed candidates and the
+audit log names a signer, while the signature covers a document that merely
+*names* a script. Swapping the script afterwards would leave the signature
+perfectly valid.
+
+The digest is checked twice — at parse, and again immediately before exec.
+The second check exists because registration and invocation are separated by
+however long the node has been up, and the registry holds a path, not
+content: everything proved at load is a statement about a file that may since
+have been rewritten. This does not make the window zero (the file could
+change between the final hash and the `execve`), but it reduces it from hours
+to microseconds and catches the realistic case — a handler edited on a
+writable mount after the node started.
 
 ---
 
