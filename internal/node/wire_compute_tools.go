@@ -102,6 +102,9 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 	if err := n.wireImageTools(builtins); err != nil {
 		return nil, err
 	}
+	if err := n.wireVideoTools(builtins); err != nil {
+		return nil, err
+	}
 
 	return binariesProvider, nil
 }

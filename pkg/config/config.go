@@ -225,6 +225,7 @@ type ComputeConfig struct {
 	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
 	Speak               SpeakConfig      `koanf:"speak,omitempty"`
 	Image               ImageGenConfig   `koanf:"image,omitempty"`
+	Video               VideoGenConfig   `koanf:"video,omitempty"`
 
 	// ArtifactMount names the storage mount that receives generated
 	// files (speech, images, video). Empty falls back to the first
@@ -401,6 +402,9 @@ type SpeakConfig = ModalityOverride
 // builtin. Named ImageGen because VisionConfig already covers reading
 // images; this one writes them.
 type ImageGenConfig = ModalityOverride
+
+// VideoGenConfig selects the provider backing generate_video.
+type VideoGenConfig = ModalityOverride
 
 // AudioConfig selects the provider backing the audio modality
 // builtins (transcription of inbound voice notes and audio files).
