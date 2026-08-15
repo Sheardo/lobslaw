@@ -388,6 +388,10 @@ type llmEndpoint struct {
 	format     string
 	via        string // "override:<label>", "capability:<label>"
 	matchedCap string // empty if override; else the capability that matched
+	// driver is the provider's declared wire protocol. Empty means the
+	// modality's default, which is the OpenAI-compatible shape
+	// everywhere it has one.
+	driver string
 }
 
 // findProvider scans cfg.Compute.Providers for one matching label.
@@ -473,6 +477,7 @@ func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, vi
 		apiKey:   key,
 		format:   format,
 		via:      via,
+		driver:   p.Driver,
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -29,6 +30,16 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterChat(compute.DriverOpenAI, compute.OpenAIChatFactory)
 		s.RegisterChat(compute.DriverAnthropic, anthropicChatFactory)
 		s.RegisterChat(compute.DriverMock, compute.MockChatFactory)
+
+		// Generation modalities resolve their driver by name too, so a
+		// second vendor is a registration rather than a rewrite of the
+		// wiring. Job has no default registration under DriverOpenAI:
+		// the async protocols share no shape, so there is nothing
+		// sensible to default to.
+		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
+		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
+		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
+		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
 		driverSet = s
 	})
 	return driverSet
@@ -54,13 +65,31 @@ func anthropicChatFactory(cfg compute.ChatDriverConfig) (compute.ChatDriver, err
 // it was handed. Vertex and Bedrock will add kinds here, not branches
 // inside drivers.
 func credentialFor(p config.ProviderConfig, apiKey string) compute.Credential {
+	return credentialForDriver(p.Driver, apiKey)
+}
+
+// credentialForDriver picks the auth shape a driver expects. Split out
+// from credentialFor because the generation modalities resolve their
+// driver from an already-resolved endpoint rather than from the whole
+// ProviderConfig, and both paths must agree on what "anthropic" means.
+func credentialForDriver(driver, apiKey string) compute.Credential {
 	if apiKey == "" {
 		return nil
 	}
-	switch strings.ToLower(strings.TrimSpace(p.Driver)) {
+	switch strings.ToLower(strings.TrimSpace(driver)) {
 	case compute.DriverAnthropic:
 		return compute.NewHeaderCredential("x-api-key", apiKey)
 	default:
 		return compute.NewBearerCredential(apiKey)
 	}
+}
+
+// dashscopeJobFactory adapts the Wan video driver to the registry.
+func dashscopeJobFactory(cfg compute.JobDriverConfig) (compute.JobDriver, error) {
+	return dashscope.New(dashscope.Config{
+		SubmitEndpoint: cfg.Endpoint,
+		Model:          cfg.Model,
+		Credential:     cfg.Credential,
+		HTTPClient:     cfg.HTTPClient,
+	})
 }
