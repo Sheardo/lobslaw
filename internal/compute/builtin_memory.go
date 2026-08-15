@@ -78,7 +78,7 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store, cfg.CrossOwner)); err != nil {
 		return err
 	}
-	if err := b.Register("dream_recap", newDreamRecapHandler(cfg.Store)); err != nil {
+	if err := b.Register("dream_recap", newDreamRecapHandler(cfg.Store, cfg.CrossOwner)); err != nil {
 		return err
 	}
 	if cfg.Forgetter != nil {
@@ -279,6 +279,13 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 				continue
 			}
 			if err := proto.Unmarshal(raw, &epi); err != nil {
+				continue
+			}
+			// Re-checked rather than inherited from the vector that
+			// pointed here. A legacy or shared vector can carry
+			// SourceIds into a private episodic record, and hydration
+			// would then hand over the text the vector only indexed.
+			if !audience.AllowsEpisodic(&epi) {
 				continue
 			}
 			if tagFilter != "" && !containsString(epi.Tags, tagFilter) {
@@ -602,8 +609,15 @@ func tsNano(ts *timestamppb.Timestamp) int64 {
 // cycle), newest-first. Read-only; safe on followers. Narration
 // discipline is enforced prompt-side — the tool returns structured
 // JSON; the bot re-renders in voice.
-func newDreamRecapHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+func newDreamRecapHandler(store *memory.Store, authz CrossOwnerAuthorizer) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		// Consolidations summarise the records they were merged from,
+		// so a recap of someone else's memories is a summary of their
+		// memories. Dream only clusters within an owner, which means
+		// each consolidation has exactly one — filtering here is
+		// sufficient, and does not need to walk the sources.
+		turn, _ := TurnIdentityFrom(ctx)
+		audience := readAudience(ctx, turn, authz)
 		limit := 10
 		if raw, ok := args["limit"]; ok && raw != "" {
 			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
@@ -631,6 +645,9 @@ func newDreamRecapHandler(store *memory.Store) BuiltinFunc {
 		err := store.ForEach(memory.BucketVectorRecords, func(_ string, raw []byte) error {
 			var v lobslawv1.VectorRecord
 			if err := proto.Unmarshal(raw, &v); err != nil {
+				return nil
+			}
+			if !audience.AllowsVector(&v) {
 				return nil
 			}
 			if len(v.SourceIds) < 2 {

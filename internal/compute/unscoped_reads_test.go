@@ -10,43 +10,52 @@ import (
 	"testing"
 )
 
-// TestNoUnscopedMemoryBucketReads guards the property the earlier
-// TestNoUnscopedVectorSearch was too narrow to protect.
+// memoryBuckets are the stores holding user-owned records. A read of
+// either has to decide who may see the result.
+var memoryBuckets = map[string]bool{
+	"BucketEpisodicRecords": true,
+	"BucketVectorRecords":   true,
+}
+
+// audienceMarkers are the ways a function can demonstrate it consulted
+// visibility. Named rather than inferred: a dataflow analysis would be
+// more precise, and would also be a program nobody maintains.
+var audienceMarkers = map[string]bool{
+	"AllowsEpisodic": true,
+	"AllowsVector":   true,
+	"readAudience":   true,
+	"For":            true,
+	"Everyone":       true,
+}
+
+// TestNoUnscopedMemoryBucketReads is the third iteration of this guard,
+// and the history is the argument for its current shape.
 //
-// That test asserted every *VectorSearch call* passes an Audience, and
-// it passed for weeks while `memory_search` leaked every owner's
-// records through a second path: runSubstringSearch walked
-// BucketEpisodicRecords directly, never touching vector search at all.
-// Worse, the semantic path falls back to substring when embedding
-// fails and *augments* with substring matches when it under-delivers —
-// so on a node with no embedder the tool was simply unscoped.
+// v1 asserted that every call to VectorSearch passed an Audience. It
+// passed for a week while memory_search leaked every owner's records
+// through runSubstringSearch, which walks the episodic bucket directly
+// and never calls VectorSearch at all.
 //
-// The lesson is that the invariant is not "calls to this function are
-// scoped". It is "nothing reads a memory bucket without deciding who
-// may see the result". So this guards the bucket, not the function:
-// any file that reads BucketEpisodicRecords or BucketVectorRecords
-// must mention an audience somewhere.
+// v2 widened to the bucket but checked per FILE — does a file that
+// reads a memory bucket mention an audience anywhere. It passed on a
+// branch that still contained an unscoped dream_recap, because other
+// functions in the same file had been fixed and the word appeared
+// nearby.
 //
-// Deliberately coarse — file-level rather than call-level — because a
-// precise dataflow check would be a small analyser and this only has
-// to be harder to get wrong than the last one was.
+// So: per FUNCTION. A function that reads a memory bucket must itself
+// consult visibility, or name a helper that does. Both earlier versions
+// were narrower than the property they claimed to protect, which is
+// worth remembering before trusting the next structural test — this one
+// included.
 func TestNoUnscopedMemoryBucketReads(t *testing.T) {
 	t.Parallel()
-
-	const (
-		episodic = "BucketEpisodicRecords"
-		vectors  = "BucketVectorRecords"
-	)
-	// Evidence that a file thought about visibility at all.
-	audienceMarkers := []string{
-		"Audience", "audience", "AllowsEpisodic", "AllowsVector", "readAudience",
-	}
 
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	fset := token.NewFileSet()
+
 	for _, path := range files {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -55,43 +64,43 @@ func TestNoUnscopedMemoryBucketReads(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := string(src)
-		if !strings.Contains(text, episodic) && !strings.Contains(text, vectors) {
-			continue
-		}
-		// Parsed so a bucket named only in a comment does not count as
-		// a read — the comment explaining this rule would otherwise
-		// trip it.
 		file, err := parser.ParseFile(fset, path, src, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", path, err)
 		}
-		var reads bool
-		ast.Inspect(file, func(n ast.Node) bool {
-			sel, ok := n.(*ast.SelectorExpr)
-			if !ok {
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			var readsBucket, consultsAudience bool
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch e := n.(type) {
+				case *ast.SelectorExpr:
+					if memoryBuckets[e.Sel.Name] {
+						readsBucket = true
+					}
+					if audienceMarkers[e.Sel.Name] {
+						consultsAudience = true
+					}
+				case *ast.Ident:
+					if audienceMarkers[e.Name] {
+						consultsAudience = true
+					}
+				}
 				return true
+			})
+			// A closure inside the function counts as part of it: the
+			// bucket scans here are all ForEach callbacks, and the
+			// filter usually lives in the same closure.
+			if readsBucket && !consultsAudience {
+				t.Errorf("%s: %s reads a memory bucket without consulting an audience.\n"+
+					"    Every read decides who may see the result — see\n"+
+					"    internal/memory/visibility.go. Scoping the vector index does\n"+
+					"    not scope a function that walks a bucket directly.",
+					fset.Position(fn.Pos()), fn.Name.Name)
 			}
-			if sel.Sel.Name == episodic || sel.Sel.Name == vectors {
-				reads = true
-			}
-			return true
-		})
-		if !reads {
-			continue
-		}
-		var scoped bool
-		for _, m := range audienceMarkers {
-			if strings.Contains(text, m) {
-				scoped = true
-				break
-			}
-		}
-		if !scoped {
-			t.Errorf("%s reads a memory bucket and never mentions an audience.\n"+
-				"    Every read has to decide who may see the result — see\n"+
-				"    internal/memory/visibility.go. Scoping the vector index does\n"+
-				"    not scope a reader that walks the bucket directly.", path)
 		}
 	}
 }
