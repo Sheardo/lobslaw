@@ -332,6 +332,13 @@ func normaliseStop(s string) string {
 	case "":
 		return "stop"
 	default:
+		// Anthropic adds stop reasons over time — "refusal" is the
+		// current example — so unknown values pass through rather than
+		// being flattened to "stop". That is safe because the agent
+		// loop continues on tool calls being PRESENT, not on the
+		// finish reason, and only logs this: an unrecognised reason
+		// ends the turn and reaches the operator intact, where
+		// flattening it would hide a refusal as a normal answer.
 		return s
 	}
 }
