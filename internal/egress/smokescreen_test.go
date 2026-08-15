@@ -167,10 +167,12 @@ func TestSmokescreenSetACLHotReload(t *testing.T) {
 	c := prov.For("test-role")
 	c.HTTPClient().Timeout = 2 * time.Second
 
-	// First call: should be denied (upstream not in ACL)
-	if _, err := c.HTTPClient().Get(upstream.URL); err == nil {
-		// might still get a non-2xx — acceptable; we only fail
-		// if the call surprisingly succeeds.
+	// First call: should be denied (upstream not in ACL). Either a
+	// transport error or a non-2xx is acceptable, so the result is
+	// deliberately unasserted — the call is here for its side effect
+	// of exercising the pre-reload ACL path.
+	if resp, err := c.HTTPClient().Get(upstream.URL); err == nil {
+		_ = resp.Body.Close()
 	}
 
 	// Hot-reload: now allow the upstream

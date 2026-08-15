@@ -256,15 +256,6 @@ func (s *Satisfier) HostsFor(installs []InstallSpec) []string {
 	return out
 }
 
-func pickSpec(installs []InstallSpec) (InstallSpec, bool) {
-	for _, spec := range installs {
-		if spec.Match() {
-			return spec, true
-		}
-	}
-	return InstallSpec{}, false
-}
-
 // LookPath resolves a binary name against the supplied prefix's bin
 // dir first, then the system PATH. Exported so callers (skill
 // invoker, doctor) can do consistent lookup without holding a

@@ -96,10 +96,10 @@ func TestServiceGetPeersIncludesLocal(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	// Register two peers.
-	svc.Register(context.Background(), &lobslawv1.RegisterRequest{
+	_, _ = svc.Register(context.Background(), &lobslawv1.RegisterRequest{
 		Node: &lobslawv1.NodeInfo{Id: "peer-1", Address: "a"},
 	})
-	svc.Register(context.Background(), &lobslawv1.RegisterRequest{
+	_, _ = svc.Register(context.Background(), &lobslawv1.RegisterRequest{
 		Node: &lobslawv1.NodeInfo{Id: "peer-2", Address: "b"},
 	})
 

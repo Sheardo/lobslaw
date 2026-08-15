@@ -329,10 +329,3 @@ func (a *Adjuster) CooldownRemaining(dimension string) time.Duration {
 	return cooldown - elapsed
 }
 
-// touch is exposed only for tests so they can advance the internal
-// clock without exporting Now().
-func (a *Adjuster) touch(t time.Time) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lastAdjusted["__touch"] = t
-}

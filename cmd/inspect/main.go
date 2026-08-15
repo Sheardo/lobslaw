@@ -44,7 +44,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, "open:", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	// bbolt fsyncs on every Update, so durability does not depend on
+	// this Close; it only releases the file lock and mmap at exit.
+	defer func() { _ = store.Close() }()
 
 	// With a search argument, run a transcript search instead of the
 	// full dump — the operator-side view of what session_search

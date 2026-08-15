@@ -193,8 +193,11 @@ func TestLookPathFallsBackToSystem(t *testing.T) {
 	if err != nil {
 		t.Skip("no /bin/sh on test host")
 	}
-	if !strings.HasPrefix(got, prefix) && got != "" {
-		// It found system sh — that's the path we want.
+	// The temp prefix contains no "sh", so a nil error means LookPath
+	// fell through to the system copy. Only the fallthrough is
+	// asserted; which system path it picked is host-dependent.
+	if got == "" {
+		t.Error("LookPath returned no error but an empty path")
 	}
 }
 

@@ -298,7 +298,12 @@ func main() {
 
 	if err := n.Start(ctx); err != nil {
 		logger.Error("node.Start", "error", err)
-		os.Exit(1)
+		// gocritic exitAfterDefer: the deferred signal.Stop(hupCh) is
+		// knowingly skipped. Unregistering a signal handler
+		// immediately before the process exits has no observable
+		// effect, and restructuring main to return an exit code just
+		// to satisfy the check is not worth the control-flow change.
+		os.Exit(1) //nolint:gocritic // exitAfterDefer: signal.Stop is moot at process exit
 	}
 	logger.Info("lobslaw stopped")
 }

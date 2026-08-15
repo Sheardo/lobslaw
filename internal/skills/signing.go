@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -168,11 +167,4 @@ func readSignature(manifestPath string) ([]byte, error) {
 		return decoded, nil
 	}
 	return raw, nil
-}
-
-// sigPathFor returns the detached-signature path convention used
-// across the repo. Exposed so CLI tooling ("lobslaw skill sign")
-// and the loader share the same filename.
-func sigPathFor(manifestDir string) string {
-	return filepath.Join(manifestDir, "manifest.yaml.sig")
 }

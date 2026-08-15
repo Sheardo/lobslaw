@@ -142,7 +142,7 @@ func newExaWebSearchHandler(endpoint, apiKey string, client *http.Client) Builti
 		if err != nil {
 			return nil, 1, fmt.Errorf("web_search: http: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
 			return nil, 1, fmt.Errorf("web_search: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))

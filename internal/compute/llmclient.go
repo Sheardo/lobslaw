@@ -420,7 +420,14 @@ func toOpenAIRequest(req ChatRequest, defaultModel string) openAIRequest {
 	for _, t := range req.Tools {
 		out.Tools = append(out.Tools, openAITool{
 			Type: "function",
-			Function: openAIToolFunc{
+			// Deliberately field-by-field rather than the
+			// openAIToolFunc(t) conversion staticcheck suggests: this
+			// is the domain->wire boundary, and the conversion only
+			// happens to compile because the layouts coincide today.
+			// Spelling the mapping out means a new field on Tool has
+			// to be opted in to the OpenAI payload rather than
+			// silently appearing on the wire.
+			Function: openAIToolFunc{ //nolint:staticcheck // S1016: explicit mapping at the wire boundary
 				Name:        t.Name,
 				Description: t.Description,
 				Parameters:  t.Parameters,

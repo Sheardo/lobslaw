@@ -282,7 +282,9 @@ func TestLoadPolicyDirRejectsNonDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	// Nothing was written; the file exists only so LoadPolicyDir has a
+	// non-directory path to reject.
+	_ = f.Close()
 	t.Cleanup(func() { _ = os.Remove(f.Name()) })
 
 	_, err = LoadPolicyDir(f.Name(), LoadOptions{})
@@ -296,7 +298,7 @@ func TestLoadPolicyDirRejectsNonDirectory(t *testing.T) {
 // Unix-only (Windows has no Unix mode bits — checkPolicyFilePerms
 // on Windows is a no-op warn, tested separately).
 func TestLoadPolicyDirRejectsGroupWritableFile(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("mode-bit checks don't apply on Windows")
 	}
 	t.Parallel()
@@ -328,7 +330,7 @@ paths = ["/tmp:rw"]
 // non-standard options) need a way to turn the check off without
 // having to decompose LoadOptions' individual knobs.
 func TestLoadPolicyDirSkipPermChecksAcceptsAnyFile(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("mode-bit checks don't apply on Windows")
 	}
 	t.Parallel()
@@ -353,7 +355,7 @@ paths = ["/tmp:rw"]
 // an impossible trusted UID (math.MaxInt32 — no real file owner).
 // The test file is owned by the test-runner UID, so this must fail.
 func TestLoadPolicyDirRejectsWrongUID(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("UID checks don't apply on Windows")
 	}
 	t.Parallel()
@@ -378,7 +380,7 @@ paths = ["/tmp:rw"]
 // TestLoadPolicyDirRejectionIsPerFileNotFatal ensures one bad file
 // doesn't poison the whole load — sibling good files still surface.
 func TestLoadPolicyDirRejectionIsPerFileNotFatal(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("mode checks off on Windows")
 	}
 	t.Parallel()
@@ -401,7 +403,7 @@ func TestLoadPolicyDirRejectionIsPerFileNotFatal(t *testing.T) {
 	}
 }
 
-func runtime_GOOS() string { return runtime.GOOS }
+func runtimeGOOS() string { return runtime.GOOS }
 
 // --- Multi-dir LoadPolicyDirs tests -------------------------------------
 
@@ -500,7 +502,7 @@ paths = ["/tmp:rw"]
 // dirs aggregate into result.Rejected so operators see the full
 // accounting in one place.
 func TestLoadPolicyDirsUnionsRejected(t *testing.T) {
-	if runtime_GOOS() == "windows" {
+	if runtimeGOOS() == "windows" {
 		t.Skip("mode-bit checks don't apply on Windows")
 	}
 	t.Parallel()

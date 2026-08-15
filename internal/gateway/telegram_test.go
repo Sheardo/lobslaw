@@ -513,7 +513,7 @@ func newPollHarness(t *testing.T, agent *compute.Agent, batches [][]byte) *pollH
 			h.batches = h.batches[1:]
 			h.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"ok":true,"result":%s}`, batch)
+			_, _ = fmt.Fprintf(w, `{"ok":true,"result":%s}`, batch)
 		case strings.HasSuffix(r.URL.Path, "/deleteWebhook"):
 			h.mu.Lock()
 			h.deleteWebhookHit = true

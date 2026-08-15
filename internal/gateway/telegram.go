@@ -1119,7 +1119,7 @@ func (h *TelegramHandler) getUpdates(ctx context.Context, offset int64, timeout 
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -1186,7 +1186,7 @@ func (h *TelegramHandler) deleteWebhook(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("deleteWebhook: HTTP %d", resp.StatusCode)

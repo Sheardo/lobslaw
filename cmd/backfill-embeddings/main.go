@@ -79,7 +79,9 @@ func main() {
 	if err != nil {
 		die("open state.db at %s: %v (is the node running? stop it first)", statePath, err)
 	}
-	defer store.Close()
+	// bbolt fsyncs on every Update, so durability does not depend on
+	// this Close; it only releases the file lock and mmap at exit.
+	defer func() { _ = store.Close() }()
 
 	apiKey, err := config.ResolveSecret(cfg.Compute.Embeddings.APIKeyRef)
 	if err != nil {
@@ -218,33 +220,6 @@ func main() {
 	fmt.Printf("Had vector:  %d (skipped)\n", alreadyHas)
 	fmt.Printf("Backfilled:  %d\n", backfilled)
 	fmt.Printf("Failed:      %d\n", failed)
-}
-
-// embedWithRetry wraps Embed with backoff on MiniMax's RPM
-// rate-limit error (status_code 1002). Other errors bubble
-// immediately — only the rate-limit case is worth retrying.
-func embedWithRetry(ec *compute.EmbeddingClient, text string) ([]float32, error) {
-	var lastErr error
-	for attempt := 0; attempt < 5; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		vec, err := ec.Embed(ctx, text)
-		cancel()
-		if err == nil {
-			return vec, nil
-		}
-		lastErr = err
-		msg := err.Error()
-		if !isRateLimited(msg) {
-			return nil, err
-		}
-		wait := time.Duration(5<<attempt) * time.Second
-		if wait > 60*time.Second {
-			wait = 60 * time.Second
-		}
-		fmt.Fprintf(os.Stderr, "  [RATE-LIMIT] %v — sleeping %s\n", err, wait)
-		time.Sleep(wait)
-	}
-	return nil, fmt.Errorf("rate-limited after retries: %w", lastErr)
 }
 
 // embedBatchWithRetry is the batch analogue of embedWithRetry.

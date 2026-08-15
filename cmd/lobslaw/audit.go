@@ -86,5 +86,12 @@ func auditVerify(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "audit BROKEN at entry %s (after %d entries) — %s\n",
 		res.FirstBreakID, res.EntriesChecked, abs)
-	os.Exit(1)
+	// gocritic exitAfterDefer: the deferred sink.Close is knowingly
+	// skipped. `audit verify` never appends, and LocalSink's
+	// lumberjack writer opens the file lazily on first write, so
+	// there is no handle to flush and nothing to lose. Threading an
+	// exit code back through the command to make the defer run would
+	// be churn for no gain.
+	os.Exit(1) //nolint:gocritic // exitAfterDefer: sink.Close is a no-op on this read-only path
+
 }

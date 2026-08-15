@@ -359,7 +359,7 @@ func (n *RaftNode) publishLeadership() {
 // usually surfaces split-brain bootstraps: each node listing only
 // itself means they bootstrapped independently and never joined.
 func (n *RaftNode) logClusterSnapshot() {
-	if !n.log.Enabled(nil, slog.LevelDebug) {
+	if !n.log.Enabled(context.Background(), slog.LevelDebug) {
 		return
 	}
 	stats := n.Raft.Stats()

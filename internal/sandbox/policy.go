@@ -158,11 +158,16 @@ func (p *Policy) Validate() error {
 		}
 	}
 	for i, m := range p.Mounts {
+		// ST1005 reads the leading "Mounts" as a capitalised sentence,
+		// but it is the Policy struct field name — the same as the
+		// "ReadOnlyPaths:" prefix above, which the check accepts only
+		// because its inner caps make it look like an identifier.
+		// Naming the offending field is the point of these messages.
 		if len(m.Path) == 0 || m.Path[0] != '/' {
-			return fmt.Errorf("Mounts[%d]: %q is not absolute", i, m.Path)
+			return fmt.Errorf("Mounts[%d]: %q is not absolute", i, m.Path) //nolint:staticcheck // ST1005: "Mounts" is a struct field name
 		}
 		if !m.Read && !m.Write && !m.Exec {
-			return fmt.Errorf("Mounts[%d]: %q has no access bits set", i, m.Path)
+			return fmt.Errorf("Mounts[%d]: %q has no access bits set", i, m.Path) //nolint:staticcheck // ST1005: "Mounts" is a struct field name
 		}
 	}
 	if p.CPUQuota < 0 {

@@ -194,7 +194,8 @@ func buildShellPolicy() *sandbox.Policy {
 			// mounts so shell_command falls open. This is the right
 			// behaviour for test setups; flag it so prod misconfig
 			// doesn't pass silently.
-			fmt.Fprintln(stderrForLog(),
+			// Diagnostic warning to stderr; nothing useful to do if it fails.
+			_, _ = fmt.Fprintln(stderrForLog(),
 				"shell_command: no storage mounts active — Landlock sandbox skipped (test/dev mode)")
 		})
 		return nil

@@ -173,7 +173,7 @@ func TestDreamPrunePreservesLongTerm(t *testing.T) {
 	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{
 		PruneThreshold: 0.1,
 		HalfLife:       14 * 24 * time.Hour,
-		Now:            func() time.Time { return fixedNow() },
+		Now:            fixedNow,
 	}, nil)
 
 	result, err := d.Run(ctx)
@@ -338,7 +338,7 @@ func TestDreamRunWithoutSummarizerSkipsConsolidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{Now: func() time.Time { return fixedNow() }}, nil)
+	d := NewDreamRunner(svc.raft, svc.store, nil, DreamConfig{Now: fixedNow}, nil)
 	result, err := d.Run(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func TestServiceDreamViaGRPC(t *testing.T) {
 	// Wire a stub summarizer.
 	sum := &stubSummarizer{summary: "consolidated", embedding: []float32{0.1}}
 	svc.DreamRunner().SetSummarizer(sum)
-	svc.DreamRunner().cfg.Now = func() time.Time { return fixedNow() }
+	svc.DreamRunner().cfg.Now = fixedNow
 
 	// Seed one candidate.
 	_, err := svc.EpisodicAdd(ctx, &lobslawv1.EpisodicAddRequest{

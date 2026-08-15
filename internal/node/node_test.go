@@ -219,7 +219,7 @@ func TestSingleNodeStartAndPolicyRoundTrip(t *testing.T) {
 			<-done
 			t.Fatalf("dial: %v", err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		client := lobslawv1.NewPolicyServiceClient(conn)
 		rule := &lobslawv1.PolicyRule{

@@ -68,7 +68,7 @@ func TestSigningPolicyIsValid(t *testing.T) {
 		}
 	}
 	for _, p := range []SigningPolicy{"", "yes", "true", "REQUIRE_YES"} {
-		if SigningPolicy(p).IsValid() {
+		if p.IsValid() {
 			t.Errorf("%q should not be valid", p)
 		}
 	}

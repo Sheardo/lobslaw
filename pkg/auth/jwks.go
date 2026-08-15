@@ -128,7 +128,11 @@ func (c *JWKSCache) Get(ctx context.Context, kid string) (any, string, error) {
 		return nil, "", errors.New("jwks: cache not configured")
 	}
 	// Lazy initial fetch + age-based refresh under a read-lock peek.
-	c.maybeRefresh(ctx, false)
+	// The error is deliberately dropped: this refresh is opportunistic,
+	// and a transient IdP outage must not stop us serving a kid that is
+	// still in cache. If the lookup below misses, the forced refresh
+	// that follows reports the failure properly.
+	_ = c.maybeRefresh(ctx, false)
 
 	if key, ok := c.lookup(kid); ok {
 		return key.pub, key.alg, nil

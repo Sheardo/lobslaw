@@ -216,7 +216,7 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	if err != nil {
 		return nil, fmt.Errorf("EmbedBatch: http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("EmbedBatch: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256))
@@ -315,7 +315,7 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 	if err != nil {
 		return nil, fmt.Errorf("Embed: http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Embed: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256))

@@ -760,14 +760,5 @@ func TestInvokerPassesPolicyToRunner(t *testing.T) {
 	}
 }
 
-func containsString(s []string, needle string) bool {
-	for _, v := range s {
-		if v == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // Compile-time guard that the sandbox import is actually used.
 var _ = sandbox.Policy{}

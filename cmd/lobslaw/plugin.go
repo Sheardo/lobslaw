@@ -215,7 +215,9 @@ func pluginList(_ []string) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 2, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tINSTALLED\tSHA256")
+	// tabwriter to stdout: a failed write means stdout is gone, and
+	// there is nowhere left to report it.
+	_, _ = fmt.Fprintln(w, "NAME\tVERSION\tSTATUS\tINSTALLED\tSHA256")
 	for _, p := range list {
 		status := "enabled"
 		if !p.Enabled {
@@ -226,7 +228,7 @@ func pluginList(_ []string) {
 		if len(sha) > 12 {
 			sha = sha[:12] // truncate for readability
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			p.Manifest.Name, p.Manifest.Version, status, installed, sha)
 	}
 	_ = w.Flush()

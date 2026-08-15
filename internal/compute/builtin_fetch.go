@@ -179,7 +179,7 @@ func newFetchHandler(client *http.Client, cache *fetchCache) BuiltinFunc {
 		if err != nil {
 			return nil, 1, fmt.Errorf("fetch_url: http: %w", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		body, err := io.ReadAll(io.LimitReader(resp.Body, fetchMaxResponseBody))
 		if err != nil {
 			return nil, 1, fmt.Errorf("fetch_url: read body: %w", err)

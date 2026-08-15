@@ -164,7 +164,7 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err = runWithETXTBSYRetry(cmd, runCtx)
+	err = runWithETXTBSYRetry(runCtx, cmd)
 
 	if runCtx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("%w after %s", types.ErrHookTimeout, timeout)
@@ -201,7 +201,7 @@ func (d *Dispatcher) runHook(ctx context.Context, cfg types.HookConfig, payload 
 // within microseconds. Retries are capped + abort cleanly on ctx
 // cancel so a deadline-exceeded hook isn't retried into the
 // deadline violation.
-func runWithETXTBSYRetry(cmd *exec.Cmd, ctx context.Context) error {
+func runWithETXTBSYRetry(ctx context.Context, cmd *exec.Cmd) error {
 	const (
 		maxAttempts    = 5
 		initialBackoff = 10 * time.Millisecond

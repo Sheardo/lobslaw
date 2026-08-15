@@ -402,7 +402,7 @@ func (f *FSM) Snapshot() (raft.FSMSnapshot, error) {
 func (f *FSM) Restore(rc io.ReadCloser) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	return f.store.RestoreFromSnapshot(rc)
 }
