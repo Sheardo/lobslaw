@@ -22,6 +22,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/grpcinterceptors"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
@@ -886,6 +887,48 @@ func (n *Node) resolveUserTimezone(userID string) string {
 		return tz
 	}
 	return clusterDefault
+}
+
+// resolveUserRoles returns the roles the operator declared for the
+// person behind a channel user id, for channels that carry no JWT to
+// assert them with.
+//
+// The lookup is by principal, not by the raw channel id, because the
+// raw id is per-channel and the declaration is per-person: [[user]]
+// says id = "alice" while Telegram says "tg-@alice". Resolving first
+// means one declaration covers every channel that person arrives on,
+// and it covers them through the same alias map that already decides
+// what they own — a role that disagreed with ownership would be the
+// worst of both.
+//
+// Roles come from config rather than BucketUserPrefs deliberately.
+// Prefs are runtime-editable through a builtin, so a model that
+// talked its way into a prefs write could grant itself a role; the
+// config file is only writable by whoever runs the node.
+func (n *Node) resolveUserRoles(userID string) []string {
+	if strings.TrimSpace(userID) == "" || len(n.cfg.Users) == 0 {
+		return nil
+	}
+	principal := n.identityResolver().Resolve(userID)
+	if principal.IsZero() {
+		return nil
+	}
+	for _, u := range n.cfg.Users {
+		if len(u.Roles) == 0 {
+			continue
+		}
+		if identity.User(strings.TrimSpace(u.ID)) != principal {
+			continue
+		}
+		out := make([]string, 0, len(u.Roles))
+		for _, r := range u.Roles {
+			if r = strings.TrimSpace(r); r != "" {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func defaultOAuthProvider(name string) oauth.ProviderConfig {

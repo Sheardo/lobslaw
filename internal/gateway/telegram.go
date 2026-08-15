@@ -57,6 +57,14 @@ type TelegramConfig struct {
 	// when that's empty).
 	UserIDScopes map[int64]string
 
+	// Roles returns the policy roles the operator declared for a
+	// channel user id, from [[user]] roles. Telegram has no token to
+	// carry a `roles` claim the way REST does, so without this every
+	// turn from this channel is role-less and no rule written against
+	// subject = "role:…" can ever match it. Nil → no roles, which is
+	// the correct reading of a deployment that declared none.
+	Roles func(userID string) []string
+
 	// UnknownUserScope is the scope assigned to unmapped user IDs.
 	// Empty → reject unknown users with 403. Useful defaults:
 	// "" (strict), "public" (open bot with least-privilege scope).
@@ -373,6 +381,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		UserID: tgUserIdentity(msg.From),
 		Scope:  scope,
 	}
+	claims.Roles = h.rolesFor(claims.UserID)
 	turnID := "tg-" + strconv.FormatInt(msg.MessageID, 10)
 
 	h.log.Debug("telegram: message received",
@@ -696,6 +705,17 @@ func (h *TelegramHandler) resolveScope(from *tgUser) (string, bool) {
 		return h.cfg.UnknownUserScope, true
 	}
 	return "", false
+}
+
+// rolesFor looks up the declared roles for a channel user id. Kept
+// separate from resolveScope because the two answer different
+// questions: scope is the permission tier the channel assigns, roles
+// are what the operator said about the person.
+func (h *TelegramHandler) rolesFor(userID string) []string {
+	if h.cfg.Roles == nil {
+		return nil
+	}
+	return h.cfg.Roles(userID)
 }
 
 // Send is the public proactive-message entry point. Identical to

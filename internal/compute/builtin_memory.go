@@ -53,6 +53,12 @@ type MemoryConfig struct {
 	Forgetter memoryForgetter // enables memory_forget + memory_correct; nil → those builtins skip registration
 	Dreamer   memoryDreamer   // enables dream_nap; nil → builtin skips registration
 	Embedder  EmbeddingProvider
+
+	// CrossOwner decides whether a turn may read or forget records
+	// owned by someone else. Nil never widens, so a deployment that
+	// has not wired it behaves exactly as it did before the operator
+	// role existed.
+	CrossOwner CrossOwnerAuthorizer
 }
 
 // RegisterMemoryBuiltins installs memory_search + memory_write
@@ -63,23 +69,23 @@ func RegisterMemoryBuiltins(b *Builtins, cfg MemoryConfig) error {
 	if cfg.Store == nil || cfg.Raft == nil {
 		return errors.New("memory builtins: Store + Raft required")
 	}
-	if err := b.Register("memory_search", newMemorySearchHandler(cfg.Store, cfg.Embedder)); err != nil {
+	if err := b.Register("memory_search", newMemorySearchHandler(cfg.Store, cfg.Embedder, cfg.CrossOwner)); err != nil {
 		return err
 	}
 	if err := b.Register("memory_write", newMemoryWriteHandler(cfg.Raft)); err != nil {
 		return err
 	}
-	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store)); err != nil {
+	if err := b.Register("memory_recent", newMemoryRecentHandler(cfg.Store, cfg.CrossOwner)); err != nil {
 		return err
 	}
 	if err := b.Register("dream_recap", newDreamRecapHandler(cfg.Store)); err != nil {
 		return err
 	}
 	if cfg.Forgetter != nil {
-		if err := b.Register("memory_forget", newMemoryForgetHandler(cfg.Forgetter)); err != nil {
+		if err := b.Register("memory_forget", newMemoryForgetHandler(cfg.Forgetter, cfg.CrossOwner)); err != nil {
 			return err
 		}
-		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Raft, cfg.Forgetter)); err != nil {
+		if err := b.Register("memory_correct", newMemoryCorrectHandler(cfg.Raft, cfg.Forgetter, cfg.CrossOwner)); err != nil {
 			return err
 		}
 	}
@@ -209,7 +215,7 @@ func MemoryToolDefs() []*types.ToolDef {
 // EpisodicRecord fields. The fallback path is the original MVP
 // behaviour — still useful for deployments without an embedding
 // provider, and as a safety net when the embedder times out.
-func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider) BuiltinFunc {
+func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider, crossOwner CrossOwnerAuthorizer) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		query := strings.TrimSpace(args["query"])
 		if query == "" {
@@ -223,10 +229,18 @@ func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider) Bui
 		}
 		tagFilter := strings.TrimSpace(args["tag"])
 
+		// One audience for both strategies. The substring path used to
+		// take none at all, which meant the ownership filter on this
+		// tool was really a filter on deployments that had an embedder
+		// configured — and the fallback it silently degrades to on an
+		// embedding outage returned everyone's records.
+		turn, _ := TurnIdentityFrom(ctx)
+		audience := readAudience(ctx, turn, crossOwner)
+
 		if embedder != nil {
-			return runSemanticSearch(ctx, store, embedder, query, tagFilter, limit)
+			return runSemanticSearch(ctx, store, embedder, audience, query, tagFilter, limit)
 		}
-		return runSubstringSearch(store, query, tagFilter, limit)
+		return runSubstringSearch(store, audience, query, tagFilter, limit)
 	}
 }
 
@@ -236,17 +250,16 @@ func newMemorySearchHandler(store *memory.Store, embedder EmbeddingProvider) Bui
 // substring matches — covers pre-embedding records that have
 // no vector row yet. Returns fallback-substring on embedder
 // failure.
-func runSemanticSearch(ctx context.Context, store *memory.Store, embedder EmbeddingProvider, query, tagFilter string, limit int) ([]byte, int, error) {
+func runSemanticSearch(ctx context.Context, store *memory.Store, embedder EmbeddingProvider, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
 	vec, err := embedder.Embed(ctx, query)
 	if err != nil {
-		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
+		payload, _, serr := runSubstringSearch(store, audience, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
 	}
-	turn, _ := TurnIdentityFrom(ctx)
 	hits, err := memory.VectorSearch(store, vec, limit*2,
-		memory.For(turn.Principal), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+		audience, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
-		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
+		payload, _, serr := runSubstringSearch(store, audience, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
 	}
 
@@ -289,7 +302,7 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 	// naturally and this augmentation just no-ops.
 	strategy := "semantic"
 	if len(results) < limit {
-		more := runSubstringMatches(store, query, tagFilter, limit-len(results), seen)
+		more := runSubstringMatches(store, audience, query, tagFilter, limit-len(results), seen)
 		if len(more) > 0 {
 			results = append(results, more...)
 			strategy = "semantic+substring"
@@ -311,7 +324,7 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 // episodic-map results without the JSON envelope. Lets the
 // semantic path augment its result set without round-tripping
 // through JSON.
-func runSubstringMatches(store *memory.Store, query, tagFilter string, limit int, exclude map[string]bool) []map[string]any {
+func runSubstringMatches(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int, exclude map[string]bool) []map[string]any {
 	tokens := tokeniseQuery(query)
 	if len(tokens) == 0 {
 		return nil
@@ -324,6 +337,9 @@ func runSubstringMatches(store *memory.Store, query, tagFilter string, limit int
 	_ = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		var r lobslawv1.EpisodicRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if !audience.AllowsEpisodic(&r) {
 			return nil
 		}
 		if exclude[r.Id] {
@@ -372,7 +388,7 @@ func runSubstringMatches(store *memory.Store, query, tagFilter string, limit int
 // where the user's phrasing doesn't literally contain the stored
 // phrase — "where do I live" finds "User lives in Yorkshire" on
 // the word "live" alone.
-func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int) ([]byte, int, error) {
+func runSubstringSearch(store *memory.Store, audience memory.Audience, query, tagFilter string, limit int) ([]byte, int, error) {
 	tokens := tokeniseQuery(query)
 	type hit struct {
 		rec   *lobslawv1.EpisodicRecord
@@ -382,6 +398,9 @@ func runSubstringSearch(store *memory.Store, query, tagFilter string, limit int)
 	err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		var r lobslawv1.EpisodicRecord
 		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil
+		}
+		if !audience.AllowsEpisodic(&r) {
 			return nil
 		}
 		if tagFilter != "" && !containsString(r.Tags, tagFilter) {
@@ -654,7 +673,7 @@ func newDreamRecapHandler(store *memory.Store) BuiltinFunc {
 // builtin JSON arg shape. Requires raft leader (Service.Forget
 // errors otherwise); confirmation is enforced by the policy layer
 // via RiskIrreversible.
-func newMemoryForgetHandler(svc memoryForgetter) BuiltinFunc {
+func newMemoryForgetHandler(svc memoryForgetter, crossOwner CrossOwnerAuthorizer) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		query := strings.TrimSpace(args["query"])
 		var ids []string
@@ -680,16 +699,20 @@ func newMemoryForgetHandler(svc memoryForgetter) BuiltinFunc {
 		if query == "" && len(ids) == 0 && len(tags) == 0 && before == nil {
 			return nil, 2, errors.New("memory_forget: at least one filter required (query, ids, tags, or before) — refusing to forget everything")
 		}
-		// Always scoped to the caller. Forget is destructive and
-		// cascades through consolidations, so an unscoped one lets the
-		// model erase another person's memory on request.
+		// Scoped to the caller unless policy has granted them
+		// cross-owner reach. Forget is destructive and cascades
+		// through consolidations, so an unscoped one lets the model
+		// erase another person's memory on request — but an operator
+		// tidying up after someone who has left needs exactly that,
+		// and refusing it outright is what pushes them to the
+		// unauthenticated CLI where nothing records who did it.
 		turn, _ := TurnIdentityFrom(ctx)
 		req := &lobslawv1.ForgetRequest{
 			Query:     query,
 			Ids:       ids,
 			Tags:      tags,
 			Before:    before,
-			Requester: turn.Principal.String(),
+			Requester: forgetRequester(ctx, turn, crossOwner),
 		}
 		resp, err := svc.Forget(ctx, req)
 		if err != nil {
@@ -710,7 +733,7 @@ func newMemoryForgetHandler(svc memoryForgetter) BuiltinFunc {
 // metadata, then forgets the original by id. Two-step operation
 // but single transactional intent: audit log retains both the new
 // write and the forget, preserving the correction trail.
-func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) BuiltinFunc {
+func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter, crossOwner CrossOwnerAuthorizer) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		oldID := strings.TrimSpace(args["id"])
 		if oldID == "" {
@@ -754,7 +777,7 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) 
 		turn, _ := TurnIdentityFrom(ctx)
 		forgetReq := &lobslawv1.ForgetRequest{
 			Ids:       []string{oldID},
-			Requester: turn.Principal.String(),
+			Requester: forgetRequester(ctx, turn, crossOwner),
 		}
 		forgetResp, err := forgetter.Forget(ctx, forgetReq)
 		if err != nil {
@@ -800,8 +823,15 @@ func newDreamNapHandler(svc memoryDreamer) BuiltinFunc {
 // Read-only: no Raft proposal, safe on followers. Returns fact-dense
 // enumerable JSON — the agent is instructed (via humanisation rule)
 // to render this as a table/bullets, not narration.
-func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
-	return func(_ context.Context, args map[string]string) ([]byte, int, error) {
+func newMemoryRecentHandler(store *memory.Store, authz CrossOwnerAuthorizer) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		// memory_recent walks the episodic bucket directly rather than
+		// going through vector search, so it needs the audience applied
+		// here. This is the same leak the substring path had: scoping
+		// the vector index does not scope a reader that never touches
+		// it.
+		turn, _ := TurnIdentityFrom(ctx)
+		audience := readAudience(ctx, turn, authz)
 		limit := 20
 		if raw, ok := args["limit"]; ok && raw != "" {
 			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 50 {
@@ -838,6 +868,9 @@ func newMemoryRecentHandler(store *memory.Store) BuiltinFunc {
 		err := store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 			var rec lobslawv1.EpisodicRecord
 			if err := proto.Unmarshal(raw, &rec); err != nil {
+				return nil
+			}
+			if !audience.AllowsEpisodic(&rec) {
 				return nil
 			}
 			if retentionFilterEnum != lobslawv1.Retention_RETENTION_UNSPECIFIED && rec.Retention != retentionFilterEnum {

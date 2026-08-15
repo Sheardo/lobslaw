@@ -184,6 +184,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Mode:             mode,
 		WebhookSecret:    webhookSecret,
 		UserIDScopes:     userScopes,
+		Roles:            n.resolveUserRoles,
 		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
 		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		Prompts:          n.promptRegistry,

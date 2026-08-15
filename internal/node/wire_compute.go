@@ -293,9 +293,10 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Roles:            n.roleMap,
 		Identity:         n.identityResolver(),
 		ContextEngine: compute.NewContextEngine(compute.ContextEngineConfig{
-			Store:    n.store,
-			Embedder: n.embedder,
-			Logger:   n.log,
+			Store:      n.store,
+			Embedder:   n.embedder,
+			CrossOwner: n.crossOwnerAuthz(),
+			Logger:     n.log,
 		}),
 		Skills:           skillDispatcherOrNil(n.skillAdapter),
 		TimezoneResolver: n.resolveUserTimezone,

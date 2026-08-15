@@ -945,6 +945,7 @@ func (a *Agent) turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID
 		t.Scope = req.Claims.Scope
+		t.Roles = req.Claims.Roles
 	}
 	// A nil resolver maps every id to itself, which is the correct
 	// behaviour for a deployment that has declared no aliases.
