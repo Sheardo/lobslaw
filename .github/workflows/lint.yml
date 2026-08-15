@@ -29,7 +29,14 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@1481404843c368bc19ca9406f87d6e0fc97bdcfd # v7.0.0
         with:
-          version: latest
+          # Pinned, not "latest". A linter release changes what counts
+          # as a finding, so "latest" means an unrelated PR turns red
+          # on a morning nobody touched the code — and CI disagrees
+          # with whatever contributors have installed. v2.12 reported
+          # 138 goconst findings that v2.10 did not. Keep in step with
+          # GOLANGCI_LINT_VERSION in the Makefile, which is what `make
+          # lint` installs locally.
+          version: v2.12.2
 
       - name: go vet
         run: go vet ./...
@@ -60,3 +67,8 @@ jobs:
           lint: true
           breaking: true
           breaking_against: 'https://github.com/${{ github.repository }}.git#branch=main'
+          # Off because the job holds contents:read only, and posting a
+          # comment needs pull-requests:write. The findings are already
+          # in the job log and the check status; a convenience comment
+          # is not worth handing a third-party action write scope.
+          pr_comment: false
