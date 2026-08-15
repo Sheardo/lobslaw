@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -95,6 +96,11 @@ type AgentConfig struct {
 	// (Provider is the only LLM path).
 	Providers *ProviderRegistry
 
+	// Identity resolves per-channel user ids to cluster-wide
+	// principals. Nil resolves every id to itself, which is correct
+	// for a deployment that has declared no aliases.
+	Identity *identity.Resolver
+
 	// ContextEngine, when non-nil, runs per-turn semantic memory
 	// recall and appends a "Relevant context" block to the
 	// system prompt. Channels don't see or configure this —
@@ -156,9 +162,13 @@ type EpisodicIngester interface {
 // chat_id, user_id) so dream can cluster by conversation without
 // needing message-layer metadata.
 type EpisodicTurn struct {
-	Channel     string
-	ChatID      string
-	UserID      string
+	Channel string
+	ChatID  string
+	UserID  string
+	// Owner is the canonical principal the memory belongs to, rendered
+	// as a string to keep this interface free of a memory-layer import.
+	// Empty for an anonymous turn, which produces an unowned record.
+	Owner       string
 	UserMessage string
 	AssistReply string
 	TurnID      string
@@ -387,6 +397,11 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
+	// Attached before fillDefaults, not inside runLoop: fillDefaults is
+	// where the ContextEngine runs its passive recall, and that recall
+	// needs to know whose memories it may read. Getting this order wrong
+	// is how the recall came to be unscoped in the first place.
+	ctx = WithTurnIdentity(ctx, a.turnIdentityFor(req))
 	a.fillDefaults(ctx, &req)
 	seeded := a.seedMessages(req)
 	// The user message is the last thing seedMessages appends, so
@@ -469,11 +484,18 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 // Failures log WARN and are swallowed. Memory loss on a single
 // turn is preferable to dropping the user's reply for a backend
 // hiccup.
-func (a *Agent) maybeIngestTurn(_ context.Context, req ProcessMessageRequest, reply string) {
+func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, reply string) {
 	if a.cfg.EpisodicIngester == nil || reply == "" {
 		return
 	}
+	// Channel and ChatID come from the request, which is where they
+	// live. They used to be taken from Claims.Scope — the permission
+	// tier — so every episodic record was tagged "channel:admin"
+	// rather than "channel:telegram", and ChatID was never set at all,
+	// leaving the chat tag off entirely.
 	turn := EpisodicTurn{
+		Channel:     req.Channel,
+		ChatID:      req.ChannelID,
 		UserMessage: req.Message,
 		AssistReply: reply,
 		TurnID:      req.TurnID,
@@ -481,7 +503,9 @@ func (a *Agent) maybeIngestTurn(_ context.Context, req ProcessMessageRequest, re
 	}
 	if req.Claims != nil {
 		turn.UserID = req.Claims.UserID
-		turn.Channel = req.Claims.Scope
+	}
+	if id, ok := TurnIdentityFrom(ctx); ok {
+		turn.Owner = id.Principal.String()
 	}
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -520,6 +544,7 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
+	ctx = WithTurnIdentity(ctx, a.turnIdentityFor(req))
 	a.fillDefaults(ctx, &req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
@@ -530,15 +555,6 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 }
 
 func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
-	// Tools that read across users — the session_* family — need to
-	// know whose turn this is, and the tool-call arguments can't tell
-	// them: those come from the model. Attached here rather than at
-	// each entry point so a resumed confirmation is scoped exactly
-	// like the turn it resumes, and unconditionally rather than only
-	// when Claims are present — a turn with no caller is an anonymous
-	// caller, not an unscoped one.
-	ctx = WithTurnIdentity(ctx, turnIdentityFor(req))
-
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))
@@ -920,7 +936,7 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 // scheduler and research turns leave them empty and fall back to pure
 // ownership, which is right — they carry the claims of the person the
 // work is being done for (see Node.schedulerClaims), not of a chat.
-func turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
+func (a *Agent) turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
 	t := TurnIdentity{
 		Channel:   req.Channel,
 		ChannelID: req.ChannelID,
@@ -930,6 +946,9 @@ func turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
 		t.UserID = req.Claims.UserID
 		t.Scope = req.Claims.Scope
 	}
+	// A nil resolver maps every id to itself, which is the correct
+	// behaviour for a deployment that has declared no aliases.
+	t.Principal = a.cfg.Identity.Resolve(t.UserID)
 	return t
 }
 

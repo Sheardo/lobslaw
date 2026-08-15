@@ -184,6 +184,36 @@ require_auth        = false
 default_scope       = "public"
 unknown_user_scope  = "public"
 
+[identity]
+# Maps the per-channel user ids lobslaw receives onto cluster-wide
+# principals. Only needed when one person reaches the node under more
+# than one id — the usual case being the same human on Telegram and
+# over REST.
+#
+# Without an entry, every channel id is its own principal. That is
+# correct but strict: that person will not find their Telegram history
+# from a REST session, and memories written on one channel are not
+# visible from the other. Ownership and visibility are decided against
+# the resolved principal, so this is also what decides whose memories
+# passive recall may inject into a turn.
+#
+# Values are bare ids; lobslaw prefixes the principal kind itself.
+# Keys match case-insensitively.
+[identity.aliases]
+# "tg-@alice"         = "alice"
+# "alice@example.com" = "alice"
+
+[memory.session]
+# TTL after which a retention=session record becomes a prune candidate.
+# Episodic turn ingest writes at this retention, so this is how long a
+# conversation stays semantically searchable before Dream has to have
+# consolidated anything worth keeping. Empty/zero → 24h.
+max_age  = "24h"
+# Cron for the auto-seeded prune task. Empty → "@hourly". The prune
+# itself is cheap: a linear bucket scan plus one raft.Apply per stale
+# record.
+schedule = "@hourly"
+
 # Conversation storage. session_max_messages is a STORAGE bound — it
 # sets what is kept on disk for search and export, not what is sent to
 # the model (that is [compute.context]).

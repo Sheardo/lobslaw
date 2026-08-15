@@ -1,6 +1,10 @@
 package compute
 
-import "context"
+import (
+	"context"
+
+	"github.com/jmylchreest/lobslaw/internal/identity"
+)
 
 // TurnIdentity is who a turn came from and where it arrived — the
 // facts an authorisation or attribution decision needs.
@@ -29,11 +33,18 @@ import "context"
 // context value cannot be reached from inside the model's output at
 // all, which makes the guarantee structural rather than procedural.
 type TurnIdentity struct {
-	// UserID is the caller — Claims.UserID. Note this is per-channel
-	// ("tg-@alice", a REST subject), not a cluster-wide person: two
-	// channels used by the same human are two identities. Empty for a
-	// genuinely anonymous turn.
+	// UserID is the caller as this channel names them — "tg-@alice", a
+	// REST subject. Kept for audit and display, where what the user
+	// actually arrived as is what matters. Empty for an anonymous turn.
 	UserID string
+
+	// Principal is UserID resolved to a cluster-wide identity through
+	// the operator's alias map, and is what ownership and visibility
+	// decisions are made against. The distinction is the point: the
+	// same person arrives under a different UserID on every channel,
+	// so authorising on UserID alone makes one human several — and
+	// they stop finding their own history the moment they switch app.
+	Principal identity.Principal
 
 	// Scope is the caller's permission tier (Claims.Scope), not an
 	// ownership or namespace marker. Recorded alongside UserID where

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -102,7 +103,7 @@ func (n *Node) registerSessionTools() error {
 	})
 	cfg := n.cfg.Compute.Context
 	if err := compute.RegisterSessionBuiltins(n.builtinsRegistry, compute.SessionToolConfig{
-		Browser:          &sessionBrowserAdapter{inner: svc},
+		Browser:          &sessionBrowserAdapter{inner: svc, ids: n.identityResolver()},
 		MaxSearchResults: derefInt(cfg.SessionSearchResults),
 		MaxSnippets:      derefInt(cfg.SessionSearchSnippets),
 		MaxReadMessages:  derefInt(cfg.SessionReadMessages),
@@ -213,6 +214,10 @@ func (a *sessionSummaryAdapter) PutTitle(ctx context.Context, k compute.SessionK
 // to the agent's session_search / session_list / session_read tools.
 type sessionBrowserAdapter struct {
 	inner *memory.SessionService
+	// ids resolves the channel user id stored on a record to a
+	// canonical principal, so visibility compares people rather than
+	// per-channel handles. Nil resolves every id to itself.
+	ids *identity.Resolver
 }
 
 func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBrowseQuery) ([]compute.SessionBrowseHit, error) {
@@ -222,14 +227,14 @@ func (a *sessionBrowserAdapter) Search(ctx context.Context, q compute.SessionBro
 		UserID:             q.UserID,
 		Limit:              q.Limit,
 		SnippetsPerSession: q.SnippetsPerSession,
-		Visible:            toRecordPredicate(q.Visible),
+		Visible:            toRecordPredicate(a.ids, q.Visible),
 	})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]compute.SessionBrowseHit, 0, len(hits))
 	for _, h := range hits {
-		hit := compute.SessionBrowseHit{Info: toBrowseInfo(h.Session), Matches: h.Matches}
+		hit := compute.SessionBrowseHit{Info: toBrowseInfo(a.ids, h.Session), Matches: h.Matches}
 		for _, s := range h.Snippets {
 			hit.Snippets = append(hit.Snippets, compute.SessionBrowseSnippet{
 				Seq: s.Seq, Role: s.Role, Text: s.Text,
@@ -250,7 +255,7 @@ func (a *sessionBrowserAdapter) Recent(ctx context.Context, limit int, visible c
 	})
 	out := make([]compute.SessionBrowseInfo, 0, len(recs))
 	for _, r := range recs {
-		info := toBrowseInfo(r)
+		info := toBrowseInfo(a.ids, r)
 		// Filtered before the limit, not after: otherwise a busy
 		// shared node fills the caller's whole window with other
 		// people's threads and then discards them.
@@ -270,18 +275,18 @@ func (a *sessionBrowserAdapter) Info(ctx context.Context, k compute.SessionKey) 
 	if err != nil || rec == nil {
 		return compute.SessionBrowseInfo{}, false, err
 	}
-	return toBrowseInfo(rec), true, nil
+	return toBrowseInfo(a.ids, rec), true, nil
 }
 
 // toRecordPredicate lifts the compute-side visibility rule onto the
 // stored record so memory can apply it while it still has the full
 // candidate set. The rule itself stays in compute — this only changes
 // what it's handed.
-func toRecordPredicate(visible compute.SessionVisibleFunc) func(*lobslawv1.SessionRecord) bool {
+func toRecordPredicate(res *identity.Resolver, visible compute.SessionVisibleFunc) func(*lobslawv1.SessionRecord) bool {
 	if visible == nil {
 		return nil
 	}
-	return func(r *lobslawv1.SessionRecord) bool { return visible(toBrowseInfo(r)) }
+	return func(r *lobslawv1.SessionRecord) bool { return visible(toBrowseInfo(res, r)) }
 }
 
 func (a *sessionBrowserAdapter) Read(ctx context.Context, k compute.SessionKey, fromSeq uint64, limit int) ([]compute.Message, error) {
@@ -298,7 +303,7 @@ func (a *sessionBrowserAdapter) Read(ctx context.Context, k compute.SessionKey, 
 	return toComputeMessages(msgs), nil
 }
 
-func toBrowseInfo(r *lobslawv1.SessionRecord) compute.SessionBrowseInfo {
+func toBrowseInfo(res *identity.Resolver, r *lobslawv1.SessionRecord) compute.SessionBrowseInfo {
 	var updated string
 	if r.UpdatedAt != nil {
 		updated = r.UpdatedAt.AsTime().Format("2006-01-02 15:04 UTC")
@@ -312,6 +317,7 @@ func toBrowseInfo(r *lobslawv1.SessionRecord) compute.SessionBrowseInfo {
 		ChannelID: r.ChannelId,
 		Title:     r.Title,
 		UserID:    r.UserId,
+		Owner:     res.Resolve(r.UserId).String(),
 		Messages:  count,
 		UpdatedAt: updated,
 		Summary:   r.Summary,
@@ -390,4 +396,12 @@ func translateSessionErr(err error) error {
 		return fmt.Errorf("%w: %s", gateway.ErrSessionUnavailable, err)
 	}
 	return err
+}
+
+// identityResolver builds the principal resolver from [identity.aliases].
+// Rebuilt per call rather than cached: it is constructed at wiring time,
+// the map is a handful of entries, and a cached copy would silently
+// outlive a config reload.
+func (n *Node) identityResolver() *identity.Resolver {
+	return identity.NewResolver(n.cfg.Identity.Aliases)
 }

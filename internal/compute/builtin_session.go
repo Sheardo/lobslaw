@@ -53,6 +53,10 @@ type SessionBrowseQuery struct {
 type SessionBrowseInfo struct {
 	Channel   string
 	ChannelID string
+	// Owner is UserID resolved to a canonical principal by the node's
+	// alias map. Empty when nothing resolved it, in which case
+	// visibility falls back to comparing the raw channel id.
+	Owner     string
 	Title     string
 	UserID    string
 	Messages  uint64
@@ -94,6 +98,17 @@ type SessionBrowseSnippet struct {
 func (t TurnIdentity) Visible(i SessionBrowseInfo) bool {
 	if t.isCurrent(i.Channel, i.ChannelID) {
 		return true
+	}
+	// Compared as principals, not as channel ids. The record stores the
+	// id of whichever channel opened it, so "tg-@alice" and a REST
+	// subject are different strings for the same person — matching on
+	// them makes one human several, and they stop finding their own
+	// history the moment they switch app. Owner is that id already
+	// resolved through the operator's alias map; it falls back to the
+	// raw id when no aliases are configured, which is the same
+	// comparison as before for every deployment that has none.
+	if i.Owner != "" && !t.Principal.IsZero() {
+		return i.Owner == t.Principal.String()
 	}
 	return i.UserID == t.UserID
 }

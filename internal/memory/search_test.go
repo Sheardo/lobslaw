@@ -44,7 +44,7 @@ func TestVectorSearchRanksBySimilarity(t *testing.T) {
 	seedVector(t, s, "orthogonal", []float32{0, 1, 0}, "", "")
 	seedVector(t, s, "opposite", []float32{-1, 0, 0}, "", "")
 
-	hits, err := vectorSearch(s, query, 10, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	hits, err := vectorSearch(s, query, 10, Everyone(), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestVectorSearchLimit(t *testing.T) {
 		id := "v-" + string(rune('a'+i))
 		seedVector(t, s, id, []float32{float32(i), 1, 0}, "", "")
 	}
-	hits, err := vectorSearch(s, []float32{1, 1, 0}, 5, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	hits, err := vectorSearch(s, []float32{1, 1, 0}, 5, Everyone(), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestVectorSearchScopeFilter(t *testing.T) {
 	seedVector(t, s, "private-1", []float32{1, 0, 0}, "private", "episodic")
 	seedVector(t, s, "public-2", []float32{0.9, 0.1, 0}, "public", "episodic")
 
-	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, "public", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, Everyone(), "public", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestVectorSearchRetentionFilter(t *testing.T) {
 	seedVector(t, s, "ep-1", []float32{1, 0, 0}, "", "episodic")
 	seedVector(t, s, "lt-1", []float32{1, 0, 0}, "", "long-term")
 
-	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, "", lobslawv1.Retention_RETENTION_LONG_TERM)
+	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, Everyone(), "", lobslawv1.Retention_RETENTION_LONG_TERM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestVectorSearchSkipsDimensionMismatch(t *testing.T) {
 	seedVector(t, s, "dim3", []float32{1, 0, 0}, "", "")
 	seedVector(t, s, "dim4", []float32{1, 0, 0, 0}, "", "")
 
-	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	hits, err := vectorSearch(s, []float32{1, 0, 0}, 10, Everyone(), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestVectorSearchSkipsDimensionMismatch(t *testing.T) {
 func TestVectorSearchEmptyQueryRejected(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)
-	if _, err := vectorSearch(s, nil, 10, "", lobslawv1.Retention_RETENTION_UNSPECIFIED); err == nil {
+	if _, err := vectorSearch(s, nil, 10, Everyone(), "", lobslawv1.Retention_RETENTION_UNSPECIFIED); err == nil {
 		t.Error("empty query should error")
 	}
 }
@@ -142,7 +142,7 @@ func TestVectorSearchEmptyQueryRejected(t *testing.T) {
 func TestVectorSearchZeroNormQueryRejected(t *testing.T) {
 	t.Parallel()
 	s, _ := newTestStore(t)
-	if _, err := vectorSearch(s, []float32{0, 0, 0}, 10, "", lobslawv1.Retention_RETENTION_UNSPECIFIED); err == nil {
+	if _, err := vectorSearch(s, []float32{0, 0, 0}, 10, Everyone(), "", lobslawv1.Retention_RETENTION_UNSPECIFIED); err == nil {
 		t.Error("zero-norm query should error")
 	}
 }

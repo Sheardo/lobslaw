@@ -27,6 +27,7 @@ type Config struct {
 	Logging   LoggingConfig    `koanf:"logging"`
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
+	Identity  IdentityConfig   `koanf:"identity"`
 	Users     []UserConfig     `koanf:"user"`
 	Binaries  []BinaryConfig   `koanf:"binary"`
 
@@ -61,6 +62,28 @@ type MemoryConfig struct {
 	Snapshot   SnapshotConfig   `koanf:"snapshot"`
 	Dream      DreamConfig      `koanf:"dream"`
 	Session    SessionConfig    `koanf:"session"`
+}
+
+// IdentityConfig maps the per-channel user ids lobslaw receives onto
+// cluster-wide principals.
+//
+// Only needed when one person reaches the node under more than one id
+// — the usual case being the same human on Telegram and over REST.
+// Without it every channel id is its own principal, which is correct
+// but means that person will not find their Telegram history from a
+// REST session, and memories written on one channel are not visible
+// from the other.
+type IdentityConfig struct {
+	// Aliases maps a channel user id to a canonical id:
+	//
+	//	[identity.aliases]
+	//	"tg-@alice"         = "alice"
+	//	"alice@example.com" = "alice"
+	//
+	// Values are bare ids — lobslaw prefixes the principal kind
+	// itself, so a config typo cannot mint a principal kind nothing
+	// else understands. Keys match case-insensitively.
+	Aliases map[string]string `koanf:"aliases"`
 }
 
 // SessionConfig governs the auto-seeded session retention pruner.

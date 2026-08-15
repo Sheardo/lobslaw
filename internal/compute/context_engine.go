@@ -95,7 +95,15 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 			"err", err)
 		return ContextAssembly{}
 	}
-	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	// Scoped to the turn's caller. This path is the reason Audience is a
+	// required argument: passive recall runs on every turn with no tool
+	// call in front of it, so an unscoped search here puts one user's
+	// memories into another user's system prompt before they have said
+	// anything. An unidentified turn yields the zero Principal, which
+	// still sees shared and legacy records but nothing owned.
+	turn, _ := TurnIdentityFrom(ctx)
+	hits, err := memory.VectorSearch(e.store, vec, e.maxRecall*2,
+		memory.For(turn.Principal), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		e.log.Warn("context-engine: vector search failed",
 			"err", err)

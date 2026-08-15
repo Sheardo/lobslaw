@@ -9,6 +9,23 @@ import "google/protobuf/timestamp.proto";
 // Common types
 // -----------------------------------------------------------------------------
 
+// Visibility is who may read a record besides its owner.
+//
+// UNSPECIFIED is the legacy value: records written before ownership
+// existed carry it alongside an empty owner, and readers treat that
+// pair as "visible to everyone" so an upgrade does not silently hide a
+// single-user node's entire memory. New records always set one of the
+// two real values.
+enum Visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  // Readable only by the owning principal.
+  VISIBILITY_PRIVATE = 1;
+  // Readable by any authenticated principal on the cluster. For
+  // operator-seeded knowledge and anything the agent learns that is
+  // about the deployment rather than about a person.
+  VISIBILITY_SHARED = 2;
+}
+
 message NodeInfo {
   string id = 1;
   repeated string functions = 2; // "memory" | "policy" | "compute" | "gateway" | "storage"
@@ -129,6 +146,12 @@ message VectorRecord {
   Retention retention = 6;
   repeated string source_ids = 7; // consolidation provenance
   google.protobuf.Timestamp created_at = 8;
+  // owner is a principal reference — "user:alice", or "chat:telegram:-100"
+  // for a record belonging to a shared conversation rather than a person.
+  // Not the same thing as scope above, which is a category ("episodic").
+  // Empty means a record written before ownership existed.
+  string owner = 9;
+  Visibility visibility = 10;
 }
 
 message EpisodicRecord {
@@ -140,6 +163,14 @@ message EpisodicRecord {
   repeated string tags = 6;
   Retention retention = 7;
   repeated string source_ids = 8;
+  string owner = 9;
+  Visibility visibility = 10;
+  // session_ref points at the transcript this was ingested from, as
+  // "<channel>:<channel_id>:<seq>", so a recall hit can offer to read
+  // the surrounding conversation. Advisory: the transcript is capped
+  // and independently forgettable, so a stale pointer means the link
+  // is dead, never that the memory is wrong.
+  string session_ref = 11;
 }
 
 message StoreRequest {

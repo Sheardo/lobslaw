@@ -29,8 +29,13 @@ func (h searchHit) Score() float32 { return h.score }
 // search. Same shape as the internal implementation; exported so
 // the compute package can wire memory_search to it without
 // duplicating the cosine math.
-func VectorSearch(store *Store, query []float32, limit int, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
-	return vectorSearch(store, query, limit, scopeFilter, retentionFilter)
+// VectorSearch runs a cosine search bounded by what the audience may
+// read. The Audience is not optional and has no useful zero value: an
+// unset one matches nothing, so a caller that forgets it gets empty
+// results rather than everyone's memories. Callers that legitimately
+// want the whole store say memory.Everyone().
+func VectorSearch(store *Store, query []float32, limit int, audience Audience, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
+	return vectorSearch(store, query, limit, audience, scopeFilter, retentionFilter)
 }
 
 // vectorSearch linearly scans the vector bucket, computes cosine
@@ -41,7 +46,7 @@ func VectorSearch(store *Store, query []float32, limit int, scopeFilter string, 
 // Cost is O(N × D) where N is the record count and D is the embedding
 // dimension. Fine for personal scale (< ~100k records). Post-MVP we
 // can swap in HNSW or similar — tracked in DEFERRED.md.
-func vectorSearch(store *Store, query []float32, limit int, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
+func vectorSearch(store *Store, query []float32, limit int, audience Audience, scopeFilter string, retentionFilter lobslawv1.Retention) ([]searchHit, error) {
 	if len(query) == 0 {
 		return nil, errors.New("search query embedding is empty")
 	}
@@ -58,6 +63,11 @@ func vectorSearch(store *Store, query []float32, limit int, scopeFilter string, 
 		var v lobslawv1.VectorRecord
 		if err := proto.Unmarshal(value, &v); err != nil {
 			return fmt.Errorf("unmarshal vector record: %w", err)
+		}
+		// Ownership before anything else: a record this audience may
+		// not read should not reach scoring, let alone a result set.
+		if !audience.AllowsVector(&v) {
+			return nil
 		}
 		if scopeFilter != "" && v.Scope != scopeFilter {
 			return nil

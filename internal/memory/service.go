@@ -135,7 +135,12 @@ func (s *Service) Search(ctx context.Context, req *lobslawv1.SearchRequest) (*lo
 		}
 		return nil, status.Error(codes.InvalidArgument, "embedding required")
 	}
-	hits, err := vectorSearch(s.store, req.Embedding, int(req.Limit), req.ScopeFilter, req.RetentionFilter)
+	// Everyone() because MemoryService.Search is the cluster RPC: it is
+	// reached over mTLS by peer nodes and operator tooling, not by a
+	// model, and the request carries no principal to scope against.
+	// Spelled out rather than defaulted so that when the RPC does grow
+	// an identity field, this is the line that has to change.
+	hits, err := vectorSearch(s.store, req.Embedding, int(req.Limit), Everyone(), req.ScopeFilter, req.RetentionFilter)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "search: %v", err)
 	}
