@@ -32,21 +32,30 @@ type PDFConfig struct {
 }
 
 // RegisterPDFBuiltin installs read_pdf.
-func RegisterPDFBuiltin(b *Builtins, cfg PDFConfig) error {
-	if cfg.Endpoint == "" || cfg.APIKey == "" {
-		return errors.New("read_pdf: Endpoint and APIKey both required")
+// Variadic for the same reason as vision and audio: one config is a
+// single provider, several are a failover chain in the order given.
+func RegisterPDFBuiltin(b *Builtins, cfgs ...PDFConfig) error {
+	if len(cfgs) == 0 {
+		return errors.New("read_pdf: at least one provider config required")
 	}
-	if cfg.Model == "" {
-		return errors.New("read_pdf: Model required (e.g. \"google/gemini-2.0-flash-001\", \"anthropic/claude-opus-4\")")
+	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Endpoint == "" || cfg.APIKey == "" {
+			return errors.New("read_pdf: Endpoint and APIKey both required")
+		}
+		if cfg.Model == "" {
+			return errors.New("read_pdf: Model required (e.g. \"google/gemini-2.0-flash-001\", \"anthropic/claude-opus-4\")")
+		}
+		if cfg.AllowedRoot == "" {
+			cfg.AllowedRoot = "/workspace/incoming"
+		}
+		client := cfg.HTTPClient
+		if client == nil {
+			client = &http.Client{Timeout: 120 * time.Second}
+		}
+		handlers = append(handlers, newReadPDFHandler(cfg, client))
 	}
-	if cfg.AllowedRoot == "" {
-		cfg.AllowedRoot = "/workspace/incoming"
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 120 * time.Second}
-	}
-	return b.Register("read_pdf", newReadPDFHandler(cfg, client))
+	return b.Register("read_pdf", failoverBuiltin("read_pdf", nil, handlers...))
 }
 
 func PDFToolDef() *types.ToolDef {
@@ -119,12 +128,15 @@ func newReadPDFHandler(cfg PDFConfig, client *http.Client) BuiltinFunc {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, 1, fmt.Errorf("read_pdf: http: %w", err)
+			return nil, 1, Transient(fmt.Errorf("read_pdf: http: %w", err))
 		}
 		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
-			return nil, 1, fmt.Errorf("read_pdf: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))
+			return nil, 1, &DriverError{
+				Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
+				Err:   fmt.Errorf("read_pdf: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			}
 		}
 		var decoded struct {
 			Choices []struct {

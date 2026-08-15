@@ -405,15 +405,22 @@ func (n *Node) findProvider(label string) *config.ProviderConfig {
 	return nil
 }
 
-// resolveModalityEndpoint discovers a provider for the given
-// modality. Resolution order:
+// resolveModalityEndpoints discovers the provider chain for the given
+// modality, in the order it should be tried. Resolution order:
 //
-//  1. If override.Provider is set, pin to that label.
-//  2. Otherwise scan [[compute.providers]] for any matching
-//     capability (anyOf), highest Priority first.
-//  3. Skip cleanly (return nil) when nothing matches — the caller
-//     omits the builtin and the agent honestly reports it can't.
-func (n *Node) resolveModalityEndpoint(modality, overrideLabel string, anyOf ...string) *llmEndpoint {
+//  1. If override.Provider is set, pin to that label and STOP. An
+//     explicit override is an operator saying "use this one"; quietly
+//     falling back to a provider they did not name would spend money
+//     at a cost and trust tier they did not choose. Operators who want
+//     a chain express it with capability tags instead.
+//  2. Otherwise scan [[compute.providers]] for matching capabilities
+//     (anyOf), highest Priority first — and keep ALL of them. That
+//     ordering is what SelectByCapability has always returned; the
+//     resolver used to take the head and discard the tail, which is
+//     why a modality had no failover while chat did.
+//  3. Empty when nothing matches — the caller omits the builtin and
+//     the agent honestly reports it can't.
+func (n *Node) resolveModalityEndpoints(modality, overrideLabel string, anyOf ...string) []*llmEndpoint {
 	if overrideLabel != "" {
 		p := n.findProvider(overrideLabel)
 		if p == nil {
@@ -421,19 +428,31 @@ func (n *Node) resolveModalityEndpoint(modality, overrideLabel string, anyOf ...
 				"label", overrideLabel)
 			return nil
 		}
-		return n.endpointFromProvider(modality, *p, "override:"+overrideLabel)
+		ep := n.endpointFromProvider(modality, *p, "override:"+overrideLabel)
+		if ep == nil {
+			return nil
+		}
+		return []*llmEndpoint{ep}
 	}
+	var out []*llmEndpoint
+	seen := map[string]bool{}
 	for _, want := range anyOf {
-		matches := compute.SelectByCapability(n.cfg.Compute.Providers, want)
-		for _, p := range matches {
-			ep := n.endpointFromProvider(modality, p, "capability:"+p.Label)
-			if ep != nil {
-				ep.matchedCap = want
-				return ep
+		for _, p := range compute.SelectByCapability(n.cfg.Compute.Providers, want) {
+			// A provider tagged with two of the requested capabilities
+			// would otherwise appear twice and be retried against itself.
+			if seen[p.Label] {
+				continue
 			}
+			ep := n.endpointFromProvider(modality, p, "capability:"+p.Label)
+			if ep == nil {
+				continue // key unresolvable; already warned
+			}
+			seen[p.Label] = true
+			ep.matchedCap = want
+			out = append(out, ep)
 		}
 	}
-	return nil
+	return out
 }
 
 func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, via string) *llmEndpoint {
@@ -456,17 +475,17 @@ func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, vi
 	}
 }
 
-func (n *Node) resolveVisionEndpoint() *llmEndpoint {
-	return n.resolveModalityEndpoint("vision", n.cfg.Compute.Vision.Provider, compute.CapabilityVision)
+func (n *Node) resolveVisionEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("vision", n.cfg.Compute.Vision.Provider, compute.CapabilityVision)
 }
 
-func (n *Node) resolveAudioEndpoint() *llmEndpoint {
-	return n.resolveModalityEndpoint("audio", n.cfg.Compute.Audio.Provider,
+func (n *Node) resolveAudioEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("audio", n.cfg.Compute.Audio.Provider,
 		compute.CapabilityAudioTranscribe, compute.CapabilityAudioMultimodal)
 }
 
-func (n *Node) resolvePDFEndpoint() *llmEndpoint {
-	return n.resolveModalityEndpoint("pdf", n.cfg.Compute.PDF.Provider, compute.CapabilityPDF)
+func (n *Node) resolvePDFEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("pdf", n.cfg.Compute.PDF.Provider, compute.CapabilityPDF)
 }
 
 // applyModelsDevAutoCapabilities mutates n.cfg.Compute.Providers in

@@ -47,29 +47,41 @@ type VisionConfig struct {
 // RegisterVisionBuiltin installs the read_image builtin. Returns
 // an error on missing required fields so the operator gets a clear
 // "not configured" message instead of a silent no-op.
-func RegisterVisionBuiltin(b *Builtins, cfg VisionConfig) error {
-	if cfg.Endpoint == "" || cfg.APIKey == "" {
-		return errors.New("read_image: Endpoint and APIKey both required")
+// Variadic: one config is a single provider, several are a failover
+// chain tried in the order given. Existing single-config callers are
+// unaffected, and a chain shares one validation path — a
+// misconfigured backup fails at boot rather than at 3am when the
+// primary finally goes down.
+func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
+	if len(cfgs) == 0 {
+		return errors.New("read_image: at least one provider config required")
 	}
-	if cfg.Model == "" {
-		return errors.New("read_image: Model required (e.g. \"abab6.5s-chat\", \"claude-opus-4\", \"gemini-2.0-flash\")")
+	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Endpoint == "" || cfg.APIKey == "" {
+			return errors.New("read_image: Endpoint and APIKey both required")
+		}
+		if cfg.Model == "" {
+			return errors.New("read_image: Model required (e.g. \"abab6.5s-chat\", \"claude-opus-4\", \"gemini-2.0-flash\")")
+		}
+		if cfg.Format == "" {
+			cfg.Format = VisionFormatOpenAI
+		}
+		switch cfg.Format {
+		case VisionFormatOpenAI, VisionFormatAnthropic, VisionFormatGemini:
+		default:
+			return fmt.Errorf("read_image: unknown format %q (want openai|anthropic|gemini)", cfg.Format)
+		}
+		if cfg.AllowedRoot == "" {
+			cfg.AllowedRoot = "/workspace/incoming"
+		}
+		client := cfg.HTTPClient
+		if client == nil {
+			client = &http.Client{Timeout: 60 * time.Second}
+		}
+		handlers = append(handlers, newReadImageHandler(cfg, client))
 	}
-	if cfg.Format == "" {
-		cfg.Format = VisionFormatOpenAI
-	}
-	switch cfg.Format {
-	case VisionFormatOpenAI, VisionFormatAnthropic, VisionFormatGemini:
-	default:
-		return fmt.Errorf("read_image: unknown format %q (want openai|anthropic|gemini)", cfg.Format)
-	}
-	if cfg.AllowedRoot == "" {
-		cfg.AllowedRoot = "/workspace/incoming"
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 60 * time.Second}
-	}
-	return b.Register("read_image", newReadImageHandler(cfg, client))
+	return b.Register("read_image", failoverBuiltin("read_image", nil, handlers...))
 }
 
 // VisionToolDef is the ToolDef registered alongside the builtin.
@@ -196,12 +208,20 @@ func newReadImageHandler(cfg VisionConfig, client *http.Client) BuiltinFunc {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, 1, fmt.Errorf("read_image: http: %w", err)
+			// Transport failures are the textbook backup case: this
+			// endpoint is unreachable, another may not be.
+			return nil, 1, Transient(fmt.Errorf("read_image: http: %w", err))
 		}
 		defer func() { _ = resp.Body.Close() }()
 		raw, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != http.StatusOK {
-			return nil, 1, fmt.Errorf("read_image: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))
+			// Classified so the modality chain can tell "try the next
+			// provider" from "this fails everywhere". Unclassified, every
+			// failure reads as permanent and the chain never advances.
+			return nil, 1, &DriverError{
+				Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
+				Err:   fmt.Errorf("read_image: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
+			}
 		}
 
 		switch cfg.Format {

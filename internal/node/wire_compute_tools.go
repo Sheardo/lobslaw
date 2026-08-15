@@ -634,23 +634,28 @@ func (n *Node) wireWebSearchTools(builtins *compute.Builtins) error {
 //  3. neither → builtin not registered; agent honestly tells the user
 //     it can't view images.
 func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
-	visionEP := n.resolveVisionEndpoint()
-	if visionEP == nil {
+	eps := n.resolveVisionEndpoints()
+	if len(eps) == 0 {
 		return nil
 	}
-	if err := compute.RegisterVisionBuiltin(builtins, compute.VisionConfig{
-		Endpoint: visionEP.endpoint,
-		Model:    visionEP.model,
-		APIKey:   visionEP.apiKey,
-		Format:   compute.VisionFormat(visionEP.format),
-	}); err != nil {
+	cfgs := make([]compute.VisionConfig, 0, len(eps))
+	for _, ep := range eps {
+		cfgs = append(cfgs, compute.VisionConfig{
+			Endpoint: ep.endpoint,
+			Model:    ep.model,
+			APIKey:   ep.apiKey,
+			Format:   compute.VisionFormat(ep.format),
+		})
+	}
+	if err := compute.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_image: %w", err)
 	}
 	if err := n.toolRegistry.Register(compute.VisionToolDef()); err != nil {
 		return fmt.Errorf("register read_image tool def: %w", err)
 	}
 	n.log.Debug("compute: read_image registered",
-		"model", visionEP.model, "format", visionEP.format, "via", visionEP.via)
+		"model", eps[0].model, "format", eps[0].format, "via", eps[0].via,
+		"chain_len", len(eps))
 	return nil
 }
 
@@ -660,27 +665,36 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 // self-hosted faster-whisper / parakeet sidecar exposing the same
 // surface.
 func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
-	audioEP := n.resolveAudioEndpoint()
-	if audioEP == nil {
+	eps := n.resolveAudioEndpoints()
+	if len(eps) == 0 {
 		return nil
 	}
-	audioFmt := compute.AudioFormatWhisper
-	if audioEP.matchedCap == compute.CapabilityAudioMultimodal {
-		audioFmt = compute.AudioFormatChatMultimodal
+	// Format is per-endpoint, not per-chain: audio matches on two
+	// different capabilities, so a chain can legitimately mix a Whisper
+	// endpoint with a chat-multimodal one and each must be spoken to in
+	// its own protocol.
+	cfgs := make([]compute.AudioConfig, 0, len(eps))
+	for _, ep := range eps {
+		audioFmt := compute.AudioFormatWhisper
+		if ep.matchedCap == compute.CapabilityAudioMultimodal {
+			audioFmt = compute.AudioFormatChatMultimodal
+		}
+		cfgs = append(cfgs, compute.AudioConfig{
+			Endpoint: ep.endpoint,
+			Model:    ep.model,
+			APIKey:   ep.apiKey,
+			Format:   audioFmt,
+		})
 	}
-	if err := compute.RegisterAudioBuiltin(builtins, compute.AudioConfig{
-		Endpoint: audioEP.endpoint,
-		Model:    audioEP.model,
-		APIKey:   audioEP.apiKey,
-		Format:   audioFmt,
-	}); err != nil {
+	if err := compute.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_audio: %w", err)
 	}
 	if err := n.toolRegistry.Register(compute.AudioToolDef()); err != nil {
 		return fmt.Errorf("register read_audio tool def: %w", err)
 	}
 	n.log.Debug("compute: read_audio registered",
-		"model", audioEP.model, "format", audioFmt, "via", audioEP.via)
+		"model", cfgs[0].Model, "format", cfgs[0].Format, "via", eps[0].via,
+		"chain_len", len(eps))
 	return nil
 }
 
@@ -712,21 +726,25 @@ func (n *Node) wireSoulTools(builtins *compute.Builtins) error {
 // {type:"file"} with base64 PDF data. OpenRouter is the easy on-ramp;
 // Anthropic native PDF and Gemini PDF can land as additional formats.
 func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
-	pdfEP := n.resolvePDFEndpoint()
-	if pdfEP == nil {
+	eps := n.resolvePDFEndpoints()
+	if len(eps) == 0 {
 		return nil
 	}
-	if err := compute.RegisterPDFBuiltin(builtins, compute.PDFConfig{
-		Endpoint: pdfEP.endpoint,
-		Model:    pdfEP.model,
-		APIKey:   pdfEP.apiKey,
-	}); err != nil {
+	cfgs := make([]compute.PDFConfig, 0, len(eps))
+	for _, ep := range eps {
+		cfgs = append(cfgs, compute.PDFConfig{
+			Endpoint: ep.endpoint,
+			Model:    ep.model,
+			APIKey:   ep.apiKey,
+		})
+	}
+	if err := compute.RegisterPDFBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register read_pdf: %w", err)
 	}
 	if err := n.toolRegistry.Register(compute.PDFToolDef()); err != nil {
 		return fmt.Errorf("register read_pdf tool def: %w", err)
 	}
 	n.log.Debug("compute: read_pdf registered",
-		"model", pdfEP.model, "via", pdfEP.via)
+		"model", eps[0].model, "via", eps[0].via, "chain_len", len(eps))
 	return nil
 }
