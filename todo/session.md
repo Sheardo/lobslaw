@@ -99,6 +99,40 @@ means anything stable. It is also `R7 — Principal identity` in
 [ROADMAP.md](../ROADMAP.md), which should reference that decision rather than
 drifting from it.
 
+## 1b. Ownership — what is left
+
+Stages 1–3 of `user-scoping-ownership-model` shipped (PRs #11, #12): records own,
+reads are scoped to an audience whose zero value matches nothing, Dream will not
+consolidate across owners, `Forget` respects ownership, and commitments and
+scheduled tasks are scoped on list/get/cancel/delete.
+
+Two decisions now govern the rest:
+`user-scoping-ownership-model` and `operator-role-and-cluster-authorization`.
+
+Next, in order:
+
+1. **Cluster gRPC principal.** `MemoryService.Search` and an empty-requester
+   `Forget` are unrestricted. Derive the audience from the mTLS peer
+   certificate: a peer node may assert a principal (it authenticated the user
+   at its own edge), an operator gets `Everyone()` and is audited, anything
+   else is denied. A `requester` field the client fills is delegation, not
+   authorization — the transport has to say who is calling.
+2. **The operator role itself**, which (1) and (3) both depend on. Authority
+   over the deployment, not universal read; reading an individual's memories is
+   `memory:read:any` granted through the policy engine, not ambient.
+3. **Write `SHARED` somewhere.** The enum is honoured on read and never set, so
+   operator-seeded knowledge — facts about the deployment rather than about a
+   person — is invisible to a second user. Only an operator may set it: if any
+   user could, a prompt injection saying "remember this for everyone" becomes a
+   broadcast primitive.
+4. **Claim legacy records.** Everything written before 2026-08-15 is unowned and
+   readable by everyone. Deliberate (an upgrade must not hide a single-user
+   node's memory) but shrinking-not-closed; wants a one-shot
+   `lobslaw memory claim --owner=…`.
+5. **Fold the alias map into R7's identity store**, and move resolution to the
+   gateway edge. See the gap list on `ROADMAP.md` R7 — the config-only map that
+   shipped is a stand-in, and two identity models must not coexist quietly.
+
 ## 2. CI has never run in this repo
 
 Approving the queued runs on #1 produced three failures, none about the code.
@@ -163,42 +197,30 @@ backlog that had been invisible:
 
 ---
 
-## 3. Open decision: episodic records vs session messages
+## 3. Episodic records vs session messages — DECIDED
 
-Raised by the author on PR #1 on 2026-08-13, still unanswered. It is the one
-thing in the stack that is a call for the repo owner rather than a defect.
+Raised by the PR #1 author on 2026-08-13; settled 2026-08-15.
 
-Every turn's text is now written twice: `EpisodicIngester.IngestTurn` writes an
-`EpisodicRecord` (`Context = userMessage + "---" + assistReply`, tagged
-`RETENTION_SESSION`, plus a paired `VectorRecord` for the embedding), and
-`SessionService.Append` writes a `SessionMessage` per message with roles,
-ordering, tool calls and results.
+Every turn's text is written twice: an `EpisodicRecord` (lossy, scored,
+consolidated by Dream, pruned at 24h under `RETENTION_SESSION`) and a
+`SessionMessage` per message (verbatim, ordered, capped). The author offered to
+collapse that into a pointer model — episodic keeping only the embedding plus a
+`session_id:seq` reference.
 
-The author kept both and offered the alternative: episodic ingest stops storing
-the raw body, keeping only the embedding plus a pointer to `session_id:seq`,
-making the transcript the single source of truth for text.
+**Decision: keep both, and add the pointer as metadata.** Episodic records now
+carry `session_ref`, so a recall hit can offer to read the surrounding thread.
 
-**Recommendation: keep the duplication.**
+Why not the pointer model: it inverts the dependency. Memory is meant to outlive
+the conversation — that is the whole point of the split — and under a pointer a
+durable consolidated memory would depend on a transcript that is capped,
+evicted oldest-first, and hard-deleted by `Forget`. "Forget this thread" would
+blow holes in memories that were never about that thread. The expensive artifact
+is the embedding, which is not duplicated either way, and the duplicated text is
+`RETENTION_SESSION` so the pruner clears it within a day.
 
-1. The pointer model inverts the dependency. Memory is meant to outlive the
-   conversation — that is the entire point of the split documented in
-   `docs/dev/MEMORY.md#sessions`. Under a pointer, a durable consolidated memory
-   depends on a transcript that is capped at 200 messages, evicted oldest-first,
-   and hard-deleted by `Forget`. "Forget this thread" would blow holes in
-   memories that were never about that thread.
-2. Little to win. The expensive artifact is the embedding, which is not
-   duplicated either way. The duplicated part is plain text under
-   `RETENTION_SESSION`, which `SessionPruner` hard-deletes after 24h — so the
-   overlap is mostly transient.
-3. It couples two subsystems that currently share nothing and can change
-   retention, format and storage independently.
-
-**Cheap middle path if the navigational benefit is wanted:** record
-`session_id:seq` on the `EpisodicRecord` as metadata *alongside* the text, so a
-recall hit can offer "read the surrounding thread" via `session_read`. Additive,
-no coupling of correctness to retention.
-
----
+`session_ref` addresses the **thread, not the message**: ingest runs before the
+transcript append, so the sequence number does not exist yet. Advisory either
+way — a dead pointer means the link is stale, never that the memory is wrong.
 
 ## Accepted limitations — documented, not bugs
 
