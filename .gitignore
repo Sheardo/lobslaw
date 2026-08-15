@@ -39,3 +39,15 @@ certs/*.key
 # Data dirs (should only appear in local dev)
 /data/
 /var/
+
+# Claude Code's directory is entirely local to whoever is using it. Its one
+# tracked file set AIDE_SHARE_AUTO_IMPORT, which .aide/config/aide.json now
+# covers natively — aide reads `config.share.autoImport || the env var`, so the
+# config alone suffices and the repo carries no tool-specific setup. ../aide
+# tracks nothing here either.
+#
+# Ignoring the whole directory also stops agent worktrees being committed:
+# Claude Code checks those out under .claude/worktrees/, so each is a full
+# second copy of the tree, ~12MB, one `git add -A` from nesting the repository
+# inside itself.
+.claude/
