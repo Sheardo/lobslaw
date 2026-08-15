@@ -27,6 +27,11 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	// QueueMode and QueueDebounce configure per-session turn
+	// serialisation. Zero value is QueueSerial.
+	QueueMode     QueueMode
+	QueueDebounce time.Duration
+
 	// Addr is the host:port to bind. Empty → ":8443" by default.
 	Addr string
 
@@ -117,6 +122,9 @@ type PlanService interface {
 // Server is the REST channel handler. Stateful only for lifecycle
 // bookkeeping (net.Listener, underlying http.Server).
 type Server struct {
+	// gate serialises turns per session. See turnqueue.go.
+	gate *TurnGate
+
 	cfg   RESTConfig
 	agent *compute.Agent
 	log   *slog.Logger
@@ -152,6 +160,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg:   cfg,
 		agent: agent,
 		log:   cfg.Logger,
+		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger),
 		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
@@ -398,6 +407,31 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			ChannelID: restSessionID(claims.UserID, req.SessionID),
 			UserID:    claims.UserID,
 		}
+		// Serialise turns on this session for the same reason the
+		// Telegram path does: Load → run → Append is not atomic, and
+		// each request is its own goroutine. Only sessioned requests
+		// need it — a session-less call has no transcript to corrupt.
+		lease, disposition := s.gate.Acquire(r.Context(), cacheKey(sessionRef), req.Message)
+		switch disposition {
+		case Folded:
+			// Another in-flight turn absorbed this message and will
+			// answer for it. Unlike a chat channel, an HTTP caller is
+			// waiting on this response, so say so rather than hanging
+			// up silently.
+			s.jsonErr(w, http.StatusAccepted,
+				"message folded into an in-flight turn on this session; its reply covers this message")
+			return
+		case Dropped:
+			s.jsonErr(w, http.StatusConflict,
+				"a turn is already running for this session")
+			return
+		}
+		defer lease.Release()
+
+		if len(lease.Batch) > 1 {
+			req.Message = strings.Join(lease.Batch, "\n")
+		}
+
 		prior = s.conv.Load(r.Context(), sessionRef)
 		s.log.Debug("rest: conversation history loaded",
 			"turn_id", req.TurnID,

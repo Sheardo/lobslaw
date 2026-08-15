@@ -612,6 +612,23 @@ type GatewayConfig struct {
 	SessionCacheMessages int           `koanf:"session_cache_messages,omitempty"`
 	SessionCacheTTL      time.Duration `koanf:"session_cache_ttl,omitempty"`
 
+	// QueueMode decides what happens to a message that arrives while
+	// a turn is already running for the same conversation. One of
+	// "serial" (default), "latest", "debounce", "off" — see
+	// gateway.QueueMode.
+	//
+	// This is a correctness setting before it is a UX one: without
+	// serialisation two messages during one turn both read the same
+	// prior history and both append it, interleaving the transcript.
+	// The modes differ only in what happens to the second message,
+	// never in whether the turns overlap.
+	QueueMode string `koanf:"queue_mode,omitempty"`
+
+	// QueueDebounce is the fold window for queue_mode = "debounce".
+	// Zero takes gateway.DefaultDebounce (3s). Ignored in the other
+	// modes.
+	QueueDebounce time.Duration `koanf:"queue_debounce,omitempty"`
+
 	// Responsiveness timers. Zero on any = disabled. Operators can
 	// tune per deployment; sensible defaults land in Load().
 	TypingInterval time.Duration `koanf:"typing_interval"` // refresh typing indicator (Telegram clears at ~5s)

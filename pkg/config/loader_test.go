@@ -252,3 +252,21 @@ func TestValidateContextConfigAllowsExplicitZero(t *testing.T) {
 		t.Errorf("explicit zero should be allowed as 'disabled': %v", err)
 	}
 }
+
+// A typo in queue_mode silently became "serial" in the parser. Serial
+// is the safe mode, so nothing breaks — which is the problem: an
+// operator who asked for "debounce " and got serialisation would have
+// no signal at all. Validation makes it loud at boot.
+func TestValidateRejectsUnknownQueueMode(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{"", "serial", "latest", "debounce", "off"} {
+		if err := validateQueueMode(ok); err != nil {
+			t.Errorf("queue_mode %q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"Serial", "debounce ", "debounce_ms", "true", "none"} {
+		if err := validateQueueMode(bad); err == nil {
+			t.Errorf("queue_mode %q accepted; a typo must not silently become serial", bad)
+		}
+	}
+}
