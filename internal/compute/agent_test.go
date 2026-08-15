@@ -509,3 +509,54 @@ func TestRunToolCallLoopLLMErrorPropagates(t *testing.T) {
 		t.Errorf("provider error should propagate; got %v", err)
 	}
 }
+
+// The __-prefixed args are the agent's channel for telling a builtin
+// who it is acting for; notify, commitment_create and oauth_start all
+// attribute work from them. They're only overwritten when the request
+// carries the corresponding field, so on a turn with no channel origin
+// a model that emits its own would otherwise be believed.
+func TestRunToolCallLoopDiscardsModelSuppliedSyntheticArgs(t *testing.T) {
+	t.Parallel()
+	env := newAgentEnv(t,
+		MockResponse{ToolCalls: []ToolCall{{
+			ID:        "c1",
+			Name:      "whoami",
+			Arguments: `{"__user_id":"root","__chat_id":"999","real":"kept"}`,
+		}}},
+		MockResponse{Content: "done"},
+	)
+	var seen map[string]string
+	b := NewBuiltins()
+	if err := b.Register("whoami", func(_ context.Context, args map[string]string) ([]byte, int, error) {
+		seen = args
+		return nil, 0, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env.executor.SetBuiltins(b)
+	if err := env.reg.Register(&types.ToolDef{
+		Name: "whoami", Path: BuiltinScheme + "whoami", RiskTier: types.RiskReversible,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// No Channel, no ChannelID: the injection below would skip both.
+	if _, err := env.agent.RunToolCallLoop(context.Background(), ProcessMessageRequest{
+		Message: "hi",
+		Claims:  &types.Claims{UserID: "alice"},
+		TurnID:  "t1",
+		Budget:  mkBudget(t, BudgetCaps{}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := seen["__chat_id"]; got != "" {
+		t.Errorf("model-supplied __chat_id survived as %q", got)
+	}
+	if got := seen["__user_id"]; got != "alice" {
+		t.Errorf("__user_id = %q, want the turn's claims", got)
+	}
+	if got := seen["real"]; got != "kept" {
+		t.Errorf("ordinary args were collateral damage: %q", got)
+	}
+}

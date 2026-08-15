@@ -233,7 +233,7 @@ The index record carries the retained range (`first_seq`, `next_seq`); message b
 
 Reads use `Store.ForEachPrefix`, which cursor-seeks straight to the range rather than decrypting every message in the cluster to find one conversation.
 
-**Who a channel-id belongs to is the channel's business.** The store enforces the key shape and nothing about ownership, because ownership isn't uniform: a Telegram channel-id is a *chat*, deliberately shared by every member of a group, while a REST channel-id is `"<escaped-user>/<client session_id>"` so two callers picking the same id get two conversations. A `rec.UserId` check in the store would break the first case to fix the second. Channels that mint ids from client input scope them; channels whose ids are already an address don't need to.
+**Who a channel-id belongs to is the channel's business.** The store enforces the key shape and nothing about ownership, because ownership isn't uniform: a Telegram channel-id is a *chat*, deliberately shared by every member of a group, while a REST channel-id is `"<escaped-user>/<client session_id>"` so two callers picking the same id get two conversations. A `rec.UserId` check in the store would break the first case to fix the second. Channels that mint ids from client input scope them; channels whose ids are already an address don't need to. What the *agent* may read across those conversations is a separate question, answered in [Transcript visibility](#transcript-visibility).
 
 ### Append is one raft entry per turn
 
@@ -277,6 +277,55 @@ around the match so a 10 MB tool result doesn't arrive in the agent's context.
 `Title` is generated once, on a conversation's first compaction — the summary is
 exactly the input a title needs, and a conversation long enough to compact is
 long enough to be worth finding again.
+
+### Transcript visibility
+
+The store holds every conversation the node has ever had, from every user of
+every channel. The agent's `session_search` / `session_list` / `session_read`
+tools read across all of it, so they are scoped per turn. The rule, implemented
+by `compute.SessionScope.Visible`:
+
+1. **The conversation the turn is in is always readable** — same `channel` *and*
+   `channel_id` as the current turn, whoever the record says opened it.
+2. **Any other conversation is readable only when its `user_id` matches the
+   turn's caller.**
+
+Clause 1 is not a loophole, it's the group-chat case: Telegram shares one
+session across every member, and `rec.UserId` is whoever spoke first. Ownership
+alone would refuse the second member the conversation they are visibly having.
+Clause 2 is what stops a shared bot handing user B snippets of user A's threads
+— `UserIDScopes` in the Telegram config exists precisely because a node often
+has more than one user.
+
+Three properties worth keeping:
+
+- **Identity travels on the context** (`compute.WithSessionScope`, attached once
+  per turn in `Agent.runLoop`), never in the tool arguments. Tool args come from
+  the model, and the synthetic `__user_id` / `__chat_id` args are only
+  overwritten when the request carries those fields — good enough for
+  attribution, not for an authorisation decision. Same reasoning as `clampArg`:
+  the model does not widen its own reach by asking.
+- **Filtering happens before the result limit**, which is why
+  `SessionBrowseQuery.Visible` and `SessionBrowser.Recent` take a predicate
+  rather than being filtered by their caller. Filter afterwards and a busy
+  shared node fills the window with threads the caller can't see and then
+  discards them, so their own results vanish.
+- **A refused `session_read` and a non-existent conversation give the same
+  answer.** Distinguishing them turns the tool into an oracle for "does user X
+  have a thread with chat id Y", and chat ids are guessable.
+
+A context with *no* scope is unscoped and sees everything. That is deliberate,
+and it is only safe because of who can reach it: the agent loop attaches a scope
+to every turn, including anonymous ones, so nothing the model drives arrives
+without one. Bare contexts come from operator tooling (`cmd/inspect` reads the
+store directly) and the compactor — callers that already hold the whole
+database. Any new driver of these builtins must attach a scope.
+
+Known consequence: scope identity is `Claims.UserID`, which is per-channel
+(`tg-@alice`, a REST subject), not a cluster-wide person. A solo operator using
+both Telegram and the REST API has two identities and will not find one
+channel's threads from the other. Cross-identity aliasing is a mapping we don't
+have; a false negative costs recall, a false positive is the leak.
 
 ### Retention
 

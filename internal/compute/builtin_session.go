@@ -13,14 +13,28 @@ import (
 // SessionBrowser is the read side of the transcript store, as the
 // agent's session tools need it. Narrow interface for the usual
 // import-cycle reason; the node wires a memory.SessionService adapter.
+//
+// Search and Recent take a visibility predicate rather than being
+// filtered by their caller afterwards: both apply a result limit
+// internally, and filtering after the limit would let another user's
+// conversations crowd the caller's own out of the window.
 type SessionBrowser interface {
 	// Search finds conversations containing text.
 	Search(ctx context.Context, q SessionBrowseQuery) ([]SessionBrowseHit, error)
-	// Recent lists conversations newest-first.
-	Recent(ctx context.Context, limit int) ([]SessionBrowseInfo, error)
+	// Recent lists conversations newest-first. visible, when non-nil,
+	// is consulted before the limit is applied.
+	Recent(ctx context.Context, limit int, visible SessionVisibleFunc) ([]SessionBrowseInfo, error)
 	// Read returns a window of one conversation's transcript.
 	Read(ctx context.Context, key SessionKey, fromSeq uint64, limit int) ([]Message, error)
+	// Info returns one conversation's index entry. found is false for
+	// a conversation that doesn't exist, which is not an error.
+	Info(ctx context.Context, key SessionKey) (info SessionBrowseInfo, found bool, err error)
 }
+
+// SessionVisibleFunc reports whether one stored conversation may be
+// shown to the caller. A nil SessionVisibleFunc means "everything is
+// visible" — see sessionVisibility for when that is legitimate.
+type SessionVisibleFunc func(SessionBrowseInfo) bool
 
 // SessionBrowseQuery mirrors memory.SessionSearchQuery.
 type SessionBrowseQuery struct {
@@ -29,6 +43,10 @@ type SessionBrowseQuery struct {
 	UserID             string
 	Limit              int
 	SnippetsPerSession int
+	// Visible gates which conversations are searched at all. Applied
+	// before Limit, so a user's own results are never displaced by
+	// hits they aren't allowed to see.
+	Visible SessionVisibleFunc
 }
 
 // SessionBrowseInfo is a conversation's index entry.
@@ -54,6 +72,107 @@ type SessionBrowseSnippet struct {
 	Seq  uint64
 	Role string
 	Text string
+}
+
+// SessionScope is the caller identity a turn carries into the session
+// tools. The transcript store holds every conversation the node has
+// ever had, from every user of every channel; without a scope the
+// tools hand any of them to whoever is talking right now.
+//
+// Identity travels on the context rather than in the tool arguments
+// on purpose. The args map is populated from the model's own JSON
+// (see Agent.runToolCall), and the synthetic __user_id / __chat_id
+// keys injected there are only overwritten when the request actually
+// carries those fields — a turn with no channel leaves the model free
+// to supply its own. Attribution can live with that; an authorisation
+// decision cannot. A context value is unforgeable from inside the
+// model's output, which is the same reason clampArg exists: the model
+// does not get to widen its own reach by asking nicely.
+type SessionScope struct {
+	// UserID is the turn's caller — Claims.UserID, which is
+	// per-channel ("tg-@alice", a REST subject), not a cluster-wide
+	// person. Two channels used by the same human are two scopes.
+	UserID string
+
+	// Current is the conversation this turn is happening in. Empty
+	// for turns with no channel origin (scheduler, research workers).
+	Current SessionKey
+}
+
+// Visible implements the scoping rule for one stored conversation.
+//
+// Two clauses, and the first is the subtle one. A Telegram group chat
+// is a single session shared by every member: the record's UserId is
+// whoever spoke first, while ChannelID is the chat. Scoping purely on
+// ownership would tell the second member to get lost in the middle of
+// the conversation they are having. So the conversation the turn is
+// already inside is always readable — the user can see it by scrolling
+// up regardless of what we do here.
+//
+// Everything else is ownership-gated: another session is visible only
+// when it was opened by this same user. Note this is deliberately
+// narrower than "same human" — a solo operator who uses both Telegram
+// and the REST API has two identities and will not find one channel's
+// threads from the other. Cross-identity aliasing is a mapping we
+// don't have yet, and inventing one here would mean guessing; a false
+// negative costs recall, a false positive is the bug this fixes.
+func (s SessionScope) Visible(i SessionBrowseInfo) bool {
+	if s.isCurrent(i.Channel, i.ChannelID) {
+		return true
+	}
+	return i.UserID == s.UserID
+}
+
+// isCurrent reports whether an address is the turn's own conversation.
+// Both halves must be set: a scheduler turn has no channel, and an
+// empty Current must not match the sessions that predate the UserID
+// being recorded.
+func (s SessionScope) isCurrent(channel, channelID string) bool {
+	if s.Current.Channel == "" || s.Current.ChannelID == "" {
+		return false
+	}
+	return channel == s.Current.Channel && channelID == s.Current.ChannelID
+}
+
+type sessionScopeKey struct{}
+
+// WithSessionScope attaches a turn's identity for the session tools to
+// find. The agent loop calls this once per turn; any other driver of
+// the builtins that has a caller identity must do the same.
+func WithSessionScope(ctx context.Context, s SessionScope) context.Context {
+	return context.WithValue(ctx, sessionScopeKey{}, s)
+}
+
+// SessionScopeFrom returns the turn's scope. ok is false when nothing
+// attached one.
+func SessionScopeFrom(ctx context.Context) (SessionScope, bool) {
+	s, ok := ctx.Value(sessionScopeKey{}).(SessionScope)
+	return s, ok
+}
+
+// sessionVisibility is the single place that decides what an unscoped
+// context means, so the answer can't drift per tool.
+//
+// No scope means unscoped: every conversation is visible. That is a
+// deliberate fail-open and it is only defensible because of who can
+// reach it. Agent.runLoop attaches a scope unconditionally — including
+// for anonymous turns, which get the empty-user scope rather than no
+// scope — so nothing the model drives can arrive here without one. A
+// bare context comes from operator tooling (cmd/inspect reads the
+// store directly), the compactor, or tests: callers that already hold
+// the whole database and gain nothing from being refused a view of it.
+//
+// The corollary is that a new caller of these builtins MUST attach a
+// scope. Denying instead would make that mistake loud, but it would
+// also refuse the operator their own data on a single-user node, which
+// is the common case; the guard is the agent-loop test that asserts
+// the scope is attached, not a runtime error here.
+func sessionVisibility(ctx context.Context) SessionVisibleFunc {
+	scope, ok := SessionScopeFrom(ctx)
+	if !ok {
+		return nil
+	}
+	return scope.Visible
 }
 
 // SessionToolConfig bounds what the session tools may return. Every
@@ -107,15 +226,18 @@ func newSessionSearchHandler(cfg SessionToolConfig) BuiltinFunc {
 			return nil, 2, errors.New("query is required")
 		}
 		limit := clampArg(args["limit"], cfg.MaxSearchResults, cfg.MaxSearchResults)
+		visible := sessionVisibility(ctx)
 		hits, err := cfg.Browser.Search(ctx, SessionBrowseQuery{
 			Text:               query,
 			Channel:            strings.TrimSpace(args["channel"]),
 			Limit:              limit,
 			SnippetsPerSession: cfg.MaxSnippets,
+			Visible:            visible,
 		})
 		if err != nil {
 			return nil, 1, err
 		}
+		hits = filterHits(hits, visible)
 		if len(hits) == 0 {
 			return []byte(fmt.Sprintf("No past conversation contains %q.", query)), 0, nil
 		}
@@ -136,10 +258,12 @@ func newSessionSearchHandler(cfg SessionToolConfig) BuiltinFunc {
 func newSessionListHandler(cfg SessionToolConfig) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		limit := clampArg(args["limit"], 10, 50)
-		infos, err := cfg.Browser.Recent(ctx, limit)
+		visible := sessionVisibility(ctx)
+		infos, err := cfg.Browser.Recent(ctx, limit, visible)
 		if err != nil {
 			return nil, 1, err
 		}
+		infos = filterInfos(infos, visible)
 		if len(infos) == 0 {
 			return []byte("No stored conversations yet."), 0, nil
 		}
@@ -169,7 +293,11 @@ func newSessionReadHandler(cfg SessionToolConfig) BuiltinFunc {
 			fromSeq = n
 		}
 		limit := clampArg(args["limit"], cfg.MaxReadMessages, cfg.MaxReadMessages)
-		msgs, err := cfg.Browser.Read(ctx, SessionKey{Channel: channel, ChannelID: channelID}, fromSeq, limit)
+		key := SessionKey{Channel: channel, ChannelID: channelID}
+		if err := authorizeSessionRead(ctx, cfg.Browser, key); err != nil {
+			return nil, 1, err
+		}
+		msgs, err := cfg.Browser.Read(ctx, key, fromSeq, limit)
 		if err != nil {
 			return nil, 1, err
 		}
@@ -183,6 +311,69 @@ func newSessionReadHandler(cfg SessionToolConfig) BuiltinFunc {
 		}
 		return []byte(b.String()), 0, nil
 	}
+}
+
+// errSessionNotVisible is what session_read returns for a
+// conversation the turn may not see. Identical to the wording for a
+// conversation that doesn't exist, deliberately: distinguishing the
+// two would turn the tool into an oracle for "does user X have a
+// thread with chat id Y", which is most of what the ids leak anyway.
+var errSessionNotVisible = errors.New("no conversation with that channel and channel_id is available")
+
+// authorizeSessionRead gates session_read on the turn's scope. The
+// current conversation short-circuits without touching the store —
+// it's readable by definition, and a brand-new session has no index
+// record yet.
+func authorizeSessionRead(ctx context.Context, browser SessionBrowser, key SessionKey) error {
+	scope, ok := SessionScopeFrom(ctx)
+	if !ok {
+		return nil
+	}
+	if scope.isCurrent(key.Channel, key.ChannelID) {
+		return nil
+	}
+	info, found, err := browser.Info(ctx, key)
+	if err != nil {
+		return err
+	}
+	if !found || !scope.Visible(info) {
+		return errSessionNotVisible
+	}
+	return nil
+}
+
+// filterHits and filterInfos re-apply the visibility predicate to
+// whatever the browser returned. The browser is asked to filter (it
+// has to, or the limit would be applied to the wrong set) and the
+// wired implementation does; re-checking here means a browser that
+// quietly ignores the predicate degrades into empty results rather
+// than into the leak this scoping exists to close.
+func filterHits(hits []SessionBrowseHit, visible SessionVisibleFunc) []SessionBrowseHit {
+	if visible == nil {
+		return hits
+	}
+	// Copies rather than filtering in place: the browser may be
+	// handing back a slice it still owns.
+	out := make([]SessionBrowseHit, 0, len(hits))
+	for _, h := range hits {
+		if visible(h.Info) {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+func filterInfos(infos []SessionBrowseInfo, visible SessionVisibleFunc) []SessionBrowseInfo {
+	if visible == nil {
+		return infos
+	}
+	out := make([]SessionBrowseInfo, 0, len(infos))
+	for _, i := range infos {
+		if visible(i) {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // describeSession prefers the generated title, falling back to the
@@ -238,7 +429,7 @@ func SessionToolDefs() []*types.ToolDef {
 		{
 			Name:        "session_list",
 			Path:        BuiltinScheme + "session_list",
-			Description: "List stored conversations, most recently active first, with their titles and message counts. Use when the user asks what you've been talking about, or to find a thread by topic before reading it with session_read.",
+			Description: "List stored conversations, most recently active first, with their titles and message counts. Use when the user asks what you've been talking about, or to find a thread by topic before reading it with session_read. Covers this user's own conversations plus the current one; other people's threads on this node are not listed.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -251,7 +442,7 @@ func SessionToolDefs() []*types.ToolDef {
 		{
 			Name:        "session_read",
 			Path:        BuiltinScheme + "session_read",
-			Description: "Read a window of a stored conversation's transcript. Takes the channel and channel_id from session_search or session_list. Use from_seq to page through a long thread — each result reports the sequence numbers it covers. Prefer session_search first; reading a whole conversation is expensive in context.",
+			Description: "Read a window of a stored conversation's transcript. Takes the channel and channel_id from session_search or session_list. Use from_seq to page through a long thread — each result reports the sequence numbers it covers. Prefer session_search first; reading a whole conversation is expensive in context. Addresses that didn't come from those tools will usually be refused — you can only read this user's own conversations and the current one.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {

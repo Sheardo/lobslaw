@@ -6,29 +6,80 @@ import (
 	"testing"
 )
 
+// fakeBrowser stands in for the transcript store. It honours the
+// visibility predicate exactly where the real browser does — before
+// the limit, inside Search and Recent — so tests exercise the scoping
+// contract rather than an implementation that always says yes.
+// ignoreVisibility flips that off, to prove the tools don't rely on
+// the browser being well-behaved.
 type fakeBrowser struct {
-	hits      []SessionBrowseHit
-	infos     []SessionBrowseInfo
-	msgs      []Message
+	hits             []SessionBrowseHit
+	infos            []SessionBrowseInfo
+	msgs             []Message
+	perSession       map[SessionKey][]Message
+	ignoreVisibility bool
+
 	lastQuery SessionBrowseQuery
 	lastLimit int
 	lastFrom  uint64
+	lastKey   SessionKey
+	reads     []SessionKey
 }
 
 func (f *fakeBrowser) Search(_ context.Context, q SessionBrowseQuery) ([]SessionBrowseHit, error) {
 	f.lastQuery = q
-	return f.hits, nil
+	if q.Visible == nil || f.ignoreVisibility {
+		return f.hits, nil
+	}
+	var out []SessionBrowseHit
+	for _, h := range f.hits {
+		if q.Visible(h.Info) {
+			out = append(out, h)
+		}
+	}
+	return out, nil
 }
 
-func (f *fakeBrowser) Recent(_ context.Context, limit int) ([]SessionBrowseInfo, error) {
+func (f *fakeBrowser) Recent(_ context.Context, limit int, visible SessionVisibleFunc) ([]SessionBrowseInfo, error) {
 	f.lastLimit = limit
-	return f.infos, nil
+	if visible == nil || f.ignoreVisibility {
+		return f.infos, nil
+	}
+	var out []SessionBrowseInfo
+	for _, i := range f.infos {
+		if visible(i) {
+			out = append(out, i)
+		}
+	}
+	return out, nil
 }
 
-func (f *fakeBrowser) Read(_ context.Context, _ SessionKey, fromSeq uint64, limit int) ([]Message, error) {
+func (f *fakeBrowser) Read(_ context.Context, key SessionKey, fromSeq uint64, limit int) ([]Message, error) {
 	f.lastFrom = fromSeq
 	f.lastLimit = limit
+	f.lastKey = key
+	f.reads = append(f.reads, key)
+	if msgs, ok := f.perSession[key]; ok {
+		return msgs, nil
+	}
 	return f.msgs, nil
+}
+
+func (f *fakeBrowser) Info(_ context.Context, key SessionKey) (SessionBrowseInfo, bool, error) {
+	for _, i := range f.all() {
+		if i.Channel == key.Channel && i.ChannelID == key.ChannelID {
+			return i, true, nil
+		}
+	}
+	return SessionBrowseInfo{}, false, nil
+}
+
+func (f *fakeBrowser) all() []SessionBrowseInfo {
+	out := append([]SessionBrowseInfo(nil), f.infos...)
+	for _, h := range f.hits {
+		out = append(out, h.Info)
+	}
+	return out
 }
 
 func newTestSessionTools(t *testing.T, b *fakeBrowser, cfg SessionToolConfig) *Builtins {
@@ -41,22 +92,40 @@ func newTestSessionTools(t *testing.T, b *fakeBrowser, cfg SessionToolConfig) *B
 	return builtins
 }
 
-func invokeTool(t *testing.T, b *Builtins, name string, args map[string]string) ([]byte, int, error) {
+func invokeToolCtx(ctx context.Context, t *testing.T, b *Builtins, name string, args map[string]string) ([]byte, int, error) {
 	t.Helper()
 	fn, ok := b.Get(name)
 	if !ok {
 		t.Fatalf("%s not registered", name)
 	}
-	return fn(context.Background(), args)
+	return fn(ctx, args)
 }
 
-func callTool(t *testing.T, b *Builtins, name string, args map[string]string) string {
+func invokeTool(t *testing.T, b *Builtins, name string, args map[string]string) ([]byte, int, error) {
 	t.Helper()
-	out, code, err := invokeTool(t, b, name, args)
+	return invokeToolCtx(context.Background(), t, b, name, args)
+}
+
+func callToolCtx(ctx context.Context, t *testing.T, b *Builtins, name string, args map[string]string) string {
+	t.Helper()
+	out, code, err := invokeToolCtx(ctx, t, b, name, args)
 	if err != nil {
 		t.Fatalf("%s: %v (exit %d)", name, err, code)
 	}
 	return string(out)
+}
+
+func callTool(t *testing.T, b *Builtins, name string, args map[string]string) string {
+	t.Helper()
+	return callToolCtx(context.Background(), t, b, name, args)
+}
+
+// scopedCtx is a turn's context: user U talking in channel:chatID.
+func scopedCtx(user, channel, chatID string) context.Context {
+	return WithSessionScope(context.Background(), SessionScope{
+		UserID:  user,
+		Current: SessionKey{Channel: channel, ChannelID: chatID},
+	})
 }
 
 func TestSessionSearchRequiresQuery(t *testing.T) {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 func testSessionService(t *testing.T, maxMessages int) *SessionService {
@@ -731,5 +733,71 @@ func TestSearchTranscriptsNonASCIISnippets(t *testing.T) {
 	}
 	if !strings.Contains(snip, "ERR_CONN_REFUSED") {
 		t.Errorf("snippet lost the match: %q", snip)
+	}
+}
+
+// Visibility has to be applied while the full candidate set is still
+// in hand. Filter after the limit instead and a busy shared node
+// silently loses the caller's own results to newer threads they were
+// never allowed to see.
+func TestSessionSearchAppliesVisibilityBeforeLimit(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+
+	mine := SessionRef{Channel: "telegram", ChannelID: "1", UserID: "alice"}
+	if _, err := s.Append(ctx, mine, "t1", []TranscriptMessage{userMsg("the deposit is 25000")}); err != nil {
+		t.Fatal(err)
+	}
+	// Three newer conversations belonging to someone else, each of
+	// which also matches: more than the limit on their own.
+	for i := range 3 {
+		ref := SessionRef{Channel: "telegram", ChannelID: fmt.Sprintf("9%d", i), UserID: "bob"}
+		if _, err := s.Append(ctx, ref, "t1", []TranscriptMessage{userMsg("the settlement figure")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	hits, err := s.SearchTranscripts(ctx, SessionSearchQuery{
+		Text:    "the",
+		Limit:   2,
+		Visible: func(r *lobslawv1.SessionRecord) bool { return r.UserId == "alice" },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want alice's one", len(hits))
+	}
+	if hits[0].Session.UserId != "alice" {
+		t.Errorf("hit belongs to %q", hits[0].Session.UserId)
+	}
+}
+
+func TestSessionDescribeReportsOwner(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "telegram", ChannelID: "-300", UserID: "alice"}
+	if _, err := s.Append(ctx, ref, "t1", []TranscriptMessage{userMsg("hi")}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, err := s.Describe(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec == nil || rec.UserId != "alice" {
+		t.Fatalf("got %+v, want alice's record", rec)
+	}
+
+	// An address nobody has ever used is not an error — the caller
+	// asking "who owns this?" needs to tell absent from denied.
+	absent, err := s.Describe(ctx, SessionRef{Channel: "telegram", ChannelID: "404"})
+	if err != nil {
+		t.Fatalf("Describe on absent session: %v", err)
+	}
+	if absent != nil {
+		t.Errorf("got %+v, want nil", absent)
 	}
 }
