@@ -1,0 +1,170 @@
+package compute
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/jmylchreest/lobslaw/pkg/types"
+)
+
+// SpeakConfig wires the speak builtin.
+type SpeakConfig struct {
+	Driver   SpeakDriver
+	Resolver *ArtifactResolver
+
+	// MaxChars bounds one synthesis. TTS is billed per character and a
+	// model that decides to narrate a whole file would be expensive
+	// and useless in equal measure. Zero picks DefaultSpeakMaxChars.
+	MaxChars int
+}
+
+// DefaultSpeakMaxChars is roughly a few minutes of speech — long
+// enough for any reply a person would listen to, short enough that a
+// runaway prompt cannot generate an hour of audio.
+const DefaultSpeakMaxChars = 4000
+
+// RegisterSpeakBuiltin installs the speak tool.
+//
+// Variadic drivers, same as the other modalities: several are a
+// failover chain in priority order.
+func RegisterSpeakBuiltin(b *Builtins, cfgs ...SpeakConfig) error {
+	if len(cfgs) == 0 {
+		return errors.New("speak: at least one provider config required")
+	}
+	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Driver == nil {
+			return errors.New("speak: Driver required")
+		}
+		if cfg.Resolver == nil {
+			return errors.New("speak: Resolver required; audio has to land somewhere")
+		}
+		if cfg.MaxChars <= 0 {
+			cfg.MaxChars = DefaultSpeakMaxChars
+		}
+		handlers = append(handlers, newSpeakHandler(cfg))
+	}
+	return b.Register("speak", failoverBuiltin("speak", nil, handlers...))
+}
+
+func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
+	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		text := strings.TrimSpace(args["text"])
+		if text == "" {
+			return nil, 2, errors.New("speak: text is required")
+		}
+		if len(text) > cfg.MaxChars {
+			// Exit code 2: the model gave bad input and can fix it by
+			// asking for less. Truncating silently would bill for audio
+			// that stops mid-sentence.
+			return nil, 2, fmt.Errorf("speak: text is %d characters, limit is %d — "+
+				"synthesise a shorter passage", len(text), cfg.MaxChars)
+		}
+
+		var speed float32
+		if s := strings.TrimSpace(args["speed"]); s != "" {
+			v, err := strconv.ParseFloat(s, 32)
+			if err != nil {
+				return nil, 2, fmt.Errorf("speak: speed %q is not a number", s)
+			}
+			speed = float32(v)
+		}
+
+		art, err := cfg.Driver.Speak(ctx, SpeakRequest{
+			Text:   text,
+			Voice:  strings.TrimSpace(args["voice"]),
+			Format: strings.TrimSpace(args["format"]),
+			Speed:  speed,
+		})
+		if err != nil {
+			// Returned unwrapped so the failover chain can read the
+			// class the driver assigned.
+			return nil, 1, err
+		}
+
+		got, err := cfg.Resolver.Resolve(ctx, art, speakFileName(text))
+		if err != nil {
+			return nil, 1, fmt.Errorf("speak: %w", err)
+		}
+
+		// Announce the file so the channel layer attaches it. Without
+		// this the model gets a path and the user gets nothing —
+		// audio the agent cannot hand over is audio it should not have
+		// been billed for.
+		CollectArtifact(ctx, types.Attachment{
+			Kind:      AttachmentKindForMIME(got.MIME),
+			MimeType:  got.MIME,
+			Size:      int(got.Bytes),
+			Reference: got.Mount + ":" + got.Path,
+			Filename:  filepath.Base(got.Path),
+		})
+
+		// The PATH is the result, not the bytes. Audio cannot go into a
+		// tool result the model reads; what the model needs is a
+		// reference it can hand to the channel layer to attach.
+		out, _ := json.Marshal(map[string]any{
+			"mount": got.Mount,
+			"path":  got.Path,
+			"mime":  got.MIME,
+			"bytes": got.Bytes,
+		})
+		return out, 0, nil
+	}
+}
+
+// speakFileName derives a readable name from the opening words, so a
+// mount full of generated audio is browsable rather than a wall of
+// identifiers.
+func speakFileName(text string) string {
+	words := strings.Fields(text)
+	if len(words) > 5 {
+		words = words[:5]
+	}
+	var b strings.Builder
+	for _, w := range words {
+		for _, r := range w {
+			switch {
+			case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+				b.WriteRune(r)
+			case r >= 'A' && r <= 'Z':
+				b.WriteRune(r + 32)
+			}
+		}
+		b.WriteByte('-')
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		name = "speech"
+	}
+	return name
+}
+
+// SpeakToolDef describes the tool to the model.
+//
+// It says what to do with the result, because the failure mode
+// otherwise is the model reading a path back to the user as if it
+// were the answer.
+func SpeakToolDef() *types.ToolDef {
+	return &types.ToolDef{
+		Name:        "speak",
+		Path:        BuiltinScheme + "speak",
+		Description: "Synthesise speech from text and save it as an audio file. Use when the user asks to hear something, asks for a voice note, or is in a context where audio is more useful than text. Returns the mount and path of the saved file — hand that path to the channel so it can be attached; do not read the path aloud to the user as though it were the answer. Keep passages short: synthesis is billed per character.",
+		ParametersSchema: []byte(`{
+			"type": "object",
+			"properties": {
+				"text": {"type": "string", "description": "The text to speak. Prefer a few sentences over a long document."},
+				"voice": {"type": "string", "description": "Optional provider-specific voice name. Empty uses the configured default."},
+				"format": {"type": "string", "description": "Optional container: mp3 (default), wav, opus, flac."},
+				"speed": {"type": "string", "description": "Optional speed multiplier, e.g. \"1.0\". Empty uses the provider default."}
+			},
+			"required": ["text"],
+			"additionalProperties": false
+		}`),
+		RiskTier: types.RiskCommunicating,
+	}
+}

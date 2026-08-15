@@ -17,6 +17,7 @@ const (
 	CapabilityAudioMultimodal = "audio-multimodal"
 	CapabilityPDF             = "pdf"
 	CapabilityEmbeddings      = "embeddings"
+	CapabilitySpeak           = "speak"
 )
 
 // SelectByCapability returns providers carrying any of the given

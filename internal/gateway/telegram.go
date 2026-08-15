@@ -50,6 +50,11 @@ type TelegramConfig struct {
 	// queue. Nil is correct for a single node.
 	Leaser SessionLeaser
 
+	// ArtifactOpener resolves a produced file's reference to its
+	// bytes. Nil means files a turn generates cannot be delivered —
+	// the handler says so rather than dropping them silently.
+	ArtifactOpener ArtifactOpener
+
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
 	// deployments.
@@ -540,6 +545,9 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	default:
 		h.sendText(msg.Chat.ID, resp.Reply)
 	}
+	// After the text: a file the turn produced is context for the
+	// reply, not a replacement for it.
+	h.SendAttachments(msg.Chat.ID, resp.Attachments, h.cfg.ArtifactOpener)
 }
 
 // sendConfirmationKeyboard registers a prompt in the shared
@@ -745,6 +753,7 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegra
 	default:
 		h.sendText(cont.chatID, resp.Reply)
 	}
+	h.SendAttachments(cont.chatID, resp.Attachments, h.cfg.ArtifactOpener)
 }
 
 // postJSON POSTs to a bot API method with a JSON body. Shared by
