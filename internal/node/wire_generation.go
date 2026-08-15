@@ -9,8 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -365,4 +369,127 @@ func (n *Node) artifactOpener() gateway.ArtifactOpener {
 		}
 		return f, nil
 	}
+}
+
+func (n *Node) resolveImageEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("image", n.cfg.Compute.Image.Provider, compute.CapabilityImage)
+}
+
+// wireImageTools registers generate_image. Skipped when there is
+// nowhere to write, for the same reason as speak: generating an image
+// the agent cannot hand over bills for nothing.
+func (n *Node) wireImageTools(builtins *compute.Builtins) error {
+	eps := n.resolveImageEndpoints()
+	if len(eps) == 0 {
+		return nil
+	}
+	resolver := n.artifactResolver()
+	if resolver == nil {
+		n.log.Warn("compute: image provider configured but no writable artifact mount; " +
+			"skipping generate_image")
+		return nil
+	}
+
+	cfgs := make([]compute.ImageConfig, 0, len(eps))
+	for _, ep := range eps {
+		d, err := compute.NewOpenAIImageDriver(compute.OpenAIImageConfig{
+			Endpoint:   ep.endpoint,
+			Model:      ep.model,
+			Credential: compute.NewBearerCredential(ep.apiKey),
+		})
+		if err != nil {
+			n.log.Warn("compute: image provider skipped", "via", ep.via, "err", err)
+			continue
+		}
+		cfgs = append(cfgs, compute.ImageConfig{Driver: d, Resolver: resolver})
+	}
+	if len(cfgs) == 0 {
+		return nil
+	}
+	if err := compute.RegisterImageBuiltin(builtins, cfgs...); err != nil {
+		return fmt.Errorf("register generate_image: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.ImageToolDef()); err != nil {
+		return fmt.Errorf("register generate_image tool def: %w", err)
+	}
+	n.log.Debug("compute: generate_image registered",
+		"model", eps[0].model, "via", eps[0].via, "chain_len", len(cfgs))
+	return nil
+}
+
+func (n *Node) resolveVideoEndpoints() []*llmEndpoint {
+	return n.resolveModalityEndpoints("video", n.cfg.Compute.Video.Provider, compute.CapabilityVideo)
+}
+
+// startGenerationJob records a submitted job as a commitment so the
+// scheduler finishes it. Called after the provider has accepted the
+// job, so a failure here means work that is running and billed with
+// nothing to collect it — hence no swallowing.
+func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prompt string) (string, error) {
+	if n.raft == nil {
+		return "", fmt.Errorf("no raft on this node; a generation job cannot be recorded")
+	}
+	id := "gen-" + ids.New()
+	turn, _ := compute.TurnIdentityFrom(ctx)
+	c, err := NewGenerationCommitment(id, h, 0, turn.UserID, turn.Channel, turn.ChannelID, prompt)
+	if err != nil {
+		return "", err
+	}
+	entry := &lobslawv1.LogEntry{
+		Op:      lobslawv1.LogOp_LOG_OP_PUT,
+		Id:      id,
+		Payload: &lobslawv1.LogEntry_Commitment{Commitment: c},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return "", fmt.Errorf("marshal commitment: %w", err)
+	}
+	if _, err := n.raft.Apply(data, 5*time.Second); err != nil {
+		return "", fmt.Errorf("raft apply: %w", err)
+	}
+	return id, nil
+}
+
+// wireVideoTools registers generate_video plus the job driver that
+// polls it. Both are needed: the handle records a driver NAME, and a
+// node that can submit but has not registered the driver under that
+// name cannot poll its own jobs after a restart.
+func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
+	eps := n.resolveVideoEndpoints()
+	if len(eps) == 0 {
+		return nil
+	}
+	if n.raft == nil {
+		n.log.Warn("compute: video provider configured but this node has no raft; " +
+			"skipping generate_video (a job could be submitted but never collected)")
+		return nil
+	}
+	if n.artifactResolver() == nil {
+		n.log.Warn("compute: video provider configured but no writable artifact mount; " +
+			"skipping generate_video")
+		return nil
+	}
+
+	ep := eps[0]
+	d, err := dashscope.New(dashscope.Config{
+		Model:      ep.model,
+		Credential: compute.NewBearerCredential(ep.apiKey),
+	})
+	if err != nil {
+		n.log.Warn("compute: video provider skipped", "via", ep.via, "err", err)
+		return nil
+	}
+	n.RegisterJobDriver(dashscope.DriverName, d)
+
+	if err := compute.RegisterVideoBuiltin(builtins, compute.VideoConfig{
+		Driver: d,
+		Start:  n.startGenerationJob,
+	}); err != nil {
+		return fmt.Errorf("register generate_video: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.VideoToolDef()); err != nil {
+		return fmt.Errorf("register generate_video tool def: %w", err)
+	}
+	n.log.Debug("compute: generate_video registered", "model", ep.model, "via", ep.via)
+	return nil
 }

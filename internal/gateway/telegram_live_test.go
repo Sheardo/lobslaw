@@ -122,3 +122,55 @@ func TestLiveTelegramAcceptsMP3AsVoice(t *testing.T) {
 	}
 	t.Log("sent an mp3 as a voice note; it should appear as a playable waveform")
 }
+
+// ffmpegEncode renders a throwaway media file. Real bytes matter:
+// Telegram inspects containers, so a file merely named .png or .mp4
+// would prove nothing about sendPhoto or sendVideo.
+func ffmpegEncode(t *testing.T, name string, args ...string) string {
+	t.Helper()
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available")
+	}
+	out := filepath.Join(t.TempDir(), name)
+	full := append([]string{"-nostdin", "-loglevel", "error"}, args...)
+	full = append(full, out)
+	if b, err := exec.Command("ffmpeg", full...).CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not encode %s (%v): %s", name, err, b)
+	}
+	return out
+}
+
+// The image modality's last mile. The generator is unverified for want
+// of a provider account, but the half that actually broke for audio —
+// the multipart shape and per-method field name — is checkable for
+// free with a locally rendered file.
+func TestLiveTelegramSendsAPhoto(t *testing.T) {
+	h, chatID := liveTelegram(t)
+	png := ffmpegEncode(t, "probe.png",
+		"-f", "lavfi", "-i", "testsrc=size=320x240:duration=1", "-frames:v", "1")
+
+	if err := h.sendAttachment(chatID, types.Attachment{
+		Kind: types.AttachmentImage, MimeType: "image/png",
+		Reference: "store:probe.png", Filename: "probe.png",
+	}, fileOpener(png)); err != nil {
+		t.Fatalf("Telegram rejected the photo upload: %v", err)
+	}
+	t.Log("sent a photo; it should appear inline in the chat")
+}
+
+// Proves the video modality's delivery path before the driver exists,
+// so when it lands the only unknown is the vendor call.
+func TestLiveTelegramSendsAVideo(t *testing.T) {
+	h, chatID := liveTelegram(t)
+	mp4 := ffmpegEncode(t, "probe.mp4",
+		"-f", "lavfi", "-i", "testsrc=size=320x240:duration=2",
+		"-c:v", "libx264", "-pix_fmt", "yuv420p")
+
+	if err := h.sendAttachment(chatID, types.Attachment{
+		Kind: types.AttachmentVideo, MimeType: "video/mp4",
+		Reference: "store:probe.mp4", Filename: "probe.mp4",
+	}, fileOpener(mp4)); err != nil {
+		t.Fatalf("Telegram rejected the video upload: %v", err)
+	}
+	t.Log("sent a video; it should appear as an inline playable clip")
+}
