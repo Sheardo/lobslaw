@@ -98,6 +98,20 @@ func (n *Node) wireCompute() error {
 		return err
 	}
 
+	// Council registration happens HERE, after wireLLMProviders has
+	// populated the registry, and not with the other tools above.
+	//
+	// It used to sit with them, guarded on n.providerRegistry != nil —
+	// which is assigned 200 lines further down, inside
+	// wireLLMProviders. wireCompute runs once, the field starts nil,
+	// and nothing else assigns it, so the guard was never true and
+	// list_providers and council_review have never registered on any
+	// node. The guard read like a capability check and was really a
+	// read of a variable that did not exist yet.
+	if err := n.wireCouncilTools(builtins); err != nil {
+		return err
+	}
+
 	if err := n.wireAgent(binariesProvider); err != nil {
 		return err
 	}

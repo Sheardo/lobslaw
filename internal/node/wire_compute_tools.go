@@ -56,9 +56,6 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 		}
 	}
 
-	if err := n.wireCouncilTools(builtins); err != nil {
-		return nil, err
-	}
 	if err := n.wireFetchTools(builtins); err != nil {
 		return nil, err
 	}
@@ -298,7 +295,7 @@ func (n *Node) wireBinariesTools(builtins *compute.Builtins) (func() []promptgen
 			return nil, fmt.Errorf("register binaries tool %q: %w", td.Name, err)
 		}
 	}
-	n.log.Debug("compute: binary_install + binary_list + binary_upgrade registered", "count", len(decls))
+	n.log.Debug("compute: binary_install + binary_list registered", "count", len(decls))
 
 	installPrefix := n.cfg.Security.BinaryInstallPrefix
 	binariesProvider := func() []promptgen.BinaryInfo {
