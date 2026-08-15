@@ -117,6 +117,21 @@ func (d *DreamRunner) applyMerge(c *lobslawv1.Cluster, decision MergeDecision) e
 		retentions = append(retentions, r.Retention)
 	}
 
+	// Refuse a cluster spanning owners rather than merging it.
+	// findClusters already refuses to union across owners, but the
+	// consequence of that guarantee failing is a record holding two
+	// people's memories and owned by neither — unowned records read as
+	// legacy, so everyone would see it, and no read-side filter can
+	// undo a merge after the fact. Cheap to check, unrecoverable to
+	// get wrong.
+	owner := c.Records[0].Owner
+	for _, r := range c.Records[1:] {
+		if r.Owner != owner {
+			return fmt.Errorf("refusing to merge cluster %s: members have different owners (%q and %q)",
+				c.Id, owner, r.Owner)
+		}
+	}
+
 	centroid := computeCentroid(c.Records)
 	now := d.cfg.Now()
 
@@ -128,6 +143,11 @@ func (d *DreamRunner) applyMerge(c *lobslawv1.Cluster, decision MergeDecision) e
 		SourceIds: sourceIDs,
 		CreatedAt: timestamppb.New(now),
 		Scope:     c.Records[0].Scope,
+		Owner:     owner,
+		// Most restrictive wins: a summary of anything private is
+		// private. Taking the first member's visibility would let one
+		// shared record in a cluster publish the rest.
+		Visibility: mostRestrictiveVisibility(c.Records),
 	}
 
 	if err := d.applyEntry(&lobslawv1.LogEntry{
@@ -224,4 +244,20 @@ func computeCentroid(records []*lobslawv1.VectorRecord) []float32 {
 		sum[i] /= float32(count)
 	}
 	return sum
+}
+
+// mostRestrictiveVisibility picks the visibility a consolidation
+// inherits. A merged record stands in for all of its sources, so it
+// has to be at least as closed as the most closed of them.
+func mostRestrictiveVisibility(recs []*lobslawv1.VectorRecord) lobslawv1.Visibility {
+	out := lobslawv1.Visibility_VISIBILITY_UNSPECIFIED
+	for _, r := range recs {
+		if r.Visibility == lobslawv1.Visibility_VISIBILITY_PRIVATE {
+			return lobslawv1.Visibility_VISIBILITY_PRIVATE
+		}
+		if r.Visibility == lobslawv1.Visibility_VISIBILITY_SHARED {
+			out = lobslawv1.Visibility_VISIBILITY_SHARED
+		}
+	}
+	return out
 }

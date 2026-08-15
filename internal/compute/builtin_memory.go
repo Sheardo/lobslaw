@@ -680,11 +680,16 @@ func newMemoryForgetHandler(svc memoryForgetter) BuiltinFunc {
 		if query == "" && len(ids) == 0 && len(tags) == 0 && before == nil {
 			return nil, 2, errors.New("memory_forget: at least one filter required (query, ids, tags, or before) — refusing to forget everything")
 		}
+		// Always scoped to the caller. Forget is destructive and
+		// cascades through consolidations, so an unscoped one lets the
+		// model erase another person's memory on request.
+		turn, _ := TurnIdentityFrom(ctx)
 		req := &lobslawv1.ForgetRequest{
-			Query:  query,
-			Ids:    ids,
-			Tags:   tags,
-			Before: before,
+			Query:     query,
+			Ids:       ids,
+			Tags:      tags,
+			Before:    before,
+			Requester: turn.Principal.String(),
 		}
 		resp, err := svc.Forget(ctx, req)
 		if err != nil {
@@ -746,7 +751,11 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) 
 
 		// Step 2: forget the original. Any consolidations containing
 		// the old id are also swept (privacy-safe).
-		forgetReq := &lobslawv1.ForgetRequest{Ids: []string{oldID}}
+		turn, _ := TurnIdentityFrom(ctx)
+		forgetReq := &lobslawv1.ForgetRequest{
+			Ids:       []string{oldID},
+			Requester: turn.Principal.String(),
+		}
 		forgetResp, err := forgetter.Forget(ctx, forgetReq)
 		if err != nil {
 			return nil, 1, fmt.Errorf("memory_correct: forget old: %w", err)

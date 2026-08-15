@@ -3,12 +3,14 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -196,5 +198,119 @@ func TestCommitmentListRejectsBadBoolean(t *testing.T) {
 	_, exit, err := fn(context.Background(), map[string]string{"include_history": "yeppers"})
 	if err == nil || exit == 0 {
 		t.Error("non-boolean include_history should fail")
+	}
+}
+
+// --- ownership ---------------------------------------------------------
+
+func seedOwnedCommitment(t *testing.T, store *memory.Store, id, owner string) {
+	t.Helper()
+	raw, err := proto.Marshal(&lobslawv1.AgentCommitment{
+		Id:     id,
+		Status: "pending",
+		DueAt:  timestamppb.New(time.Now().Add(time.Hour)),
+		Params: map[string]string{"prompt": "ping"},
+		Owner:  owner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(memory.BucketCommitments, id, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func turnAs(user string) context.Context {
+	return WithTurnIdentity(context.Background(), TurnIdentity{
+		UserID:    user,
+		Principal: identity.User(user),
+	})
+}
+
+// A commitment is a reminder someone asked the agent to hold for them.
+// Whose it is, is not the rest of the household's business.
+func TestCommitmentListHidesOtherPrincipals(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	seedOwnedCommitment(t, store, "alice-1", "user:alice")
+	seedOwnedCommitment(t, store, "bob-1", "user:bob")
+	seedOwnedCommitment(t, store, "legacy", "")
+
+	b := NewBuiltins()
+	if err := RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: &fakeApplier{}}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("commitment_list")
+	out, _, err := fn(turnAs("alice"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		HiddenCount int `json:"hidden_count"`
+		Commitments []struct {
+			ID string `json:"id"`
+		} `json:"commitments"`
+	}
+	if err := json.Unmarshal(out, &payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, c := range payload.Commitments {
+		got[c.ID] = true
+	}
+	if got["bob-1"] {
+		t.Error("alice was shown bob's commitment")
+	}
+	if !got["alice-1"] || !got["legacy"] {
+		t.Errorf("alice lost her own or the legacy commitment: %+v", payload.Commitments)
+	}
+	// Bob's must not reach the hidden counter either — that would leak
+	// how many things other people have scheduled.
+	if payload.HiddenCount != 0 {
+		t.Errorf("hidden_count = %d; another principal's commitment was counted", payload.HiddenCount)
+	}
+}
+
+// Cancellation is a write, and commitment_list hands out ids.
+func TestCommitmentCancelRefusesAnotherPrincipals(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	seedOwnedCommitment(t, store, "bob-1", "user:bob")
+
+	raft := &fakeApplier{}
+	b := NewBuiltins()
+	if err := RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: raft}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("commitment_cancel")
+	_, exit, err := fn(turnAs("alice"), map[string]string{"id": "bob-1"})
+	if err == nil {
+		t.Fatal("alice cancelled bob's commitment")
+	}
+	if exit != 2 {
+		t.Errorf("exit = %d, want 2", exit)
+	}
+	// The refusal must be indistinguishable from "no such commitment",
+	// or the error is an oracle for what other people have scheduled.
+	if !strings.Contains(err.Error(), "no pending commitment with that id") {
+		t.Errorf("error names the real reason: %v", err)
+	}
+	if len(raft.entries) != 0 {
+		t.Error("a delete was applied despite the refusal")
+	}
+}
+
+func TestCommitmentCancelAllowsOwn(t *testing.T) {
+	t.Parallel()
+	store := newMemoryStoreForTest(t)
+	seedOwnedCommitment(t, store, "alice-1", "user:alice")
+
+	b := NewBuiltins()
+	if err := RegisterCommitmentBuiltins(b, CommitmentConfig{Store: store, Raft: &fakeApplier{}}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("commitment_cancel")
+	if _, _, err := fn(turnAs("alice"), map[string]string{"id": "alice-1"}); err != nil {
+		t.Fatalf("alice could not cancel her own commitment: %v", err)
 	}
 }

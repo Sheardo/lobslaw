@@ -1701,7 +1701,16 @@ type ForgetRequest struct {
 	// Search→preview→Forget pipelines without a dedicated "forget by
 	// similarity" RPC. At least one of query/before/tags/ids must be
 	// set — the handler still refuses to forget everything.
-	Ids           []string `protobuf:"bytes,4,rep,name=ids,proto3" json:"ids,omitempty"`
+	Ids []string `protobuf:"bytes,4,rep,name=ids,proto3" json:"ids,omitempty"`
+	// requester is the canonical principal the forget runs on behalf of
+	// ("user:alice"). Records it may not read are not deleted — forget
+	// is destructive and irreversible, so an unscoped one lets any
+	// caller erase another person's memory.
+	//
+	// Empty means unrestricted, for operator tooling and peer nodes
+	// reaching this over mTLS. The agent's memory_forget always sets it
+	// from the turn.
+	Requester     string `protobuf:"bytes,5,opt,name=requester,proto3" json:"requester,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1762,6 +1771,13 @@ func (x *ForgetRequest) GetIds() []string {
 		return x.Ids
 	}
 	return nil
+}
+
+func (x *ForgetRequest) GetRequester() string {
+	if x != nil {
+		return x.Requester
+	}
+	return ""
 }
 
 type ForgetResponse struct {
@@ -3395,8 +3411,13 @@ type AgentCommitment struct {
 	// as unclaimed.
 	ClaimedBy      string                 `protobuf:"bytes,10,opt,name=claimed_by,json=claimedBy,proto3" json:"claimed_by,omitempty"`
 	ClaimExpiresAt *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=claim_expires_at,json=claimExpiresAt,proto3" json:"claim_expires_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// owner is the canonical principal this commitment belongs to
+	// ("user:alice"). created_for above is the raw channel id it was
+	// made for, which is per-channel and so cannot be compared across
+	// them. Empty on records written before ownership existed.
+	Owner         string `protobuf:"bytes,12,opt,name=owner,proto3" json:"owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentCommitment) Reset() {
@@ -3506,6 +3527,13 @@ func (x *AgentCommitment) GetClaimExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *AgentCommitment) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
 type ScheduledTaskRecord struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -3521,8 +3549,11 @@ type ScheduledTaskRecord struct {
 	// Raft-CAS claim, same semantics as AgentCommitment.claimed_by.
 	ClaimedBy      string                 `protobuf:"bytes,11,opt,name=claimed_by,json=claimedBy,proto3" json:"claimed_by,omitempty"`
 	ClaimExpiresAt *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=claim_expires_at,json=claimExpiresAt,proto3" json:"claim_expires_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// owner is the canonical principal, as on AgentCommitment.
+	// created_by above is the raw channel id.
+	Owner         string `protobuf:"bytes,13,opt,name=owner,proto3" json:"owner,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ScheduledTaskRecord) Reset() {
@@ -3637,6 +3668,13 @@ func (x *ScheduledTaskRecord) GetClaimExpiresAt() *timestamppb.Timestamp {
 		return x.ClaimExpiresAt
 	}
 	return nil
+}
+
+func (x *ScheduledTaskRecord) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
 }
 
 type InFlightWork struct {
@@ -6339,12 +6377,13 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\fDreamRequest\"K\n" +
 	"\rDreamResponse\x12\"\n" +
 	"\fconsolidated\x18\x01 \x01(\x05R\fconsolidated\x12\x16\n" +
-	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\"\x7f\n" +
+	"\x06pruned\x18\x02 \x01(\x05R\x06pruned\"\x9d\x01\n" +
 	"\rForgetRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x122\n" +
 	"\x06before\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x06before\x12\x12\n" +
 	"\x04tags\x18\x03 \x03(\tR\x04tags\x12\x10\n" +
-	"\x03ids\x18\x04 \x03(\tR\x03ids\"r\n" +
+	"\x03ids\x18\x04 \x03(\tR\x03ids\x12\x1c\n" +
+	"\trequester\x18\x05 \x01(\tR\trequester\"r\n" +
 	"\x0eForgetResponse\x12'\n" +
 	"\x0frecords_removed\x18\x01 \x01(\x05R\x0erecordsRemoved\x127\n" +
 	"\x17consolidations_reforged\x18\x02 \x01(\x05R\x16consolidationsReforged\"\xb6\x02\n" +
@@ -6471,7 +6510,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\atimeout\x18\x05 \x01(\v2\x19.google.protobuf.DurationR\atimeout\"R\n" +
 	"\x0ePromptResponse\x12#\n" +
 	"\rchosen_option\x18\x01 \x01(\tR\fchosenOption\x12\x1b\n" +
-	"\ttimed_out\x18\x02 \x01(\bR\btimedOut\"\xed\x03\n" +
+	"\ttimed_out\x18\x02 \x01(\bR\btimedOut\"\x83\x04\n" +
 	"\x0fAgentCommitment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x121\n" +
 	"\x06due_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x05dueAt\x12\x18\n" +
@@ -6487,10 +6526,11 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"claimed_by\x18\n" +
 	" \x01(\tR\tclaimedBy\x12D\n" +
-	"\x10claim_expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x1a9\n" +
+	"\x10claim_expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x14\n" +
+	"\x05owner\x18\f \x01(\tR\x05owner\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbd\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd3\x04\n" +
 	"\x13ScheduledTaskRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1a\n" +
@@ -6508,7 +6548,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\anextRun\x12\x1d\n" +
 	"\n" +
 	"claimed_by\x18\v \x01(\tR\tclaimedBy\x12D\n" +
-	"\x10claim_expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x1a9\n" +
+	"\x10claim_expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x14\n" +
+	"\x05owner\x18\r \x01(\tR\x05owner\x1a9\n" +
 	"\vParamsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa7\x01\n" +
