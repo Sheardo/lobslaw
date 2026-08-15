@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -114,7 +115,24 @@ func (n *RaftNode) SetLeaderDialer(dial LeaderDialer) {
 // cannot log usefully.
 func (n *RaftNode) ApplyOrForward(ctx context.Context, data []byte, timeout time.Duration) (any, error) {
 	if n.IsLeader() {
-		return n.Apply(data, timeout)
+		res, err := n.Apply(data, timeout)
+		if err == nil {
+			return res, nil
+		}
+		// IsLeader said yes and then leadership moved before the apply
+		// landed. Raft reports that as a bare ErrLeadershipLost or
+		// ErrNotLeader, which matches none of our sentinels — so a
+		// caller doing errors.Is(err, ErrNoLeader) || ... sees an
+		// unrecognised error and treats a transient election as
+		// permanent, dropping the user's message.
+		//
+		// This window is unavoidable: nothing can hold leadership
+		// still between the check and the call. What is avoidable is
+		// misreporting it as fatal.
+		if isLeadershipChange(err) {
+			return nil, fmt.Errorf("%w: lost leadership mid-apply: %w", ErrNotLeader, err)
+		}
+		return nil, err
 	}
 
 	addr := string(n.LeaderAddress())
@@ -150,4 +168,16 @@ func (n *RaftNode) ApplyOrForward(ctx context.Context, data []byte, timeout time
 	// the leader and replicated here. Callers that need the result
 	// read it back from the local store after the apply lands.
 	return nil, nil
+}
+
+// IsLeadershipChangeErr reports whether a raft error means
+// "leadership moved", as opposed to a genuine failure to replicate.
+// These are the retryable ones: the write did not land, but trying
+// again — here or against the new leader — will work.
+func IsLeadershipChangeErr(err error) bool { return isLeadershipChange(err) }
+
+func isLeadershipChange(err error) bool {
+	return errors.Is(err, raft.ErrNotLeader) ||
+		errors.Is(err, raft.ErrLeadershipLost) ||
+		errors.Is(err, raft.ErrLeadershipTransferInProgress)
 }

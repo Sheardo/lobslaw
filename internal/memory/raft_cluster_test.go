@@ -340,4 +340,23 @@ func bootstrapAndJoin(t *testing.T, nodes []*clusterNode) {
 			t.Fatalf("AddVoter %s: %v", nodes[i].id, err)
 		}
 	}
+
+	// AddVoter returning is not the same as the new voter knowing who
+	// the leader is: it has to receive an AppendEntries first. Until
+	// then LeaderAddress() is empty on that node, and anything
+	// forwarding a write gets ErrNoLeader.
+	//
+	// Without this wait a test that writes on a follower immediately
+	// after setup fails intermittently, and the failure looks like a
+	// forwarding bug rather than a cluster that has not finished
+	// converging.
+	deadline := time.Now().Add(10 * time.Second)
+	for _, n := range nodes {
+		for n.raft.LeaderAddress() == "" {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s never observed a leader", n.id)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 }

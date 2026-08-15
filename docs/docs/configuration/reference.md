@@ -184,6 +184,25 @@ require_auth        = false
 default_scope       = "public"
 unknown_user_scope  = "public"
 
+# What happens when a message arrives while a turn is already running
+# for the same conversation. Turns on one conversation never overlap in
+# any mode — the modes differ only in what becomes of the second
+# message.
+#
+#   serial    queue behind the running turn, answer in arrival order
+#             (default; nothing is dropped)
+#   debounce  hold briefly and fold consecutive messages into one turn
+#             — matches how people actually type
+#   latest    keep only the newest queued message, discard what it
+#             overtook
+#   off       drop messages that arrive mid-turn, telling the user
+#
+# An unrecognised value is rejected at boot rather than defaulting, so
+# a typo cannot silently change how messages are handled.
+queue_mode     = "serial"
+# Fold window for queue_mode = "debounce". Ignored otherwise. 0 → 3s.
+queue_debounce = "3s"
+
 [identity]
 # Maps the per-channel user ids lobslaw receives onto cluster-wide
 # principals. Only needed when one person reaches the node under more

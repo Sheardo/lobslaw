@@ -87,7 +87,8 @@ sections further down propose:
 | R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
 | R7 | **Partial** — see the status note on the section itself |
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
-| R2, R3 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record; turns are dispatched straight into `go func()` at `gateway/conversation.go:178` |
+| R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
+| R3 | **Partial.** Per-conversation turn serialisation + all four queue modes shipped in `internal/gateway/turnqueue.go`, wired into Telegram and REST. The cluster-wide lease and the persisted pending queue are not in — see the section |
 | R5 | Partial — `internal/soul/trust.go` and skill signing exist; the single trust contract and ingest scanning do not |
 
 R5 is P0 on security grounds and independent of everything else. With R0 landed,
@@ -442,10 +443,33 @@ stopping it per fragment, so the UX reads as "it's listening" instead of stutter
 
 ### Acceptance
 
-- [ ] Three messages sent during one in-flight turn produce one coherent history in arrival order.
-- [ ] `debounce` folds rapid-fire fragments into a single turn.
+- [x] Three messages sent during one in-flight turn produce one coherent history in arrival order.
+- [x] `debounce` folds rapid-fire fragments into a single turn.
 - [ ] A node killed mid-turn releases its lease within the TTL and another node picks up the queue.
 - [ ] Queued messages survive a restart.
+
+> **Partially shipped, 2026-08-15.** `internal/gateway/turnqueue.go` serialises
+> turns per conversation, with all four modes, wired into both the Telegram and
+> REST paths and configured by `gateway.queue_mode` / `queue_debounce`.
+>
+> One correction to the problem statement above: **polling mode was never
+> affected.** `dispatchUpdate` is called from a plain loop, so updates were
+> already serialised there. The race was webhook mode, where every update
+> arrives on its own `net/http` goroutine, and the REST channel. The gate makes
+> the transports agree rather than leaving correctness dependent on which one an
+> operator picked.
+>
+> **Still to do — the cluster half.** The gate is in-process, so two *nodes*
+> serving the same conversation still race. That needs the raft-backed
+> per-session lease (`LOG_OP_CLAIM`, which exists) keyed on session id with a
+> TTL and heartbeat. Today one node serves a given conversation in practice —
+> polling is leader-pinned by the singleton gate and a webhook has one
+> endpoint — so this is a narrower gap than it sounds, but it is the difference
+> between "does not happen" and "cannot happen".
+>
+> **Still to do — persistence.** Queued messages live in memory, so a restart
+> mid-queue loses them. That wants `SessionRecord.pending`, which does not
+> exist yet; it is a proto change and belongs with the lease work.
 
 ---
 

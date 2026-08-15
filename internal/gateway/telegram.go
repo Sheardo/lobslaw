@@ -40,6 +40,12 @@ type TelegramConfig struct {
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// QueueMode and QueueDebounce configure per-conversation turn
+	// serialisation. Zero value is QueueSerial, which is both the
+	// safe default and the one that drops nothing.
+	QueueMode     QueueMode
+	QueueDebounce time.Duration
+
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
 	// deployments.
@@ -163,6 +169,11 @@ type TelegramHandler struct {
 	log    *slog.Logger
 	client *http.Client
 	base   string
+
+	// gate serialises turns per conversation. See turnqueue.go — in
+	// webhook mode every update lands on its own net/http goroutine,
+	// so without it two messages in one conversation run at once.
+	gate *TurnGate
 
 	// inflightMu guards the de-dup cache. Telegram retries on
 	// network errors; without dedup a tool invocation could run
@@ -315,6 +326,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		log:           logger,
 		client:        client,
 		base:          base,
+		gate:          NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger),
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
 		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
@@ -396,6 +408,31 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
 	}
+	// Everything from here to the Append below is one turn, and two
+	// of them on the same chat must not overlap: both would Load the
+	// same prior history and both would Append it, interleaving the
+	// transcript. In webhook mode each update arrives on its own
+	// net/http goroutine, so that is the normal case, not a rare one.
+	lease, disposition := h.gate.Acquire(ctx, cacheKey(sessionRef), turnText(msg))
+	switch disposition {
+	case Folded:
+		// Another turn absorbed this message and will answer for it.
+		h.log.Debug("telegram: message folded into an in-flight turn",
+			"turn_id", turnID, "chat_id", msg.Chat.ID)
+		return
+	case Dropped:
+		h.log.Info("telegram: message dropped by queue policy",
+			"turn_id", turnID, "chat_id", msg.Chat.ID, "mode", h.gate.Mode())
+		if h.gate.Mode() == QueueOff {
+			// Only "off" owes the user an explanation. Under "latest"
+			// the message was overtaken by a newer one from the same
+			// person, who is about to get an answer anyway.
+			h.sendText(msg.Chat.ID, "Still working on your previous message — send that again once I've replied.")
+		}
+		return
+	}
+	defer lease.Release()
+
 	prior := h.conv.Load(ctx, sessionRef)
 	h.log.Debug("telegram: conversation history loaded",
 		"turn_id", turnID,
@@ -417,16 +454,16 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	// the message body so the agent has something to anchor on.
 	// Falls back to a stub the agent can interpret as "user sent
 	// just media; do something useful with it".
-	turnText := msg.Text
-	if turnText == "" {
-		turnText = msg.Caption
-	}
-	if turnText == "" && im.HasMedia() {
-		turnText = "(no caption — please inspect the attached media and respond)"
+	// lease.Batch is this message plus anything folded into it while
+	// it waited. Using msg alone here would silently drop the
+	// fragments the gate promised to answer.
+	body := strings.Join(lease.Batch, "\n")
+	if body == "" && im.HasMedia() {
+		body = "(no caption — please inspect the attached media and respond)"
 	}
 
 	agentReq := compute.ProcessMessageRequest{
-		Message:             turnText,
+		Message:             body,
 		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
@@ -1241,4 +1278,15 @@ func classifyAgentError(err error) string {
 	default:
 		return "Something went wrong processing your message."
 	}
+}
+
+// turnText is the message body used both for gating and, after any
+// folding, for the turn itself. Caption stands in for text on a
+// media-only message so a photo with a caption is not treated as an
+// empty message by the queue.
+func turnText(msg *tgMessage) string {
+	if msg.Text != "" {
+		return msg.Text
+	}
+	return msg.Caption
 }

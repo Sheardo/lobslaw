@@ -114,7 +114,28 @@ func (c *Config) Validate() error {
 	if err := validateContextConfig(c.Compute.Context); err != nil {
 		return err
 	}
+	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateQueueMode rejects an unrecognised gateway.queue_mode at
+// boot. The parser defaults anything unknown to "serial", which is
+// the safe mode — but an operator who wrote "debounce_ms" or
+// "Debounce " and got silent serialisation would have no way to tell
+// their setting was ignored.
+//
+// The names are duplicated here rather than imported: pkg/config is
+// below internal/gateway and must not depend on it.
+func validateQueueMode(mode string) error {
+	switch mode {
+	case "", "serial", "latest", "debounce", "off":
+		return nil
+	default:
+		return fmt.Errorf("%w: gateway.queue_mode = %q; want one of serial, latest, debounce, off",
+			types.ErrInvalidConfig, mode)
+	}
 }
 
 // validateContextConfig rejects context-budget settings that would
