@@ -483,8 +483,20 @@ func TestSchedulerConcurrentClaimOnlyOneWins(t *testing.T) {
 		ClaimTTL: time.Minute,
 	}, node, regB)
 
+	// A once-a-year schedule, deliberately. NextRun in the past makes
+	// the task due immediately, which is all this test needs; the cron
+	// expression only decides when it becomes due AGAIN.
+	//
+	// It used to be "* * * * *". That made the test wall-clock
+	// dependent: after the winner ran it, NextRun rolled to the next
+	// minute boundary, and if that boundary happened to fall inside the
+	// ~100ms window this test watches, the task became legitimately due
+	// a second time and the loser claimed it. Two fires, one claim
+	// each, CAS working perfectly — and a failure reading
+	// "expected exactly one handler fire". Rare, machine-dependent, and
+	// it cost a real CI investigation.
 	seedTask(t, node, &lobslawv1.ScheduledTaskRecord{
-		Id: "shared", Schedule: "* * * * *", HandlerRef: "echo",
+		Id: "shared", Schedule: "0 0 1 1 *", HandlerRef: "echo",
 		Enabled: true,
 		NextRun: timestamppb.New(time.Now().Add(-time.Second)),
 	})
