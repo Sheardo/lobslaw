@@ -43,6 +43,33 @@ type Subject struct {
 	// the failure-injection cases (a real provider will not return 402
 	// on demand) and run the round-trip cases for real.
 	Live bool
+
+	// Model names the model the suite asks for, and exists because
+	// against a fake it does not matter and against a real provider it
+	// is the difference between a round trip and a 404. Empty keeps the
+	// placeholder, which is what every fake-backed subject wants.
+	Model string
+}
+
+// model is what the suite puts on the wire.
+func (s Subject) model() string {
+	if s.Model != "" {
+		return s.Model
+	}
+	return "test-model"
+}
+
+// callCtx bounds a live call. A fake answers immediately, but a real
+// provider that hangs would otherwise burn the whole `go test` timeout
+// and report as the suite hanging rather than the provider.
+func (s Subject) callCtx(t *testing.T) context.Context {
+	t.Helper()
+	if !s.Live {
+		return context.Background()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), LiveTimeout)
+	t.Cleanup(cancel)
+	return ctx
 }
 
 // Run executes every applicable case. Call it from a driver's own
@@ -63,8 +90,8 @@ func Run(t *testing.T, s Subject) {
 }
 
 func chatRoundTrip(t *testing.T, s Subject) {
-	resp, err := s.Chat.Chat(context.Background(), compute.ChatRequest{
-		Model:    "test-model",
+	resp, err := s.Chat.Chat(s.callCtx(t), compute.ChatRequest{
+		Model:    s.model(),
 		Messages: []compute.Message{{Role: "user", Content: "ping"}},
 	})
 	if err != nil {
@@ -86,8 +113,8 @@ func chatRoundTrip(t *testing.T, s Subject) {
 // The layer above prices calls from usage. A driver that returns a
 // zero token count on a token-billed call makes the turn look free.
 func chatUsage(t *testing.T, s Subject) {
-	resp, err := s.Chat.Chat(context.Background(), compute.ChatRequest{
-		Model:    "test-model",
+	resp, err := s.Chat.Chat(s.callCtx(t), compute.ChatRequest{
+		Model:    s.model(),
 		Messages: []compute.Message{{Role: "user", Content: "ping"}},
 	})
 	if err != nil {
@@ -105,7 +132,7 @@ func chatCancel(t *testing.T, s Subject) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := s.Chat.Chat(ctx, compute.ChatRequest{
-		Model:    "test-model",
+		Model:    s.model(),
 		Messages: []compute.Message{{Role: "user", Content: "ping"}},
 	})
 	if err == nil {
@@ -152,7 +179,7 @@ func chatFailures(t *testing.T, s Subject) {
 		t.Run(tc.name, func(t *testing.T) {
 			d := s.FailingChat(tc.status, tc.body)
 			_, err := d.Chat(context.Background(), compute.ChatRequest{
-				Model:    "test-model",
+				Model:    s.model(),
 				Messages: []compute.Message{{Role: "user", Content: "ping"}},
 			})
 			if err == nil {
