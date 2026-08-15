@@ -96,6 +96,13 @@ type RESTConfig struct {
 	// process does.
 	Sessions SessionStore
 
+	// Compactor folds aged-out conversation into a running summary.
+	// Nil disables compaction.
+	Compactor SessionCompactor
+
+	// Conversation tunes replay depth and the degraded-mode cache.
+	Conversation ConversationConfig
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -145,7 +152,7 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg:   cfg,
 		agent: agent,
 		log:   cfg.Logger,
-		conv:  newConversationLog(cfg.Sessions, cfg.Logger),
+		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
 
@@ -268,15 +275,15 @@ type messageRequest struct {
 // tool-call history + confirmation prompts, but with only the
 // fields a channel client needs.
 type messageResponse struct {
-	Reply              string              `json:"reply"`
-	ToolCalls          []toolCallJSON      `json:"tool_calls,omitempty"`
-	NeedsConfirmation  bool                `json:"needs_confirmation,omitempty"`
-	ConfirmationReason string              `json:"confirmation_reason,omitempty"`
+	Reply              string         `json:"reply"`
+	ToolCalls          []toolCallJSON `json:"tool_calls,omitempty"`
+	NeedsConfirmation  bool           `json:"needs_confirmation,omitempty"`
+	ConfirmationReason string         `json:"confirmation_reason,omitempty"`
 	// PromptID is populated when NeedsConfirmation and Prompts is
 	// configured — the client polls /v1/prompts/<id> and resolves
 	// via POST /v1/prompts/<id>/resolve.
-	PromptID           string              `json:"prompt_id,omitempty"`
-	Budget             budgetStateJSON     `json:"budget,omitempty"`
+	PromptID string          `json:"prompt_id,omitempty"`
+	Budget   budgetStateJSON `json:"budget,omitempty"`
 }
 
 type toolCallJSON struct {
@@ -380,7 +387,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sessionRef SessionRef
-	var priorHistory []compute.Message
+	var prior Transcript
 	if req.SessionID != "" {
 		if err := validateSessionID(req.SessionID); err != nil {
 			s.jsonErr(w, http.StatusBadRequest, err.Error())
@@ -391,11 +398,12 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			ChannelID: restSessionID(claims.UserID, req.SessionID),
 			UserID:    claims.UserID,
 		}
-		priorHistory = s.conv.Load(r.Context(), sessionRef)
+		prior = s.conv.Load(r.Context(), sessionRef)
 		s.log.Debug("rest: conversation history loaded",
 			"turn_id", req.TurnID,
 			"session_id", req.SessionID,
-			"prior_messages", len(priorHistory))
+			"prior_messages", len(prior.Messages),
+			"summarised", prior.Summary != "")
 	}
 
 	agentReq := compute.ProcessMessageRequest{
@@ -404,7 +412,8 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		TurnID:              req.TurnID,
 		Model:               req.Model,
 		Budget:              budget,
-		ConversationHistory: priorHistory,
+		ConversationHistory: prior.Messages,
+		ConversationSummary: prior.Summary,
 		Channel:             sessionRef.Channel,
 		ChannelID:           sessionRef.ChannelID,
 	}

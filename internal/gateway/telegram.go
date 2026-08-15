@@ -128,6 +128,13 @@ type TelegramConfig struct {
 	// leaves the handler on its in-memory buffer — conversations then
 	// reset on restart, as they did before sessions existed.
 	Sessions SessionStore
+
+	// Compactor folds aged-out conversation into a running summary.
+	// Nil disables compaction.
+	Compactor SessionCompactor
+
+	// Conversation tunes replay depth and the degraded-mode cache.
+	Conversation ConversationConfig
 }
 
 // ChannelStateStore is a minimal raft-backed key-value interface for
@@ -302,7 +309,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		base:          base,
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
-		conv:          newConversationLog(cfg.Sessions, logger),
+		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
 	}, nil
 }
 
@@ -380,11 +387,12 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
 	}
-	priorHistory := h.conv.Load(ctx, sessionRef)
+	prior := h.conv.Load(ctx, sessionRef)
 	h.log.Debug("telegram: conversation history loaded",
 		"turn_id", turnID,
 		"chat_id", msg.Chat.ID,
-		"prior_turns", len(priorHistory))
+		"prior_turns", len(prior.Messages),
+		"summarised", prior.Summary != "")
 
 	// Convert wire format → channel-agnostic IncomingMessage and
 	// download any attachments to /workspace/incoming/<turn>/ so
@@ -414,7 +422,8 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		Claims:              claims,
 		TurnID:              turnID,
 		Budget:              budget,
-		ConversationHistory: priorHistory,
+		ConversationHistory: prior.Messages,
+		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
 		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -84,6 +85,14 @@ type SessionService struct {
 	raft        *RaftNode
 	store       *Store
 	maxMessages int
+
+	// writeMu serialises the read-modify-write of a session's index
+	// record. Append and PutSummary both load the record, mutate it
+	// and propose it; interleaved, a compaction that lands between
+	// another writer's load and apply is silently discarded and the
+	// summarised messages get replayed again. Writes are leader-only
+	// and roughly one per turn, so a single lock is cheap enough.
+	writeMu sync.Mutex
 }
 
 // SessionConfig tunes the service. Zero values take the defaults.
@@ -174,6 +183,150 @@ func (s *SessionService) LoadTail(_ context.Context, ref SessionRef, n int) ([]T
 	return out, nil
 }
 
+// Transcript is a conversation prepared for a turn: the running
+// summary of everything already compacted, plus the messages that
+// are still replayed verbatim.
+type Transcript struct {
+	// Summary covers messages up to SummaryThroughSeq. Empty when
+	// the conversation has never needed compacting.
+	Summary string
+	// SummaryThroughSeq is the highest sequence the summary covers.
+	SummaryThroughSeq uint64
+	// Messages are the verbatim tail — everything after
+	// SummaryThroughSeq, oldest first.
+	Messages []TranscriptMessage
+	// NextSeq is the sequence the next appended message will take.
+	// Callers use it to decide what is eligible for compaction.
+	NextSeq uint64
+}
+
+// LoadTranscript returns the summary plus the messages after it.
+//
+// Summarised messages are deliberately NOT replayed — the summary
+// stands in for them. Replaying both would pay for the same content
+// twice and invite the model to treat one as a correction of the
+// other.
+func (s *SessionService) LoadTranscript(_ context.Context, ref SessionRef) (*Transcript, error) {
+	if s.store == nil {
+		return nil, errors.New("session: store not wired")
+	}
+	id, err := sessionID(ref.Channel, ref.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	rec, err := s.loadRecord(id)
+	if err != nil {
+		return nil, err
+	}
+	out := &Transcript{}
+	if rec != nil {
+		out.Summary = rec.Summary
+		out.SummaryThroughSeq = rec.SummaryThroughSeq
+		out.NextSeq = rec.NextSeq
+	}
+	err = s.store.ForEachPrefix(BucketSessionMessages, sessionMessagePrefix(id),
+		func(key string, raw []byte) error {
+			var msg lobslawv1.SessionMessage
+			if err := proto.Unmarshal(raw, &msg); err != nil {
+				return fmt.Errorf("session: unmarshal %s: %w", key, err)
+			}
+			if msg.Seq <= out.SummaryThroughSeq {
+				return nil
+			}
+			out.Messages = append(out.Messages, fromProtoMessage(&msg))
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// LoadRange returns the messages in (afterSeq, throughSeq], oldest
+// first. Used by compaction to read exactly the span that is aging
+// out of verbatim replay.
+func (s *SessionService) LoadRange(_ context.Context, ref SessionRef, afterSeq, throughSeq uint64) ([]TranscriptMessage, error) {
+	if s.store == nil {
+		return nil, errors.New("session: store not wired")
+	}
+	id, err := sessionID(ref.Channel, ref.ChannelID)
+	if err != nil {
+		return nil, err
+	}
+	var out []TranscriptMessage
+	err = s.store.ForEachPrefix(BucketSessionMessages, sessionMessagePrefix(id),
+		func(key string, raw []byte) error {
+			var msg lobslawv1.SessionMessage
+			if err := proto.Unmarshal(raw, &msg); err != nil {
+				return fmt.Errorf("session: unmarshal %s: %w", key, err)
+			}
+			if msg.Seq <= afterSeq || msg.Seq > throughSeq {
+				return nil
+			}
+			out = append(out, fromProtoMessage(&msg))
+			return nil
+		})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PutSummary stores a compaction result: the new running summary and
+// the sequence it covers through.
+//
+// throughSeq must not go backwards — a stale compaction landing after
+// a newer one would resurrect messages the newer summary already
+// folded in, and the transcript would replay them a second time.
+func (s *SessionService) PutSummary(_ context.Context, ref SessionRef, summary string, throughSeq uint64) error {
+	if s.store == nil {
+		return errors.New("session: store not wired")
+	}
+	id, err := sessionID(ref.Channel, ref.ChannelID)
+	if err != nil {
+		return err
+	}
+	if s.raft == nil {
+		return fmt.Errorf("%w: raft not wired", ErrNotLeader)
+	}
+	if !s.raft.IsLeader() {
+		return fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rec, err := s.loadRecord(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil {
+		return fmt.Errorf("session: %s does not exist", id)
+	}
+	if throughSeq <= rec.SummaryThroughSeq {
+		return nil
+	}
+	now := timestamppb.Now()
+	rec.Summary = summary
+	rec.SummaryThroughSeq = throughSeq
+	rec.SummaryUpdatedAt = now
+	rec.UpdatedAt = now
+
+	entry := &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_PUT,
+		Id: id,
+		Payload: &lobslawv1.LogEntry_SessionAppend{
+			SessionAppend: &lobslawv1.SessionAppendRecord{Session: rec},
+		},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("session: marshal: %w", err)
+	}
+	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+		return fmt.Errorf("session: raft apply: %w", err)
+	}
+	return nil
+}
+
 // Append records the messages a turn produced and returns the
 // resulting index record.
 //
@@ -198,6 +351,8 @@ func (s *SessionService) Append(_ context.Context, ref SessionRef, turnID string
 	if !s.raft.IsLeader() {
 		return nil, fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
 	rec, err := s.loadRecord(id)
 	if err != nil {

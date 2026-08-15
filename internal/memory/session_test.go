@@ -383,3 +383,113 @@ func TestSessionAppendOnFollowerReturnsErrNotLeader(t *testing.T) {
 		t.Errorf("got %v, want ErrNotLeader", err)
 	}
 }
+
+func TestSessionSummaryRoundTrip(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "sum"}
+
+	for i := range 6 {
+		if _, err := s.Append(ctx, ref, "t", []TranscriptMessage{userMsg(fmt.Sprintf("m%d", i))}); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+	if err := s.PutSummary(ctx, ref, "the user counted to five", 4); err != nil {
+		t.Fatalf("PutSummary: %v", err)
+	}
+
+	tr, err := s.LoadTranscript(ctx, ref)
+	if err != nil {
+		t.Fatalf("LoadTranscript: %v", err)
+	}
+	if tr.Summary != "the user counted to five" {
+		t.Errorf("summary = %q", tr.Summary)
+	}
+	if tr.SummaryThroughSeq != 4 {
+		t.Errorf("through = %d, want 4", tr.SummaryThroughSeq)
+	}
+	// Summarised messages must NOT also be replayed — paying twice for
+	// the same content, and inviting the model to treat one as a
+	// correction of the other.
+	if len(tr.Messages) != 2 {
+		t.Fatalf("got %d verbatim messages, want 2 (seq 5 and 6): %+v", len(tr.Messages), tr.Messages)
+	}
+	if tr.Messages[0].Content != "m4" || tr.Messages[1].Content != "m5" {
+		t.Errorf("wrong tail: %+v", tr.Messages)
+	}
+}
+
+// A stale compaction landing after a newer one would resurrect
+// messages the newer summary already folded in.
+func TestSessionSummaryNeverGoesBackwards(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "monotonic"}
+	for range 10 {
+		if _, err := s.Append(ctx, ref, "t", []TranscriptMessage{userMsg("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PutSummary(ctx, ref, "newer", 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSummary(ctx, ref, "stale", 3); err != nil {
+		t.Fatalf("stale write should be ignored, not error: %v", err)
+	}
+	tr, err := s.LoadTranscript(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Summary != "newer" || tr.SummaryThroughSeq != 8 {
+		t.Errorf("stale compaction overwrote a newer one: %q through %d", tr.Summary, tr.SummaryThroughSeq)
+	}
+}
+
+func TestSessionAppendPreservesSummary(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "preserve"}
+	for range 5 {
+		if _, err := s.Append(ctx, ref, "t", []TranscriptMessage{userMsg("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PutSummary(ctx, ref, "keep me", 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Append(ctx, ref, "t2", []TranscriptMessage{userMsg("after")}); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := s.LoadTranscript(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Summary != "keep me" || tr.SummaryThroughSeq != 3 {
+		t.Errorf("append clobbered the summary: %q through %d", tr.Summary, tr.SummaryThroughSeq)
+	}
+}
+
+func TestSessionLoadRangeIsExclusiveOfAfter(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "rng"}
+	for i := range 10 {
+		if _, err := s.Append(ctx, ref, "t", []TranscriptMessage{userMsg(fmt.Sprintf("m%d", i))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.LoadRange(ctx, ref, 3, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d messages, want 3 (seq 4,5,6): %+v", len(got), got)
+	}
+	if got[0].Content != "m3" || got[2].Content != "m5" {
+		t.Errorf("range = %+v; want m3..m5", got)
+	}
+}

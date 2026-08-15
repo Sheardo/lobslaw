@@ -111,6 +111,42 @@ func (c *Config) Validate() error {
 	if err := validateProviderBackups(c.Compute.Providers); err != nil {
 		return err
 	}
+	if err := validateContextConfig(c.Compute.Context); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateContextConfig rejects context-budget settings that would
+// misbehave quietly rather than loudly. Every field here is optional,
+// so only explicitly-set values are checked.
+func validateContextConfig(c ContextConfig) error {
+	for _, f := range []struct {
+		name string
+		val  *int
+	}{
+		{"tail_tokens", c.TailTokens},
+		{"history_tool_result_bytes", c.HistoryToolResultBytes},
+		{"tail_messages", c.TailMessages},
+		{"compact_keep_messages", c.CompactKeepMessages},
+		{"compact_trigger_tokens", c.CompactTriggerTokens},
+		{"compact_max_summary_tokens", c.CompactMaxSummaryTokens},
+		{"compact_max_completion_tokens", c.CompactMaxCompletionTokens},
+		{"compact_tool_result_bytes", c.CompactToolResultBytes},
+	} {
+		if f.val != nil && *f.val < 0 {
+			return fmt.Errorf("%w: compute.context.%s must not be negative (got %d)",
+				types.ErrInvalidConfig, f.name, *f.val)
+		}
+	}
+	// A summary larger than the whole verbatim budget means the
+	// compacted head crowds out the recent exchange it was supposed
+	// to make room for — the opposite of what compaction is for.
+	if c.CompactMaxSummaryTokens != nil && c.TailTokens != nil &&
+		*c.TailTokens > 0 && *c.CompactMaxSummaryTokens >= *c.TailTokens {
+		return fmt.Errorf("%w: compute.context.compact_max_summary_tokens (%d) must be smaller than tail_tokens (%d), else the summary crowds out the conversation it summarises",
+			types.ErrInvalidConfig, *c.CompactMaxSummaryTokens, *c.TailTokens)
+	}
 	return nil
 }
 

@@ -115,6 +115,8 @@ func (n *Node) wireGateway() error {
 		ConfirmationTTL: n.cfg.Gateway.ConfirmationTimeout,
 		Plan:            planServiceOrNil(n.planSvc),
 		Sessions:        n.newSessionStore(),
+		Compactor:       n.newSessionCompactor(),
+		Conversation:    n.conversationConfig(),
 		Logger:          n.log,
 	}
 
@@ -194,6 +196,8 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Gate:             gate,
 		ChannelState:     channelState,
 		Sessions:         n.newSessionStore(),
+		Compactor:        n.newSessionCompactor(),
+		Conversation:     n.conversationConfig(),
 	}, n.agent)
 }
 

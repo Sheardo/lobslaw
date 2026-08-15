@@ -92,6 +92,9 @@ func main() {
 		fmt.Printf("\n  %s  user=%s  retained=%d (seq %d..%d)  updated=%s\n",
 			r.Id, r.UserId, r.NextSeq-r.FirstSeq, r.FirstSeq, r.NextSeq-1,
 			r.UpdatedAt.AsTime().Format("2006-01-02 15:04:05 UTC"))
+		if r.Summary != "" {
+			fmt.Printf("    summary (through seq %d): %s\n", r.SummaryThroughSeq, r.Summary)
+		}
 		// Message keys are "<session id>:<seq>", so the transcript is
 		// an ordered prefix scan.
 		_ = store.ForEachPrefix(memory.BucketSessionMessages, r.Id+":", func(_ string, mv []byte) error {

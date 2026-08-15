@@ -664,6 +664,20 @@ message SessionRecord {
   uint64 first_seq = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+  // summary is the running prose summary of everything in this
+  // conversation up to and including summary_through_seq. It is
+  // rebuilt incrementally: each compaction folds the newly-aged-out
+  // messages into the previous summary rather than re-reading the
+  // whole transcript, so a message is summarised roughly once
+  // instead of once per turn.
+  //
+  // Empty until a conversation is long enough to need compacting.
+  string summary = 10;
+  // summary_through_seq is the highest sequence number the summary
+  // covers. Messages after it are replayed verbatim; messages up to
+  // it are represented only by the summary. 0 = nothing summarised.
+  uint64 summary_through_seq = 11;
+  google.protobuf.Timestamp summary_updated_at = 12;
 }
 
 // SessionMessage is one message in a transcript — the persisted form of

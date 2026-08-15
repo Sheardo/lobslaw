@@ -132,7 +132,38 @@ api_key_ref = "env:TAVILY_API_KEY"
 [compute.limits]
 max_tool_calls_per_turn = 25
 max_turn_seconds        = 600
+
+[compute.context]
+# How much prior conversation each turn replays, and how the rest is
+# compacted. Every value is optional; the defaults shown are applied
+# when the key is absent. An explicit 0 DISABLES a bound rather than
+# taking the default.
+tail_tokens                   = 4000   # verbatim history budget per turn
+tail_messages                 = 100    # cap on messages read per turn
+history_tool_result_bytes     = 512    # truncate REPLAYED tool results
+compact_enabled               = true   # false disables compaction
+compact_keep_messages         = 40     # never summarise the recent exchange
+compact_trigger_tokens        = 1500   # aged-out volume that justifies a call
+compact_max_summary_tokens    = 600    # cap on the stored summary
+compact_max_completion_tokens = 1024   # cap on what the summariser generates
+compact_tool_result_bytes     = 400    # tool output the summariser reads
+# Appended to the built-in summariser prompt, not replacing it.
+compact_instructions = "Always keep ticket numbers and schema decisions."
 ```
+
+**Sizing them.** `tail_tokens` is the one to move first: it sets what a turn
+costs. `compact_max_summary_tokens` must stay well below it — the summary is
+prepended to every turn, and config validation rejects a summary budget larger
+than the verbatim budget it is meant to make room for.
+
+`compact_trigger_tokens` trades LLM calls against context freshness: lower means
+more frequent, smaller summarisation calls; higher means aged-out messages sit
+un-summarised for longer and may be dropped by `tail_tokens` before they are
+ever folded in.
+
+Compaction needs a summariser: set `[compute.roles].summariser` to a cheap model
+so compaction doesn't run on your expensive one. With no summariser resolved,
+compaction is off and long conversations simply lose their oldest messages.
 
 ## `[gateway]`
 
@@ -141,6 +172,16 @@ max_turn_seconds        = 600
 require_auth        = false
 default_scope       = "public"
 unknown_user_scope  = "public"
+
+# Conversation storage. session_max_messages is a STORAGE bound — it
+# sets what is kept on disk for search and export, not what is sent to
+# the model (that is [compute.context]).
+session_max_messages  = 200
+# The in-memory buffer that fronts the durable store. It is the
+# degraded mode for turns handled on a raft follower, since session
+# writes are leader-only — not a performance cache.
+session_cache_messages = 100
+session_cache_ttl      = "30m"
 
 [[gateway.channels]]
 type      = "telegram"

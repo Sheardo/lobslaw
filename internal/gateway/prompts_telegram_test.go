@@ -349,10 +349,11 @@ func TestTelegramResumePersistsApprovedHalfOfTurn(t *testing.T) {
 		session:  ref,
 	})
 
-	got, lerr := store.LoadTail(context.Background(), ref, 0)
+	tr, lerr := store.LoadTranscript(context.Background(), ref, 0)
 	if lerr != nil {
-		t.Fatalf("LoadTail: %v", lerr)
+		t.Fatalf("LoadTranscript: %v", lerr)
 	}
+	got := tr.Messages
 	if len(got) < 3 {
 		t.Fatalf("stored %d messages, want the stopped turn plus the resumed reply: %+v", len(got), got)
 	}
