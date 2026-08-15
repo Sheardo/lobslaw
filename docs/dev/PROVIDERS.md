@@ -601,10 +601,54 @@ Why not the alternatives:
   sandboxing, egress control and credential injection — four things
   that are hard to get right and are already right.
 
-The cost of this choice is a subprocess spawn per invocation. That is
-irrelevant for generation modalities, which are seconds-to-minutes
-operations. It would matter for `chat`, so external drivers are
-**not** offered for the infrastructure modalities.
+### Revised: declarative first, code second
+
+The section above stands as the answer to *"how do we run someone
+else's driver code safely"*. It is the wrong thing to build first,
+for three reasons.
+
+**The cost claim above was wrong.** It said a subprocess spawn is
+"irrelevant for generation modalities, which are seconds-to-minutes
+operations". Polling is repeated: a five-minute video at a fifteen
+second interval is roughly twenty invocations, each a fresh
+mount/pid/net/user namespace, seccomp-bpf filter, cgroup and nftables
+ruleset. Tolerable, but not irrelevant.
+
+**A skill is one handler; JobDriver is three operations.** Submit,
+Poll and PollInterval would dispatch on an `op` field inside the JSON
+contract — a protocol inside a protocol, which every external author
+then has to implement correctly.
+
+**Most of the demand is not for code.** "Support a vendor lobslaw has
+never heard of" is usually the same protocol at a different URL, which
+already works via `driver = "openai"` plus an endpoint. What actually
+varies is narrower than a driver:
+
+| varies between vendors | needs |
+|---|---|
+| endpoint URL | config — already supported |
+| auth header shape | config — already supported |
+| request field names | a mapping |
+| response field paths | a mapping |
+| async protocol | real code |
+
+So the first increment is a **declarative template driver**: endpoint,
+auth style, and request/response field paths in TOML, interpreted by
+one compiled driver. It covers the long tail of OpenAI-shaped clones
+with **no code execution at all** — nothing to sign, sandbox, spawn or
+get wrong — and it is far smaller than the skill path.
+
+Skills remain the answer for a genuinely different protocol, scoped to
+the asynchronous modalities where repeated spawns amortise over
+minutes. They are not offered for `chat` or the other infrastructure
+modalities at any point.
+
+**Sequencing.** Neither is scheduled. Each of the three generation
+modalities currently has exactly one vendor, so a second vendor per
+modality proves the waist again and is useful immediately, whereas an
+extension point proves nothing until somebody extends it. Build the
+template driver when a vendor appears that config cannot reach; build
+the skill path when one appears that a mapping cannot describe.
 
 ---
 
