@@ -22,7 +22,10 @@ import (
 // implementations import compute for the request types, so compute
 // cannot import them back. internal/node assembles the real set.
 type DriverSet struct {
-	chat map[string]ChatDriverFactory
+	chat  map[string]ChatDriverFactory
+	speak map[string]SpeakDriverFactory
+	image map[string]ImageDriverFactory
+	job   map[string]JobDriverFactory
 }
 
 // ChatDriverConfig is what every chat driver is built from. Fields a
@@ -155,4 +158,187 @@ func OpenAIChatFactory(cfg ChatDriverConfig) (ChatDriver, error) {
 		ServerTools: cfg.ServerTools,
 		Logger:      cfg.Logger,
 	})
+}
+
+// --- generation modalities -------------------------------------------
+//
+// Chat resolved its driver by name from the start; the generation
+// modalities did not, and each hardcoded one constructor. That made a
+// second vendor a rewrite of the wiring rather than a registration,
+// which is the opposite of what the waist is for.
+//
+// One config type per modality rather than one shared type: a speak
+// request has a voice and a video request has a poll cadence, and
+// collapsing them would put every vendor's shape back into a single
+// struct that the wiring layer has to understand.
+
+// SpeakDriverConfig is what every speak driver is built from.
+type SpeakDriverConfig struct {
+	Endpoint   string
+	Model      string
+	Voice      string
+	Format     string
+	Credential Credential
+	HTTPClient *http.Client
+	Logger     *slog.Logger
+}
+
+// ImageDriverConfig is what every image driver is built from.
+type ImageDriverConfig struct {
+	Endpoint   string
+	Model      string
+	Size       string
+	Quality    string
+	Credential Credential
+	HTTPClient *http.Client
+	Logger     *slog.Logger
+}
+
+// JobDriverConfig is what every asynchronous driver is built from.
+// Endpoint is the submit URL; a driver needing a second URL to poll
+// derives it or takes its own default, because the relationship
+// between the two is vendor-specific and not expressible here.
+type JobDriverConfig struct {
+	Endpoint   string
+	Model      string
+	Credential Credential
+	HTTPClient *http.Client
+	Logger     *slog.Logger
+}
+
+type (
+	SpeakDriverFactory func(SpeakDriverConfig) (SpeakDriver, error)
+	ImageDriverFactory func(ImageDriverConfig) (ImageDriver, error)
+	JobDriverFactory   func(JobDriverConfig) (JobDriver, error)
+)
+
+func (s *DriverSet) RegisterSpeak(name string, f SpeakDriverFactory) {
+	if s.speak == nil {
+		s.speak = map[string]SpeakDriverFactory{}
+	}
+	s.speak[normaliseDriverName(name)] = f
+}
+
+func (s *DriverSet) RegisterImage(name string, f ImageDriverFactory) {
+	if s.image == nil {
+		s.image = map[string]ImageDriverFactory{}
+	}
+	s.image[normaliseDriverName(name)] = f
+}
+
+func (s *DriverSet) RegisterJob(name string, f JobDriverFactory) {
+	if s.job == nil {
+		s.job = map[string]JobDriverFactory{}
+	}
+	s.job[normaliseDriverName(name)] = f
+}
+
+// Speak builds a speak driver by name. An empty name picks the
+// OpenAI-compatible shape, which keeps configs that predate driver
+// selection working.
+func (s *DriverSet) Speak(name string, cfg SpeakDriverConfig) (SpeakDriver, error) {
+	key := normaliseDriverName(name)
+	if key == "" {
+		key = DriverOpenAI
+	}
+	f, ok := s.speak[key]
+	if !ok {
+		return nil, fmt.Errorf("unknown speak driver %q; available: %s",
+			name, strings.Join(sortedKeysSpeak(s.speak), ", "))
+	}
+	return f(cfg)
+}
+
+// Image builds an image driver by name.
+func (s *DriverSet) Image(name string, cfg ImageDriverConfig) (ImageDriver, error) {
+	key := normaliseDriverName(name)
+	if key == "" {
+		key = DriverOpenAI
+	}
+	f, ok := s.image[key]
+	if !ok {
+		return nil, fmt.Errorf("unknown image driver %q; available: %s",
+			name, strings.Join(sortedKeysImage(s.image), ", "))
+	}
+	return f(cfg)
+}
+
+// Job builds an asynchronous driver by name.
+//
+// Unlike chat, speak and image there is no default: the three async
+// protocols share nothing, so "whatever the default is" would be a
+// guess that fails at submit rather than at boot.
+func (s *DriverSet) Job(name string, cfg JobDriverConfig) (JobDriver, error) {
+	key := normaliseDriverName(name)
+	if key == "" {
+		return nil, fmt.Errorf("a video provider must name its driver explicitly (available: %s); "+
+			"the async protocols share no common shape, so there is no sensible default",
+			strings.Join(sortedKeysJob(s.job), ", "))
+	}
+	f, ok := s.job[key]
+	if !ok {
+		return nil, fmt.Errorf("unknown job driver %q; available: %s",
+			name, strings.Join(sortedKeysJob(s.job), ", "))
+	}
+	return f(cfg)
+}
+
+func normaliseDriverName(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+
+func sortedKeysSpeak(m map[string]SpeakDriverFactory) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeysImage(m map[string]ImageDriverFactory) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeysJob(m map[string]JobDriverFactory) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// OpenAISpeakFactory adapts the /v1/audio/speech driver.
+func OpenAISpeakFactory(cfg SpeakDriverConfig) (SpeakDriver, error) {
+	return NewOpenAISpeakDriver(OpenAISpeakConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Voice:      cfg.Voice,
+		Format:     cfg.Format,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+	})
+}
+
+// OpenAIImageFactory adapts the /v1/images/generations driver.
+func OpenAIImageFactory(cfg ImageDriverConfig) (ImageDriver, error) {
+	return NewOpenAIImageDriver(OpenAIImageConfig{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Size:       cfg.Size,
+		Quality:    cfg.Quality,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+	})
+}
+
+// MockJobFactory registers the offline job driver, so a node can be
+// configured for video generation with no vendor account and still
+// exercise submit, commitment, poll and delivery end to end.
+func MockJobFactory(JobDriverConfig) (JobDriver, error) {
+	return &MockJobDriver{PollsBeforeDone: 1}, nil
 }

@@ -12,7 +12,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
-	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
@@ -312,10 +311,11 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 
 	cfgs := make([]compute.SpeakConfig, 0, len(eps))
 	for _, ep := range eps {
-		d, err := compute.NewOpenAISpeakDriver(compute.OpenAISpeakConfig{
+		d, err := n.drivers().Speak(ep.driver, compute.SpeakDriverConfig{
 			Endpoint:   ep.endpoint,
 			Model:      ep.model,
-			Credential: compute.NewBearerCredential(ep.apiKey),
+			Credential: credentialForDriver(ep.driver, ep.apiKey),
+			Logger:     n.log,
 		})
 		if err != nil {
 			n.log.Warn("compute: speak provider skipped", "via", ep.via, "err", err)
@@ -392,10 +392,11 @@ func (n *Node) wireImageTools(builtins *compute.Builtins) error {
 
 	cfgs := make([]compute.ImageConfig, 0, len(eps))
 	for _, ep := range eps {
-		d, err := compute.NewOpenAIImageDriver(compute.OpenAIImageConfig{
+		d, err := n.drivers().Image(ep.driver, compute.ImageDriverConfig{
 			Endpoint:   ep.endpoint,
 			Model:      ep.model,
-			Credential: compute.NewBearerCredential(ep.apiKey),
+			Credential: credentialForDriver(ep.driver, ep.apiKey),
+			Logger:     n.log,
 		})
 		if err != nil {
 			n.log.Warn("compute: image provider skipped", "via", ep.via, "err", err)
@@ -471,15 +472,21 @@ func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
 	}
 
 	ep := eps[0]
-	d, err := dashscope.New(dashscope.Config{
+	d, err := n.drivers().Job(ep.driver, compute.JobDriverConfig{
+		Endpoint:   ep.endpoint,
 		Model:      ep.model,
-		Credential: compute.NewBearerCredential(ep.apiKey),
+		Credential: credentialForDriver(ep.driver, ep.apiKey),
+		Logger:     n.log,
 	})
 	if err != nil {
 		n.log.Warn("compute: video provider skipped", "via", ep.via, "err", err)
 		return nil
 	}
-	n.RegisterJobDriver(dashscope.DriverName, d)
+	// Registered under the SAME name the config selected, because that
+	// name is what ends up inside every handle. A driver registered
+	// under a different string cannot poll its own jobs after a
+	// restart.
+	n.RegisterJobDriver(strings.ToLower(strings.TrimSpace(ep.driver)), d)
 
 	if err := compute.RegisterVideoBuiltin(builtins, compute.VideoConfig{
 		Driver: d,
