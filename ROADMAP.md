@@ -2106,6 +2106,17 @@ capability appears, and it is last on purpose.
 - [ ] A plan-billed provider whose quota is exhausted falls through to
       its backup and warns; it is not retried until reset, and it is
       not treated as a request error.
+- [ ] The job handle is opaque to everything above the driver: a
+      driver returning an ARN, an operation resource name or a bare
+      task id all work without the scheduler knowing which.
+- [ ] A provider requiring short-lived OAuth tokens (Vertex) and one
+      requiring per-request signing (Bedrock) are both configurable
+      without a static `api_key`.
+- [ ] An artifact delivered to an operator-owned bucket lands in a
+      lobslaw storage mount, with no download step.
+- [ ] An artifact delivered as an expiring vendor URL is fetched
+      before it expires, and a poll handler that has not run is not
+      silently dropped.
 
 ---
 
@@ -2242,10 +2253,39 @@ calls when the quota is exhausted rather than charging overage**. That
 is neither a transient failure nor a request error, which is why the
 failover taxonomy needs a third class.
 
+**Async is not one pattern.** Three vendors, three unrelated
+protocols. Alibaba returns an opaque `task_id` polled by `GET
+/api/v1/tasks/{id}`. Vertex Veo returns an *operation resource name*
+(`projects/…/operations/…`) polled by `fetchPredictOperation` — a POST,
+not a GET on the handle — signalling completion with `done: true`.
+Bedrock returns an `invocationArn` polled by `GetAsyncInvoke`. A driver
+interface that assumes a task id in a URL fits exactly one of them, so
+the job handle must be opaque and polling must be a driver method.
+
+**Artifacts arrive three ways**: an expiring vendor URL (Wan, 24h),
+inline base64 (Veo without `storageUri`), or written into an
+operator-owned bucket (Bedrock's `outputDataConfig.s3OutputDataConfig`,
+mandatory; Veo's `storageUri`, optional). The third maps onto lobslaw's
+existing storage mounts; the first has a deadline, which is why the
+poll handler must be reliable rather than best-effort.
+
+**Credentials are not always a static key.** Vertex AI *rejects* API
+keys — "API keys are not supported by this API" — and requires a
+short-lived OAuth2 token (~1h) minted from a service account or ADC.
+Bedrock uses SigV4 request signing rather than a header value. Neither
+is expressible as `api_key = "env:…"`, so a provider declares a
+credential kind. `CredentialService` already mints and refreshes
+short-lived OAuth tokens for skills and should serve providers too.
+
 Sources: [Wan text-to-video API reference](https://www.alibabacloud.com/help/en/model-studio/text-to-video-api-reference) ·
 [Qwen Cloud text-to-video](https://docs.qwencloud.com/developer-guides/video-generation/text-to-video) ·
 [Model Studio Token Plan overview](https://help.aliyun.com/en/model-studio/token-plan-overview) ·
 [Savings Plans and Resource Plans](https://www.alibabacloud.com/help/en/model-studio/savings-plan-and-resource-package) ·
 [OpenAI API pricing](https://developers.openai.com/api/docs/pricing) ·
 [Replicate billing](https://dodopayments.com/blogs/replicate-billing-model) ·
-[Normalised image-model pricing survey](https://invideo.io/blog/ai-image-model-pricing/)
+[Normalised image-model pricing survey](https://invideo.io/blog/ai-image-model-pricing/) ·
+[Veo on Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos-from-text) ·
+[Veo model reference](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo-video-generation) ·
+[Bedrock StartAsyncInvoke](https://docs.aws.amazon.com/de_de/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html) ·
+[Nova Reel text-to-video](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_Scenario_AmazonNova_TextToVideo_section.html) ·
+[Vertex AI authentication](https://docs.cloud.google.com/vertex-ai/docs/authentication)

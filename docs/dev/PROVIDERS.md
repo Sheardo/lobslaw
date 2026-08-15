@@ -166,6 +166,84 @@ the response. The driver declares which shape it is, and the
 synchronous ones skip the commitment path when the expected latency is
 small enough to sit inside a turn.
 
+### There is no common async shape either
+
+Three vendors, three unrelated protocols. Not dialects of one pattern:
+
+| | Submit | Handle | Poll | Done signal |
+|---|---|---|---|---|
+| Alibaba Wan | `POST …/video-synthesis` + `X-DashScope-Async` | `task_id`, opaque string | `GET /api/v1/tasks/{id}` | `task_status` enum |
+| Vertex Veo | `predictLongRunning` | operation **resource name**, `projects/…/operations/…` | `fetchPredictOperation` — a POST, not a GET on the handle | `done: true` |
+| Bedrock | `StartAsyncInvoke` | `invocationArn` | `GetAsyncInvoke` / `ListAsyncInvokes` | status field |
+
+So the driver interface must treat the job handle as **an opaque
+driver-owned value** and polling as **a driver method**, not as "GET
+the task URL". Anything that assumes a task id embedded in a path
+fits exactly one of the three.
+
+Polling intervals differ too — ~15s for Wan, 10–60s suggested for Veo,
+with Veo running 2–5 minutes and Wan 1–5 — so the interval belongs to
+the driver rather than to the scheduler.
+
+### Artifacts arrive three different ways
+
+| Mode | Provider | Consequence |
+|---|---|---|
+| Vendor URL, expiring | Wan — `video_url`, 24h | Must be downloaded promptly; a job whose delivery is delayed past the expiry is lost |
+| Inline bytes | Veo without `storageUri` — base64 in the response | Simple, but the whole artifact crosses the response |
+| Operator-owned bucket | Bedrock — `outputDataConfig.s3OutputDataConfig.s3Uri`, **mandatory**; Veo with `storageUri` — optional | The provider writes into *your* storage, and needs IAM to do it |
+
+The third mode is a good fit rather than a nuisance: lobslaw already
+has a storage layer with local, S3, MinIO and R2 backends and
+operator-declared mounts. A generation provider writing into a
+lobslaw storage mount is the artifact landing exactly where the agent
+can already read it, with no download step and no expiry.
+
+The expiring-URL mode is the one with a deadline attached, and it is
+the argument for the commitment path being reliable rather than
+best-effort: a poll handler that does not run for 24 hours loses the
+output the operator has already paid for.
+
+### Credentials are not always a static key
+
+The dimension that breaks the config shape hardest, and the one I had
+not considered at all:
+
+| Provider | Credential |
+|---|---|
+| OpenAI, Anthropic, DashScope | Static API key, sent as a bearer token |
+| Vertex AI | **No static key exists.** The API rejects them outright — *"API keys are not supported by this API"*. Requires a short-lived OAuth2 access token (~1h) minted from a service-account JSON or ADC, and refreshed |
+| Bedrock | SigV4 **request signing** with access key, secret and optional session token — a per-request signature, not a header value |
+
+`api_key = "env:OPENAI_KEY"` cannot express either of the last two.
+lobslaw's `ResolveSecret` (`env:` / `file:` / `kms:`) resolves a static
+value; Vertex needs a token *minter* with refresh, and Bedrock needs a
+request *signer*.
+
+So a provider declares a credential **kind**, not a key:
+
+```toml
+[[provider]]
+label       = "veo"
+modality    = "video"
+driver      = "vertex"
+credential  = { kind = "gcp-service-account", ref = "file:/etc/lobslaw/sa.json" }
+
+[[provider]]
+label       = "nova-reel"
+modality    = "video"
+driver      = "bedrock"
+credential  = { kind = "aws-sigv4", region = "us-east-1" }
+```
+
+`kind = "static"` with a secret ref stays the default and covers every
+provider that works today.
+
+There is prior art in-tree: `CredentialService.IssueForSkillByManifest`
+already mints and refreshes short-lived OAuth tokens near expiry for
+skills. Provider credentials want the same treatment, not a second
+refresh loop.
+
 ---
 
 ## Billing is not tokens
