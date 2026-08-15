@@ -14,10 +14,10 @@ import (
 // runtime requirements + install methods here; lobslaw consumes
 // them via SatisfyBinaryRequirements at install time.
 type ClawdbotMetadata struct {
-	Emoji    string             `yaml:"emoji,omitempty"`
-	Requires ClawdbotRequires   `yaml:"requires,omitempty"`
-	Install  []ClawdbotInstall  `yaml:"install,omitempty"`
-	Setup    []ClawdbotSetup    `yaml:"setup,omitempty"`
+	Emoji    string            `yaml:"emoji,omitempty"`
+	Requires ClawdbotRequires  `yaml:"requires,omitempty"`
+	Install  []ClawdbotInstall `yaml:"install,omitempty"`
+	Setup    []ClawdbotSetup   `yaml:"setup,omitempty"`
 }
 
 // ClawdbotRequires lists host-level dependencies a skill needs. Today
@@ -32,10 +32,10 @@ type ClawdbotRequires struct {
 // pipx, uvx, npm, cargo, go-install, curl-sh). Other fields are
 // kind-specific; unrecognised fields are tolerated for forward-compat.
 type ClawdbotInstall struct {
-	ID       string   `yaml:"id,omitempty"`
-	Kind     string   `yaml:"kind"`
-	Label    string   `yaml:"label,omitempty"`
-	Bins     []string `yaml:"bins,omitempty"`
+	ID    string   `yaml:"id,omitempty"`
+	Kind  string   `yaml:"kind"`
+	Label string   `yaml:"label,omitempty"`
+	Bins  []string `yaml:"bins,omitempty"`
 
 	// Manager-specific fields.
 	Formula  string   `yaml:"formula,omitempty"`  // brew tap/formula
@@ -62,10 +62,10 @@ type ClawdbotSetup struct {
 // SKILL.md. Captures the canonical fields plus the metadata
 // container.
 type SkillFrontmatter struct {
-	Name        string                 `yaml:"name"`
-	Description string                 `yaml:"description,omitempty"`
-	Homepage    string                 `yaml:"homepage,omitempty"`
-	Metadata    skillFrontmatterMeta   `yaml:"metadata,omitempty"`
+	Name        string               `yaml:"name"`
+	Description string               `yaml:"description,omitempty"`
+	Homepage    string               `yaml:"homepage,omitempty"`
+	Metadata    skillFrontmatterMeta `yaml:"metadata,omitempty"`
 }
 
 type skillFrontmatterMeta struct {

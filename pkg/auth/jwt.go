@@ -28,11 +28,11 @@ import (
 // to HTTP status codes (401 for bad tokens, 403 for tokens that are
 // shape-correct but lack required claims).
 var (
-	ErrMissingToken = errors.New("auth: missing bearer token")
-	ErrInvalidToken = errors.New("auth: token invalid")
-	ErrExpiredToken = errors.New("auth: token expired")
+	ErrMissingToken   = errors.New("auth: missing bearer token")
+	ErrInvalidToken   = errors.New("auth: token invalid")
+	ErrExpiredToken   = errors.New("auth: token expired")
 	ErrIssuerMismatch = errors.New("auth: issuer mismatch")
-	ErrNoValidator  = errors.New("auth: no validator configured (allow_hs256=false and no JWKS)")
+	ErrNoValidator    = errors.New("auth: no validator configured (allow_hs256=false and no JWKS)")
 )
 
 // Validator verifies an inbound bearer token and produces a
@@ -51,9 +51,9 @@ type Validator struct {
 // Config mirrors the relevant bits of config.AuthConfig. Kept
 // package-local so pkg/auth doesn't depend on pkg/config.
 type Config struct {
-	Issuer       string
-	AllowHS256   bool
-	HS256Secret  string // pre-resolved; caller translates jwt_secret_ref
+	Issuer      string
+	AllowHS256  bool
+	HS256Secret string // pre-resolved; caller translates jwt_secret_ref
 
 	// JWKSURL enables RS256/ES256/EdDSA validation against a remote
 	// key set. When set, the validator accepts any of the asymmetric
@@ -63,9 +63,9 @@ type Config struct {
 
 	// JWKSClient / JWKSRefreshInterval / JWKSForceRefreshMin tune
 	// the cache. All optional — sensible defaults are picked.
-	JWKSClient             *http.Client
-	JWKSRefreshInterval    time.Duration
-	JWKSForceRefreshMin    time.Duration
+	JWKSClient          *http.Client
+	JWKSRefreshInterval time.Duration
+	JWKSForceRefreshMin time.Duration
 }
 
 // asymmetricSigningMethods is the allow-list of non-HS* algorithms.

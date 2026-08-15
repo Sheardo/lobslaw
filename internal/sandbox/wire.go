@@ -48,4 +48,3 @@ func DecodePolicy(raw string) (*Policy, error) {
 	}
 	return &p, nil
 }
-

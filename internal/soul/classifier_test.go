@@ -147,17 +147,17 @@ func TestLLMClassifierNilCallbackGoesStraightToFallback(t *testing.T) {
 func TestParseLLMResponseEdgeCases(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
-		"sarcasm decrease":         true,
-		"SARCASM INCREASE":         true,
-		" sarcasm decrease.":       true,  // trailing punctuation stripped
-		"sarcasm down":             true,  // synonym direction
-		"formality up":             true,
-		"none":                     false,
-		"":                         false,
-		"sarcasm":                  false, // missing direction
-		"unknown_dim decrease":     false,
-		"sarcasm sideways":         false,
-		"too many tokens here":     false,
+		"sarcasm decrease":     true,
+		"SARCASM INCREASE":     true,
+		" sarcasm decrease.":   true, // trailing punctuation stripped
+		"sarcasm down":         true, // synonym direction
+		"formality up":         true,
+		"none":                 false,
+		"":                     false,
+		"sarcasm":              false, // missing direction
+		"unknown_dim decrease": false,
+		"sarcasm sideways":     false,
+		"too many tokens here": false,
 	}
 	for input, want := range cases {
 		fb := parseLLMResponse(input, "orig")

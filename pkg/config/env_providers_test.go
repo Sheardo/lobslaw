@@ -136,10 +136,10 @@ func TestCollectEnvProvidersMalformedKey(t *testing.T) {
 func TestSplitLabelFieldLongestSuffixWins(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		in         string
-		wantLabel  string
-		wantField  string
-		wantOk     bool
+		in        string
+		wantLabel string
+		wantField string
+		wantOk    bool
 	}{
 		{"fast_API_KEY", "fast", "API_KEY", true},
 		{"fast_TRUST_TIER", "fast", "TRUST_TIER", true},

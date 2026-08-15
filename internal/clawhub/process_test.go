@@ -95,9 +95,9 @@ Use gog for Gmail/Calendar/Drive.
 		t.Fatal(err)
 	}
 	var m struct {
-		Name           string   `yaml:"name"`
+		Name           string           `yaml:"name"`
 		Tools          []map[string]any `yaml:"tools"`
-		RequiresBinary []string `yaml:"requires_binary"`
+		RequiresBinary []string         `yaml:"requires_binary"`
 	}
 	if err := yaml.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("parse synthetic manifest: %v", err)

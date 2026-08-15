@@ -75,15 +75,15 @@ func TestNodeIntegrationFullStack(t *testing.T) {
 	}
 	_ = memKeyBytes // memKey is generated above; keep the env reservation for clarity
 	cfg := node.Config{
-		NodeID:     nodeID,
-		Functions:  []types.NodeFunction{types.FunctionMemory, types.FunctionCompute, types.FunctionGateway, types.FunctionStorage},
-		ListenAddr: "127.0.0.1:0",
-		Creds:      creds,
+		NodeID:         nodeID,
+		Functions:      []types.NodeFunction{types.FunctionMemory, types.FunctionCompute, types.FunctionGateway, types.FunctionStorage},
+		ListenAddr:     "127.0.0.1:0",
+		Creds:          creds,
 		MemoryKey:      memKey,
 		DataDir:        filepath.Join(tmp, "data"),
 		Bootstrap:      true,
 		SnapshotTarget: "storage:skill-tools",
-		LLMProvider: mockProvider,
+		LLMProvider:    mockProvider,
 		Gateway: config.GatewayConfig{
 			Enabled:          true,
 			HTTPPort:         0,

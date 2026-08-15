@@ -3,14 +3,14 @@
 // to point at the catalog (defaulting to https://clawhub.ai when
 // they enable it); this package handles:
 //
-//	1. Fetching skill metadata + the publisher's signature.
-//	2. Downloading the skill bundle (tarball of manifest + handler
-//	   + sidecar binary references).
-//	3. Verifying the SHA-256 of the bundle against the catalog's
-//	   declared digest, and the ed25519 signature against the
-//	   operator's trusted publishers.
-//	4. Extracting the bundle into the operator's "skill-tools"
-//	   storage mount under a per-skill subpath.
+//  1. Fetching skill metadata + the publisher's signature.
+//  2. Downloading the skill bundle (tarball of manifest + handler
+//     + sidecar binary references).
+//  3. Verifying the SHA-256 of the bundle against the catalog's
+//     declared digest, and the ed25519 signature against the
+//     operator's trusted publishers.
+//  4. Extracting the bundle into the operator's "skill-tools"
+//     storage mount under a per-skill subpath.
 //
 // The skill registry's filesystem watcher then picks up the new
 // manifest.yaml and registers the skill with the agent.

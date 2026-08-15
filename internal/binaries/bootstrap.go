@@ -52,6 +52,7 @@ var knownBootstraps = map[string]bootstrapRecipe{
 //   - The bootstrapped manager's own installs (e.g. brew pulling
 //     formulae from formulae.brew.sh + ghcr.io) succeed without a
 //     follow-up config + reload.
+//
 // Operators with stricter supply-chain requirements override the
 // allowlist via [security] binaries_install_hosts (future work).
 func DefaultInstallHosts() []string {

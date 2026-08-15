@@ -204,18 +204,18 @@ type Node struct {
 	transport *rafttransport.Transport
 	raft      *memory.RaftNode
 
-	policySvc     *policy.Service
-	memorySvc     *memory.Service
+	policySvc        *policy.Service
+	memorySvc        *memory.Service
 	credentialSvc    *memory.CredentialService
 	userPrefsSvc     *memory.UserPrefsService
 	notifySvc        *notify.Service
 	oauthTracker     *oauth.Tracker
 	oauthProviders   map[string]oauth.ProviderConfig
 	clawhubInstaller *clawhub.Installer
-	planSvc       *plan.Service
-	storageSvc    *storage.Service
-	storageMgr    *storage.Manager
-	skillRegistry *skills.Registry
+	planSvc          *plan.Service
+	storageSvc       *storage.Service
+	storageMgr       *storage.Manager
+	skillRegistry    *skills.Registry
 	// Soul is held behind an atomic pointer so the config watcher
 	// can hot-swap SOUL.md edits without racing readers. Callers
 	// go through the Soul() accessor; never read soul directly.

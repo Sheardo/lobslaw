@@ -256,9 +256,9 @@ metadata: {"clawdbot":{"requires":{"bins":[]},"install":[]}}
 func TestInstallExtractsBundleIntoMountSubpath(t *testing.T) {
 	t.Parallel()
 	bundle := makeBundle(t, map[string]string{
-		"manifest.yaml":    "name: demo\nversion: 1.0.0\nruntime: bash\nhandler: handler.sh\n",
-		"handler.sh":       "#!/bin/bash\necho hi\n",
-		"sub/data.txt":     "payload",
+		"manifest.yaml": "name: demo\nversion: 1.0.0\nruntime: bash\nhandler: handler.sh\n",
+		"handler.sh":    "#!/bin/bash\necho hi\n",
+		"sub/data.txt":  "payload",
 	})
 	sha := sha256Hex(bundle)
 	inst, mgr, _ := newInstallTestStack(t, bundle, sha)

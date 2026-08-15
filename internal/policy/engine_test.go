@@ -116,12 +116,12 @@ func TestEngineSoulToolsScopedAllowBeatsBuiltinDeny(t *testing.T) {
 	t.Parallel()
 	eng, store := newTestEngine(t)
 	seedRule(t, store, &lobslawv1.PolicyRule{
-		Id: "lobslaw-builtin-deny-soul_tune",
+		Id:      "lobslaw-builtin-deny-soul_tune",
 		Subject: "*", Action: "tool:exec", Resource: "soul_tune",
 		Effect: "deny", Priority: 10,
 	})
 	seedRule(t, store, &lobslawv1.PolicyRule{
-		Id: "owner-soul-tools",
+		Id:      "owner-soul-tools",
 		Subject: "scope:owner", Action: "tool:exec", Resource: "soul_*",
 		Effect: "allow", Priority: 20,
 	})

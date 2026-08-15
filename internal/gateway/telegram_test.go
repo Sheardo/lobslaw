@@ -20,10 +20,10 @@ import (
 // tgServerHarness spins up a fake Telegram Bot API for sendMessage
 // calls + a configured TelegramHandler pointed at it.
 type tgServerHarness struct {
-	mu        sync.Mutex
-	fakeAPI   *httptest.Server
-	sent      []tgSentMessage
-	handler   *TelegramHandler
+	mu      sync.Mutex
+	fakeAPI *httptest.Server
+	sent    []tgSentMessage
+	handler *TelegramHandler
 }
 
 type tgSentMessage struct {
@@ -392,8 +392,8 @@ func TestConstantTimeEqDifference(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ a, b string }{
 		{"abc", "abd"},
-		{"abc", "ab"},    // length difference
-		{"", "abc"},      // one empty
+		{"abc", "ab"}, // length difference
+		{"", "abc"},   // one empty
 	} {
 		if constantTimeEq(tc.a, tc.b) {
 			t.Errorf("%q vs %q should differ", tc.a, tc.b)

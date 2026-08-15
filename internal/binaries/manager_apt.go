@@ -8,8 +8,8 @@ import (
 
 type aptManager struct{}
 
-func (aptManager) Name() string     { return "apt" }
-func (aptManager) UserMode() bool   { return false }
+func (aptManager) Name() string   { return "apt" }
+func (aptManager) UserMode() bool { return false }
 
 func (aptManager) Hosts(spec InstallSpec) []string {
 	hosts := []string{

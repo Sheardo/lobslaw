@@ -525,4 +525,3 @@ func TestDreamDigestRespectsGraceWindow(t *testing.T) {
 		}
 	}
 }
-

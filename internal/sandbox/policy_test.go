@@ -140,13 +140,13 @@ func TestDefaultSeccompPolicyHasCriticalDenies(t *testing.T) {
 	// from DefaultSeccompPolicy, the sandbox is materially weaker —
 	// force an explicit decision (update test + decision record).
 	critical := []string{
-		"ptrace",                        // inter-process memory access
+		"ptrace",                         // inter-process memory access
 		"unshare", "setns", "pivot_root", // namespace escape
-		"mount", "umount", "umount2",    // filesystem manipulation
-		"init_module", "finit_module",   // kernel-module load
-		"kexec_load",                    // kernel replacement
-		"bpf",                           // new kernel attack surface
-		"keyctl",                        // keyring manipulation
+		"mount", "umount", "umount2", // filesystem manipulation
+		"init_module", "finit_module", // kernel-module load
+		"kexec_load", // kernel replacement
+		"bpf",        // new kernel attack surface
+		"keyctl",     // keyring manipulation
 	}
 	for _, name := range critical {
 		if !slices.Contains(DefaultSeccompPolicy.Deny, name) {

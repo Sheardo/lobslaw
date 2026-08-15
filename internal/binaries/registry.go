@@ -147,9 +147,9 @@ func (s *Satisfier) SatisfyOpts(ctx context.Context, name string, installs []Ins
 	}
 
 	var (
-		triedManagers   []string
-		skipReasons     []string
-		bootstrappable  []string
+		triedManagers  []string
+		skipReasons    []string
+		bootstrappable []string
 	)
 	for _, spec := range osMatches {
 		if err := spec.Validate(); err != nil {

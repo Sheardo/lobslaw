@@ -71,10 +71,10 @@ func TestInvokerRequiresBinaryMissing(t *testing.T) {
 	reg := NewRegistry(nil)
 	reg.Put(&Skill{
 		Manifest: Manifest{
-			Name:    "needs-gh",
-			Version: "1.0.0",
-			Runtime: RuntimeBash,
-			Handler: "h.sh",
+			Name:           "needs-gh",
+			Version:        "1.0.0",
+			Runtime:        RuntimeBash,
+			Handler:        "h.sh",
 			RequiresBinary: []string{"gh"},
 		},
 		HandlerPath: "/mnt/skills/needs-gh/h.sh",
@@ -104,10 +104,10 @@ func TestInvokerRequiresBinaryPresent(t *testing.T) {
 	reg := NewRegistry(nil)
 	reg.Put(&Skill{
 		Manifest: Manifest{
-			Name:    "needs-gh",
-			Version: "1.0.0",
-			Runtime: RuntimeBash,
-			Handler: "h.sh",
+			Name:           "needs-gh",
+			Version:        "1.0.0",
+			Runtime:        RuntimeBash,
+			Handler:        "h.sh",
 			RequiresBinary: []string{"gh"},
 		},
 		HandlerPath: "/mnt/skills/needs-gh/h.sh",

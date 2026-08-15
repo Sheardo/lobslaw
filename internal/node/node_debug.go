@@ -7,8 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"google.golang.org/protobuf/proto"
+
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"

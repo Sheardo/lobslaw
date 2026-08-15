@@ -122,8 +122,8 @@ type Invoker struct {
 	mounts  MountResolver
 	runner  SubprocessRunner
 
-	proxyURL    func(role string, networkIsolation bool) string
-	credentials CredentialIssuer
+	proxyURL     func(role string, networkIsolation bool) string
+	credentials  CredentialIssuer
 	binaryLookup func(name string) (string, error)
 	binaryPath   []string
 
@@ -211,7 +211,6 @@ func NewInvoker(cfg InvokerConfig) (*Invoker, error) {
 	}
 	return inv, nil
 }
-
 
 // Invoke runs a skill. The sandbox policy composition (Landlock
 // rules computed from manifest.storage + runtime exec allowance,

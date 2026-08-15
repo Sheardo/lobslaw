@@ -388,4 +388,3 @@ func (s *subscription) emit(ev Event) {
 			"op", ev.Op.String(), "path", ev.Path)
 	}
 }
-

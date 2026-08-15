@@ -340,4 +340,3 @@ func splitScope(tokScope string, fallback []string) []string {
 	}
 	return parts
 }
-

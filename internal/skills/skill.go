@@ -81,8 +81,8 @@ type Manifest struct {
 	// pipeline), or by pre-installation on the host. The invoker
 	// runs LookPath against each name pre-spawn; if any are missing
 	// it returns a structured error.
-	RequiresBinary   []string           `yaml:"requires_binary,omitempty"`
-	Params           map[string]any     `yaml:"params_schema,omitempty"`
+	RequiresBinary []string       `yaml:"requires_binary,omitempty"`
+	Params         map[string]any `yaml:"params_schema,omitempty"`
 }
 
 // BinaryAccess declares one binary the skill bundles. The install

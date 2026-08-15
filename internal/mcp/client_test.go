@@ -13,11 +13,11 @@ import (
 // responses come back in FIFO order; sent frames are captured for
 // assertions.
 type memTransport struct {
-	mu       sync.Mutex
-	sent     [][]byte
-	queue    [][]byte
-	closed   bool
-	sendErr  error
+	mu      sync.Mutex
+	sent    [][]byte
+	queue   [][]byte
+	closed  bool
+	sendErr error
 }
 
 func (m *memTransport) Send(_ context.Context, frame []byte) error {

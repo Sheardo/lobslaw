@@ -449,7 +449,7 @@ func containsFn(fns []types.NodeFunction, target types.NodeFunction) bool {
 // are present — same "last write wins" as Registry.SetPolicy):
 //
 //  1. Default discovery    — ~/.config/lobslaw/policy.d,
-//                            <configDir>/policy.d, <cwd>/policy.d
+//     <configDir>/policy.d, <cwd>/policy.d
 //  2. Config file's policy_dirs  — replaces #1 entirely if set
 //  3. CLI --policy-dir (repeated) — replaces #1 and #2 if set
 //

@@ -73,10 +73,10 @@ type Raft interface {
 // Scheduler owns the sleep-until-due loop, the HandlerRegistry, and
 // the wake channel. Constructed once per node; started with Run.
 type Scheduler struct {
-	cfg       Config
-	raft      Raft
-	handlers  *HandlerRegistry
-	log       *slog.Logger
+	cfg        Config
+	raft       Raft
+	handlers   *HandlerRegistry
+	log        *slog.Logger
 	cronParser cron.Parser
 
 	wakeCh chan struct{}

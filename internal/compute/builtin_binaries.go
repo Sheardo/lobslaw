@@ -78,9 +78,9 @@ func BinariesToolDefs() []*types.ToolDef {
 func newBinaryListHandler(cfg BinariesConfig) BuiltinFunc {
 	return func(ctx context.Context, _ map[string]string) ([]byte, int, error) {
 		type entry struct {
-			Name        string `json:"name"`
-			Description string `json:"description,omitempty"`
-			Installed   bool   `json:"installed"`
+			Name        string   `json:"name"`
+			Description string   `json:"description,omitempty"`
+			Installed   bool     `json:"installed"`
 			Managers    []string `json:"managers,omitempty"`
 		}
 		out := make([]entry, 0, len(cfg.Declarations))

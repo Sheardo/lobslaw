@@ -10,5 +10,5 @@ type AtomicConfig[T any] struct {
 	ptr atomic.Pointer[T]
 }
 
-func (a *AtomicConfig[T]) Load() *T     { return a.ptr.Load() }
-func (a *AtomicConfig[T]) Store(v *T)   { a.ptr.Store(v) }
+func (a *AtomicConfig[T]) Load() *T   { return a.ptr.Load() }
+func (a *AtomicConfig[T]) Store(v *T) { a.ptr.Store(v) }

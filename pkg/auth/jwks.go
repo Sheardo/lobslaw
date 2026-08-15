@@ -72,10 +72,10 @@ type JWKSCache struct {
 	forceRefreshMin time.Duration // rate-limit window for unknown-kid refreshes
 	logger          *slog.Logger
 
-	mu           sync.RWMutex
-	keys         map[string]parsedKey
-	fetchedAt    time.Time
-	lastForceAt  time.Time
+	mu          sync.RWMutex
+	keys        map[string]parsedKey
+	fetchedAt   time.Time
+	lastForceAt time.Time
 }
 
 // JWKSConfig tunes a JWKSCache. Zero values pick sensible defaults.
