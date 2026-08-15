@@ -107,6 +107,7 @@ default_provider = "openrouter"
 
 [[compute.providers]]
 label              = "openrouter"
+driver             = "openai"         # openai (default) | anthropic | mock
 endpoint           = "https://openrouter.ai/api/v1/chat/completions"
 api_key_ref        = "env:OPENROUTER_API_KEY"
 model              = "anthropic/claude-sonnet-4"
@@ -114,6 +115,31 @@ trust_tier         = "primary"        # primary | backup | adversarial
 capabilities       = ["chat"]
 auto_capabilities  = true             # opt-in to models.dev capability discovery
 backup             = "openrouter-fallback"
+
+# `driver` names the WIRE PROTOCOL, not the vendor. Qwen Cloud, Groq,
+# Together, Fireworks and a local Ollama are all `driver = "openai"`
+# with different endpoints — which is why the driver list stays short
+# while the provider list does not. Omitting it means "openai".
+#
+# Use `driver = "anthropic"` to talk to the Messages API directly
+# rather than through an OpenAI-compatible relay. It sends x-api-key
+# rather than a bearer token; api_key_ref is unchanged.
+[[compute.providers]]
+label       = "claude-direct"
+driver      = "anthropic"
+model       = "claude-sonnet-4-6"
+api_key_ref = "env:ANTHROPIC_API_KEY"
+trust_tier  = "primary"
+capabilities = ["chat"]
+
+# `driver = "mock"` answers without touching the network. For a node
+# that must boot and serve turns offline — CI, a smoke test, or
+# reproducing a bug without spending tokens.
+[[compute.providers]]
+label      = "offline"
+driver     = "mock"
+model      = "mock-main"
+trust_tier = "local"
 
 [compute.embeddings]
 endpoint    = "https://openrouter.ai/api/v1/embeddings"
