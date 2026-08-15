@@ -76,6 +76,12 @@ type Config struct {
 	// values fall back to the seed defaults (enabled, 02:00 daily).
 	MemoryDream config.DreamConfig
 
+	// Identity is the [identity] block: the alias map that resolves
+	// per-channel user ids to cluster-wide principals. Empty means
+	// every channel id is its own principal, which is correct for a
+	// deployment where nobody arrives under two names.
+	Identity config.IdentityConfig
+
 	// MemorySession is the [memory.session] sub-block — controls
 	// the auto-seeded session retention pruner.
 	MemorySession config.SessionConfig

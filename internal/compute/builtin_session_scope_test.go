@@ -183,7 +183,7 @@ func TestSessionToolsRecheckBrowserThatIgnoresVisibility(t *testing.T) {
 func TestTurnIdentityAnonymousTurnIsStillScoped(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
-	ctx := WithTurnIdentity(context.Background(), turnIdentityFor(ProcessMessageRequest{
+	ctx := WithTurnIdentity(context.Background(), (&Agent{}).turnIdentityFor(ProcessMessageRequest{
 		Channel:   "telegram",
 		ChannelID: "-300",
 	}))

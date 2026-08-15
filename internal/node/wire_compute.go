@@ -782,6 +782,7 @@ func (n *Node) wireCompute() error { //nolint:gocyclo // known outlier; split pe
 			},
 			EpisodicIngester: episodicIngester,
 			Roles:            n.roleMap,
+			Identity:         n.identityResolver(),
 			ContextEngine: compute.NewContextEngine(compute.ContextEngineConfig{
 				Store:    n.store,
 				Embedder: n.embedder,
@@ -1362,6 +1363,7 @@ func (a *episodicIngesterAdapter) IngestTurn(ctx context.Context, t compute.Epis
 		Channel:     t.Channel,
 		ChatID:      t.ChatID,
 		UserID:      t.UserID,
+		Owner:       t.Owner,
 		UserMessage: t.UserMessage,
 		AssistReply: t.AssistReply,
 		TurnID:      t.TurnID,

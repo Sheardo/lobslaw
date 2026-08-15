@@ -23,9 +23,13 @@ type raftApplier interface {
 // package doesn't depend on internal/compute. A thin adapter wires
 // the two (see node.go).
 type EpisodicTurn struct {
-	Channel     string
-	ChatID      string
-	UserID      string
+	Channel string
+	ChatID  string
+	UserID  string
+	// Owner is the canonical principal this memory belongs to. Empty
+	// for an anonymous turn, which writes an unowned record — readable
+	// by anyone, like every record written before ownership existed.
+	Owner       string
 	UserMessage string
 	AssistReply string
 	TurnID      string
@@ -99,6 +103,15 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		Timestamp:  timestamppb.New(turn.CompletedAt),
 		Tags:       tags,
 		Retention:  lobslawv1.Retention_RETENTION_SESSION,
+		Owner:      turn.Owner,
+		Visibility: ownedVisibility(turn.Owner),
+		// A pointer back to the conversation, so a recall hit can offer
+		// to read the surrounding thread. The thread, not the message:
+		// ingest runs before the transcript append, so the sequence
+		// number does not exist yet. Advisory either way — the
+		// transcript is capped and independently forgettable, so a dead
+		// pointer means the link is stale, never that the memory is.
+		SessionRef: sessionRefFor(turn.Channel, turn.ChatID),
 	}
 
 	entry := &lobslawv1.LogEntry{
@@ -138,8 +151,14 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 				Text:      embedText,
 				Scope:     "episodic",
 				Retention: rec.Retention,
-				CreatedAt: rec.Timestamp,
-				SourceIds: []string{rec.Id},
+				// The vector carries the same ownership as the episodic
+				// record it embeds. It has to: search reads vectors, so
+				// an unowned vector over owned text is the leak wearing
+				// a different hat.
+				Owner:      rec.Owner,
+				Visibility: rec.Visibility,
+				CreatedAt:  rec.Timestamp,
+				SourceIds:  []string{rec.Id},
 			}
 			ventry := &lobslawv1.LogEntry{
 				Op: lobslawv1.LogOp_LOG_OP_PUT,
@@ -174,4 +193,25 @@ func turnEventSummary(userMsg string) string {
 		return userMsg
 	}
 	return userMsg[:maxLen] + "…"
+}
+
+// ownedVisibility picks the default visibility for a newly written
+// record. Anything with an owner is private to them; anything without
+// one is legacy-shaped and stays readable, which is what keeps an
+// upgrade from hiding a single-user node's whole memory.
+func ownedVisibility(owner string) lobslawv1.Visibility {
+	if owner == "" {
+		return lobslawv1.Visibility_VISIBILITY_UNSPECIFIED
+	}
+	return lobslawv1.Visibility_VISIBILITY_PRIVATE
+}
+
+// sessionRefFor addresses the conversation a memory came from. Empty
+// when the turn had no channel origin — a scheduled task has no thread
+// to point at.
+func sessionRefFor(channel, chatID string) string {
+	if channel == "" || chatID == "" {
+		return ""
+	}
+	return channel + ":" + chatID
 }

@@ -297,7 +297,42 @@ Clause 2 is what stops a shared bot handing user B snippets of user A's threads
 — `UserIDScopes` in the Telegram config exists precisely because a node often
 has more than one user.
 
-#### Where identity comes from
+#### Ownership and who may read a record
+
+Every user-originated record carries an `owner` — a principal reference
+(`user:alice`, or `chat:telegram:-100…` for something belonging to a conversation
+rather than a person) — and a `visibility` of `PRIVATE` or `SHARED`. Reads take
+a `memory.Audience`, and the type is the point:
+
+```go
+memory.For(principal)   // owned-by-them, plus shared, plus legacy
+memory.Everyone()       // spelled out; three callers, each already holding the store
+memory.Audience{}       // matches nothing
+```
+
+Search used to take a `scopeFilter string` where `""` meant everything, and both
+production callers passed `""` — `memory_search`, and worse the `ContextEngine`,
+which injects recalled memories into the system prompt **on every turn with no
+tool call in front of it**. On a shared node that put one user's memories into
+another's prompt before they had said anything. The fix is not that two callers
+were careless: it is that the dangerous value was the easy one to write. The
+zero `Audience` now matches nothing, so forgetting it yields empty results
+rather than everyone's memories, and `TestNoUnscopedVectorSearch` parses the
+tree and fails on a string in that argument position.
+
+**Legacy records stay readable.** Anything written before ownership existed has
+an empty owner and `UNSPECIFIED` visibility, and every audience can read it —
+because the alternative is that upgrading hides a single-user node's entire
+memory, which is a data-loss-shaped event caused by a security fix. New records
+always carry an owner, so the exception shrinks rather than standing open. Note
+an *owned* record with `UNSPECIFIED` visibility is not legacy and is treated as
+private: a writer that forgets the field must not silently publish.
+
+`owner` is deliberately not `scope`. That field is a category (`episodic`,
+`default`), and `Claims.Scope` is a permission tier — neither identifies a
+person, and overloading either a third time is how the original bug hid.
+
+### Where identity comes from
 
 `TurnIdentity` travels on the request context, attached once per turn in
 `Agent.runLoop`, and is the only source of caller identity for any builtin —
@@ -319,6 +354,14 @@ Scrubbing the map before injecting would have closed those instances without
 closing the class: trusted and untrusted values would still share one namespace,
 separated by a naming convention a new contributor has no way to discover. A
 context value cannot be reached from inside the model's output at all.
+
+Identity is resolved through the operator's `[identity.aliases]` map before any
+of this: `TurnIdentity.UserID` is what the channel called the caller
+(`tg-@alice`, a REST subject) and is kept for audit, while `TurnIdentity.Principal`
+is the canonical identity that ownership and visibility are decided against.
+Authorising on the raw id makes one human several — they stop finding their own
+history the moment they switch app — and authorising on nothing makes everyone
+one person, which is the bug.
 
 `TestBuiltinsDoNotReadIdentityFromArgs` parses this package and fails on any
 handler that reads a retired identity key out of a map, so the invariant is

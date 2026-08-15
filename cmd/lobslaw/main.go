@@ -418,6 +418,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		SnapshotTarget:      cfg.Memory.Snapshot.Target,
 		MemoryDream:         cfg.Memory.Dream,
 		MemorySession:       cfg.Memory.Session,
+		Identity:            cfg.Identity,
 		Policy:              cfg.Policy,
 		BroadcastEnabled:    cfg.Discovery.Broadcast,
 		BroadcastAddress:    fmt.Sprintf("%s:%d", bcastAddr, bcastPort),

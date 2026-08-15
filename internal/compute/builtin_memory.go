@@ -242,7 +242,9 @@ func runSemanticSearch(ctx context.Context, store *memory.Store, embedder Embedd
 		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
 	}
-	hits, err := memory.VectorSearch(store, vec, limit*2, "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
+	turn, _ := TurnIdentityFrom(ctx)
+	hits, err := memory.VectorSearch(store, vec, limit*2,
+		memory.For(turn.Principal), "", lobslawv1.Retention_RETENTION_UNSPECIFIED)
 	if err != nil {
 		payload, _, serr := runSubstringSearch(store, query, tagFilter, limit)
 		return annotateEmbeddingFailure(payload, err), 0, serr
