@@ -7,6 +7,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/elevenlabs"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -37,6 +38,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		// the async protocols share no shape, so there is nothing
 		// sensible to default to.
 		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
+		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
@@ -79,6 +81,8 @@ func credentialForDriver(driver, apiKey string) compute.Credential {
 	switch strings.ToLower(strings.TrimSpace(driver)) {
 	case compute.DriverAnthropic:
 		return compute.NewHeaderCredential("x-api-key", apiKey)
+	case elevenlabs.DriverName:
+		return compute.NewHeaderCredential("xi-api-key", apiKey)
 	default:
 		return compute.NewBearerCredential(apiKey)
 	}
@@ -91,5 +95,17 @@ func dashscopeJobFactory(cfg compute.JobDriverConfig) (compute.JobDriver, error)
 		Model:          cfg.Model,
 		Credential:     cfg.Credential,
 		HTTPClient:     cfg.HTTPClient,
+	})
+}
+
+// elevenlabsSpeakFactory adapts the ElevenLabs driver.
+func elevenlabsSpeakFactory(cfg compute.SpeakDriverConfig) (compute.SpeakDriver, error) {
+	return elevenlabs.New(elevenlabs.Config{
+		BaseURL:    cfg.Endpoint,
+		Model:      cfg.Model,
+		Voice:      cfg.Voice,
+		Format:     cfg.Format,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
 	})
 }
