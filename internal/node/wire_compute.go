@@ -183,15 +183,15 @@ func (n *Node) wireLLMProviders() (map[string]compute.LLMProvider, error) {
 			if err != nil {
 				return nil, fmt.Errorf("api key for provider %q: %w", p.Label, err)
 			}
-			client, err := compute.NewLLMClient(compute.LLMClientConfig{
+			client, err := n.drivers().Chat(p.Driver, compute.ChatDriverConfig{
 				Endpoint:    p.Endpoint,
-				APIKey:      apiKey,
 				Model:       p.Model,
+				Credential:  credentialFor(p, apiKey),
 				ServerTools: serverToolsFromConfig(p.ServerTools),
 				Logger:      n.log,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("llm client for %q: %w", p.Label, err)
+				return nil, fmt.Errorf("provider %q: %w", p.Label, err)
 			}
 			clientsByLabel[p.Label] = client
 			n.providerRegistry.Register(compute.ProviderEntry{

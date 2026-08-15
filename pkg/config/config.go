@@ -435,7 +435,18 @@ type EmbeddingsConfig struct {
 //
 // Higher Priority wins ties; declaration order breaks Priority ties.
 type ProviderConfig struct {
-	Label    string `koanf:"label"`
+	Label string `koanf:"label"`
+	// Driver names the wire protocol this endpoint speaks:
+	// "openai" (the default, and what most vendors offer),
+	// "anthropic", or "mock" for a node that must not touch the
+	// network. Empty means openai, so every existing config keeps
+	// working.
+	//
+	// A driver is not a vendor. Qwen Cloud, Groq, Together and a
+	// local Ollama are all providers using the openai driver at
+	// different endpoints — which is why the list of drivers stays
+	// short while the list of providers does not.
+	Driver   string `koanf:"driver,omitempty"`
 	Endpoint string `koanf:"endpoint"`
 	Model    string `koanf:"model"`
 	Format   string `koanf:"format,omitempty"`
