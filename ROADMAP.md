@@ -62,6 +62,9 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ⬜ | 🟡 P2 | M | — |
 | **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ⬜ | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
+| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
+| **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
+| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | ⬜ | 🟠 P1 | M | — |
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -2012,3 +2015,330 @@ currently documents the bug.
 resolver/capability/roles tests (R8). In each case the test's *assertion* should survive with the
 implementation swapped underneath it. Where it can't, that's a behaviour change worth calling out in
 the commit message rather than quietly rewriting the test.
+
+---
+
+## R22 — Provider / modality layer
+
+Full design: [`docs/dev/PROVIDERS.md`](/dev/PROVIDERS). Decision:
+`lobslaw-provider-modality`.
+
+### Problem
+
+The provider layer grew one modality at a time, and each one reinvented
+the same two ideas under a different name.
+
+**The driver concept exists four times.** `VisionFormat`
+(openai/anthropic/gemini), `AudioFormat` (openai/openrouter),
+`EmbeddingFormat` (openai/minimax), and `ProviderConfig.Format`. Four
+spellings of "which wire protocol does this endpoint speak", none of
+them shared.
+
+**Failover exists once.** Chat has it via `ProviderConfig.Backup` and
+`Registry.Chain`. Vision, audio, PDF and embeddings have a single
+endpoint each and no fallback — if it is down, the capability is gone.
+This is not an oversight so much as unfinished work:
+`SelectByCapability`'s own doc comment says its ordered result exists
+*"for the future fallback-chain layer that will try each in turn on
+transient failures."*
+
+**Configuration is scattered.** `[[compute.providers]]` plus separate
+config structs for vision, audio, PDF and embeddings, each with its own
+endpoint, key and format.
+
+And there is no generation of any kind — no speech, image or video.
+Adding one today means a fifth format enum and a fifth config block.
+
+### Proposal
+
+Separate **drivers** (compiled-in wire protocols) from **providers**
+(configured instances), collapse the config into one `[[provider]]`
+table keyed by modality, and generalise failover to every modality.
+
+Modalities: `chat`, `embedding`, `vision`, `transcribe`, `document`,
+`speak`, `image`, `video`. `chat` and `embedding` are infrastructure;
+every other modality is surfaced to the model as a **tool**, which is
+the pattern `read_image` / `read_audio` / `read_pdf` already use.
+
+Keeping them as tools is the load-bearing choice — it means any text
+model works, `require_confirmation` already gates `generate_video`,
+`TurnBudget` already counts them, and an unwired modality already
+degrades honestly instead of the model pretending. See the doc for why
+teaching the chat driver about multimodal content parts was rejected.
+
+"Custom variants such as Qwen Cloud" need no new driver: they are
+providers using the `openai` driver at a different endpoint, which is
+already how `LLMClient` works.
+
+### The abstraction
+
+Three rounds of research moved this design three times, and each time
+the thing that moved was one of four axes: interaction shape, billing
+unit, credential kind, artifact delivery. They will keep moving. So the
+interface makes those the only things a driver states, and everything
+above it blind to them — full definitions in
+[PROVIDERS](/dev/PROVIDERS#the-interface).
+
+The load-bearing choices:
+
+- **`JobHandle` is opaque and serialisable.** It holds an ARN, an
+  operation resource name or a task id without the layer above
+  knowing which, and it survives a round-trip through raft because the
+  poll may happen on another node after a takeover.
+- **Polling is a driver method**, and the driver states its own
+  interval. Nothing constructs a task URL.
+- **`Usage` carries a unit**, so a per-second-of-video call cannot
+  report zero.
+- **`Credential` is `Apply(ctx, *http.Request) error`** — the narrowest
+  waist that hides OAuth refresh and SigV4 signing alike.
+- **Artifacts normalise** to a path in a storage mount, whichever of
+  the three delivery modes produced them.
+
+### Adding one
+
+Target: one file and one registry line. Everything cross-cutting —
+retries, failover, budget, policy, tracing, artifact resolution,
+credential refresh — lives above the driver, so a driver does not know
+failover exists.
+
+The accelerator is a shared **conformance suite** every driver must
+pass: handle survives serialisation, failures are classified into the
+three failover classes, usage carries a unit, expiring artifacts are
+fetched in time, cancellation is honoured. Mocks by default, live
+endpoints when credentials are present. It is what makes the eighth
+driver a known quantity, and what catches a vendor changing shape.
+
+**External drivers are one more in-code driver** whose methods shell
+out to a sandboxed skill. Not a parallel path — same interface, same
+conformance suite, same failover. A separate external path would drift
+from the in-code one and the drift would be found by an operator
+rather than a test.
+
+### Sequencing
+
+Ordering principle: **prove the abstraction against what already works
+before betting new work on it.**
+
+1. The waist — interfaces, `Usage`, `Credential`, `Artifact`,
+   `JobHandle`, conformance suite. No behaviour change.
+2. Mock driver for every modality, passing conformance.
+3. **Migrate the four existing modalities onto it**, replacing the four
+   format enums. Behaviour-preserving, and the checkpoint: if the
+   interface cannot express what already ships, it changes here while
+   that is still cheap.
+4. The single `[[provider]]` table, existing config shimmed.
+5. The no-network end-to-end harness — a full node on mock drivers
+   serving a real turn.
+6. Per-modality failover, three classes.
+7. Async job plumbing: `JobDriver`, artifact resolution, commitment-
+   backed poll handler.
+8. New modalities: `speak`, then `image`, then `video`.
+9. External drivers via skills.
+
+Steps 1–5 add no capability, and that is the point: they make step 8 a
+day per modality rather than a fresh argument each time.
+
+### Acceptance
+
+- [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
+      `EmbeddingFormat` remain.
+- [ ] A node boots from a config whose every provider is `driver =
+      "mock"`, with no network access, and serves a full turn.
+- [ ] A vision provider whose primary returns 503 falls through to its
+      backup within the same turn, and the fallthrough is logged.
+- [ ] A provider declaring a modality its model does not support is
+      warned about at boot via the existing models.dev capability data.
+- [ ] `generate_image` can be gated by `effect =
+      "require_confirmation"` with no new machinery.
+- [ ] A `generate_video` call submits a job, returns from the turn
+      immediately, and delivers the artifact later via a commitment —
+      without holding the session lease or tripping the 90s
+      responsiveness timeout.
+- [ ] A provider billed per second of video reports a non-zero cost.
+      Zero is the current answer and it is wrong.
+- [ ] A plan-billed provider whose quota is exhausted falls through to
+      its backup and warns; it is not retried until reset, and it is
+      not treated as a request error.
+- [ ] The job handle is opaque to everything above the driver: a
+      driver returning an ARN, an operation resource name or a bare
+      task id all work without the scheduler knowing which.
+- [ ] A provider requiring short-lived OAuth tokens (Vertex) and one
+      requiring per-request signing (Bedrock) are both configurable
+      without a static `api_key`.
+- [ ] An artifact delivered to an operator-owned bucket lands in a
+      lobslaw storage mount, with no download step.
+- [ ] An artifact delivered as an expiring vendor URL is fetched
+      before it expires, and a poll handler that has not run is not
+      silently dropped.
+
+---
+
+## R23 — External drivers as skills
+
+Full design: [`docs/dev/PROVIDERS.md`](/dev/PROVIDERS). Decision:
+`lobslaw-external-drivers`.
+
+### Problem
+
+An operator wanting a provider lobslaw has never heard of must write Go
+and rebuild. That is the wrong bar for something that is, in most
+cases, thirty lines of HTTP.
+
+### Proposal
+
+A skill manifest may declare `provides.modality`. Such a skill is
+registered as a provider for that modality rather than as a bare tool,
+and invoked with the modality's JSON request shape on stdin/stdout — so
+any language works.
+
+No new security boundary is introduced, because skills already have the
+one this needs: signed manifests with a pinned handler digest (R19), a
+Landlock/seccomp sandbox, optional netns isolation, an egress proxy
+with a per-role allowlist, credential injection, and policy gating.
+
+MCP was rejected — no signing, no sandbox, and a driver holds provider
+credentials. Go plugins were rejected — in-process, so no boundary at
+all. A bespoke driver protocol was rejected — it would duplicate four
+things that are already right.
+
+Offered for the tool modalities only. A subprocess spawn per invocation
+is irrelevant for generation and unacceptable for `chat`.
+
+### Acceptance
+
+- [ ] A Python skill declaring `provides.modality: image` serves
+      `generate_image` with no Go changes.
+- [ ] It runs under the same sandbox, egress allowlist and signature
+      policy as any other skill.
+- [ ] Declaring `provides.modality: chat` is rejected at load with a
+      clear reason.
+- [ ] An unsigned external driver is refused under `signing_policy =
+      "require"`, like any other skill.
+
+---
+
+## R24 — Turn trace export
+
+Full design: [`docs/dev/TRACE.md`](/dev/TRACE). Decision:
+`lobslaw-turn-trace`.
+
+### Problem
+
+Three questions an operator cannot answer:
+
+1. *Why did that turn take 40 seconds?* There is no per-span timing,
+   and the non-LLM work — retrieval, compaction, ingest — is entirely
+   invisible.
+2. *What is costing me money?* `CostRecord{ProviderLabel, Model, Usage,
+   CostUSD}` is computed per LLM round-trip and then **discarded** into
+   `TurnBudget` totals. `ToolInvocation` has no timing at all.
+3. *Is my primary provider being used?* Failover walks silently.
+
+### Proposal
+
+A turn emits a tree of spans — `llm_call`, `tool_call`, `embedding`,
+`retrieval`, `compaction`, `ingest` — with parent links, timings, usage
+and cost, exported to any combination of OpenTelemetry, a
+newline-delimited JSON file, and a webhook.
+
+**Exported, not stored.** No raft bucket and no reporting command: a
+trace is high-volume, short-lived, and neither agreed-upon nor state.
+lobslaw is a harness; this is telemetry for whatever the operator
+already runs.
+
+The one genuinely new calculation is **tool context attribution**, and
+the obvious version is wrong. A tool's cost is not the call that ran
+it — it is the tokens its output contributed to every *subsequent*
+prompt in the turn. A tool returning 8k tokens on the first of six
+model calls is carried in five later prompts, so it costs roughly 40k
+prompt tokens. That is usually the dominant cost in an agentic turn and
+is currently attributable to nothing.
+
+Kept separate from the hash-chained audit log: an audit entry that may
+be dropped under load is not an audit entry, and a trace that must
+never be dropped becomes a reliability problem on the reply path.
+
+### Acceptance
+
+- [ ] Off by default.
+- [ ] A turn's spans nest correctly in an OTel backend, with tokens and
+      cost as attributes.
+- [ ] No span carries message text, tool arguments or tool output.
+- [ ] A collector that hangs neither slows nor fails a turn; dropped
+      spans are counted.
+- [ ] Tool attribution reflects re-sent context, not just the
+      producing call — verifiable on a scripted multi-tool turn.
+- [ ] Cached tokens are priced as cached, not fresh.
+- [ ] A span for a non-token-billed call carries its own unit and
+      quantity (`video_seconds`, `images`, `credits`…), not a token
+      count of zero.
+- [ ] Plan-billed calls record quota consumed and are marked as such,
+      rather than reporting a marginal spend of zero.
+
+---
+
+## Annex — provider API survey (2026-08-15)
+
+Verified against vendor documentation rather than recalled, because
+the assumption this survey overturned — "a custom variant is the same
+driver at a different endpoint" — was itself a confident recollection.
+
+**Interaction shape.** Alibaba Wan text-to-video is asynchronous:
+`POST …/video-synthesis` with `X-DashScope-Async: enable` returns a
+`task_id`; the caller polls `GET /api/v1/tasks/{task_id}` through
+`PENDING → RUNNING → SUCCEEDED | FAILED` at roughly 15-second
+intervals. Image-to-video runs **1–5 minutes**. Both the task id and
+the returned `video_url` expire after 24 hours. OpenAI's image API, by
+contrast, returns the image in the response — so both shapes are real
+and a driver must declare which it is.
+
+**Billing units.** Wan bills *per successfully generated second of
+video*. OpenAI `gpt-image-1` encodes the output image as tokens and
+bills per million. Replicate bills per second of GPU time for
+non-official models and per output unit for official ones. Stability
+and Ideogram bill in credits. Several providers bill per megapixel, so
+a 4K image costs a multiple of a 1024² one on the same model. Only the
+first of these is expressible in `Usage` today.
+
+**Plan billing.** Alibaba's Token Plan bills in Credits against a
+monthly per-seat quota that does not carry over, and **blocks API
+calls when the quota is exhausted rather than charging overage**. That
+is neither a transient failure nor a request error, which is why the
+failover taxonomy needs a third class.
+
+**Async is not one pattern.** Three vendors, three unrelated
+protocols. Alibaba returns an opaque `task_id` polled by `GET
+/api/v1/tasks/{id}`. Vertex Veo returns an *operation resource name*
+(`projects/…/operations/…`) polled by `fetchPredictOperation` — a POST,
+not a GET on the handle — signalling completion with `done: true`.
+Bedrock returns an `invocationArn` polled by `GetAsyncInvoke`. A driver
+interface that assumes a task id in a URL fits exactly one of them, so
+the job handle must be opaque and polling must be a driver method.
+
+**Artifacts arrive three ways**: an expiring vendor URL (Wan, 24h),
+inline base64 (Veo without `storageUri`), or written into an
+operator-owned bucket (Bedrock's `outputDataConfig.s3OutputDataConfig`,
+mandatory; Veo's `storageUri`, optional). The third maps onto lobslaw's
+existing storage mounts; the first has a deadline, which is why the
+poll handler must be reliable rather than best-effort.
+
+**Credentials are not always a static key.** Vertex AI *rejects* API
+keys — "API keys are not supported by this API" — and requires a
+short-lived OAuth2 token (~1h) minted from a service account or ADC.
+Bedrock uses SigV4 request signing rather than a header value. Neither
+is expressible as `api_key = "env:…"`, so a provider declares a
+credential kind. `CredentialService` already mints and refreshes
+short-lived OAuth tokens for skills and should serve providers too.
+
+Sources: [Wan text-to-video API reference](https://www.alibabacloud.com/help/en/model-studio/text-to-video-api-reference) ·
+[Qwen Cloud text-to-video](https://docs.qwencloud.com/developer-guides/video-generation/text-to-video) ·
+[Model Studio Token Plan overview](https://help.aliyun.com/en/model-studio/token-plan-overview) ·
+[Savings Plans and Resource Plans](https://www.alibabacloud.com/help/en/model-studio/savings-plan-and-resource-package) ·
+[OpenAI API pricing](https://developers.openai.com/api/docs/pricing) ·
+[Replicate billing](https://dodopayments.com/blogs/replicate-billing-model) ·
+[Normalised image-model pricing survey](https://invideo.io/blog/ai-image-model-pricing/) ·
+[Veo on Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/video/generate-videos-from-text) ·
+[Veo model reference](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/veo-video-generation) ·
+[Bedrock StartAsyncInvoke](https://docs.aws.amazon.com/de_de/bedrock/latest/APIReference/API_runtime_StartAsyncInvoke.html) ·
+[Nova Reel text-to-video](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-runtime_example_bedrock-runtime_Scenario_AmazonNova_TextToVideo_section.html) ·
+[Vertex AI authentication](https://docs.cloud.google.com/vertex-ai/docs/authentication)
