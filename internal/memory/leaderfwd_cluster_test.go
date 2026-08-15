@@ -3,6 +3,7 @@ package memory_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -366,4 +367,35 @@ func TestRaftShutdownIsIdempotent(t *testing.T) {
 	// Must not panic. An error is acceptable — the log store is
 	// already closed — but a crash is not.
 	_ = r.Shutdown()
+}
+
+// IsLeader can say yes and leadership can move before Apply lands.
+// Raft reports that as a bare ErrLeadershipLost / ErrNotLeader, which
+// matches none of the forwarding sentinels — so a caller checking for
+// retryable errors saw an unrecognised one and would treat a
+// transient election as permanent, dropping the user's message.
+//
+// Tested directly on the classifier because the window itself cannot
+// be opened on demand: it surfaced once as an intermittent failure in
+// TestLeaderLossSurfacesRetryableError and resisted reproduction.
+func TestLeadershipChangeErrorsAreClassifiedRetryable(t *testing.T) {
+	t.Parallel()
+	for _, err := range []error{
+		raft.ErrNotLeader,
+		raft.ErrLeadershipLost,
+		raft.ErrLeadershipTransferInProgress,
+		fmt.Errorf("raft apply: %w", raft.ErrLeadershipLost), // wrapped, as callers see it
+	} {
+		if !memory.IsLeadershipChangeErr(err) {
+			t.Errorf("%v not classified as a leadership change; a caller would treat it as permanent", err)
+		}
+	}
+	for _, err := range []error{
+		errors.New("disk full"),
+		raft.ErrRaftShutdown,
+	} {
+		if memory.IsLeadershipChangeErr(err) {
+			t.Errorf("%v misclassified as a leadership change; retrying it forever helps nobody", err)
+		}
+	}
 }
