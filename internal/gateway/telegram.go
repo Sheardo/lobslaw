@@ -1136,10 +1136,43 @@ func (h *TelegramHandler) pollLoop(ctx context.Context) error {
 			}
 			firstFlush = false
 		} else {
+			// Acknowledge each update as it completes, not the batch
+			// as a whole. The offset is a consumer position: persisting
+			// it once at the end means a crash after update 3 of 5
+			// leaves it covering none of them, so on restart Telegram
+			// redelivers all five and the in-memory dedup map — empty
+			// after a restart — lets the first three run a second time.
+			// Duplicate replies, duplicate tool calls, duplicate
+			// commitments.
+			//
+			// After dispatch rather than before, so the guarantee stays
+			// at-least-once: a crash mid-turn replays that one turn,
+			// which is the right trade for a chat bot. Acknowledging
+			// first would lose the message instead.
+			//
+			// One raft write per update rather than per batch. A turn
+			// already costs seconds and several writes, so this is
+			// noise, and it forwards to the leader like any other write.
 			for i := range updates {
+				// Do not start a new turn once shutdown has begun.
+				// Whatever is left unacknowledged is redelivered on
+				// the next start, which is cheaper and safer than
+				// beginning work we are about to abandon.
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+				}
 				h.dispatchUpdate(ctx, &updates[i])
+				if ack := updates[i].UpdateID + 1; ack > nextOffset {
+					nextOffset = ack
+					h.persistOffset(ctx, nextOffset)
+				}
 			}
 		}
+		// Covers a batch that dispatched nothing — an update shape we
+		// do not handle still has to be acknowledged, or the poller
+		// fetches it forever.
 		if newOffset > nextOffset {
 			nextOffset = newOffset
 			h.persistOffset(ctx, nextOffset)

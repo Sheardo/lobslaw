@@ -489,6 +489,14 @@ type pollHarness struct {
 }
 
 func newPollHarness(t *testing.T, agent *compute.Agent, batches [][]byte) *pollHarness {
+	return newPollHarnessWithState(t, agent, batches, nil)
+}
+
+// newPollHarnessWithState is newPollHarness plus a channel-state store,
+// for tests about offset acknowledgement. Note that supplying one
+// enables the first-run flush unless the store already holds an
+// offset — seed it, or the first batch is discarded by design.
+func newPollHarnessWithState(t *testing.T, agent *compute.Agent, batches [][]byte, state ChannelStateStore) *pollHarness {
 	t.Helper()
 	h := &pollHarness{batches: batches}
 	h.fakeAPI = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -542,6 +550,7 @@ func newPollHarness(t *testing.T, agent *compute.Agent, batches [][]byte) *pollH
 		Mode:             TelegramModePoll,
 		APIBase:          h.fakeAPI.URL,
 		UnknownUserScope: "public",
+		ChannelState:     state,
 	}, agent)
 	if err != nil {
 		t.Fatal(err)
