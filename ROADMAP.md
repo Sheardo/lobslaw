@@ -2070,20 +2070,73 @@ teaching the chat driver about multimodal content parts was rejected.
 providers using the `openai` driver at a different endpoint, which is
 already how `LLMClient` works.
 
+### The abstraction
+
+Three rounds of research moved this design three times, and each time
+the thing that moved was one of four axes: interaction shape, billing
+unit, credential kind, artifact delivery. They will keep moving. So the
+interface makes those the only things a driver states, and everything
+above it blind to them — full definitions in
+[PROVIDERS](/dev/PROVIDERS#the-interface).
+
+The load-bearing choices:
+
+- **`JobHandle` is opaque and serialisable.** It holds an ARN, an
+  operation resource name or a task id without the layer above
+  knowing which, and it survives a round-trip through raft because the
+  poll may happen on another node after a takeover.
+- **Polling is a driver method**, and the driver states its own
+  interval. Nothing constructs a task URL.
+- **`Usage` carries a unit**, so a per-second-of-video call cannot
+  report zero.
+- **`Credential` is `Apply(ctx, *http.Request) error`** — the narrowest
+  waist that hides OAuth refresh and SigV4 signing alike.
+- **Artifacts normalise** to a path in a storage mount, whichever of
+  the three delivery modes produced them.
+
+### Adding one
+
+Target: one file and one registry line. Everything cross-cutting —
+retries, failover, budget, policy, tracing, artifact resolution,
+credential refresh — lives above the driver, so a driver does not know
+failover exists.
+
+The accelerator is a shared **conformance suite** every driver must
+pass: handle survives serialisation, failures are classified into the
+three failover classes, usage carries a unit, expiring artifacts are
+fetched in time, cancellation is honoured. Mocks by default, live
+endpoints when credentials are present. It is what makes the eighth
+driver a known quantity, and what catches a vendor changing shape.
+
+**External drivers are one more in-code driver** whose methods shell
+out to a sandboxed skill. Not a parallel path — same interface, same
+conformance suite, same failover. A separate external path would drift
+from the in-code one and the drift would be found by an operator
+rather than a test.
+
 ### Sequencing
 
-1. One `Driver` type replacing the four format enums.
-2. Modality-keyed registry + the single `[[provider]]` table, with the
-   existing per-builtin config shimmed for one release.
-3. **Mock driver for every modality**, then the turn-level end-to-end
-   harness — a full node bootable with no network at all. This is the
-   class of test lobslaw lacks, and the class that catches wiring
-   regressions unit tests do not.
-4. Per-modality failover.
-5. New modalities: `speak`, `image`, `video`.
+Ordering principle: **prove the abstraction against what already works
+before betting new work on it.**
 
-Steps 1–3 are refactoring plus test infrastructure. Step 5 is where new
-capability appears, and it is last on purpose.
+1. The waist — interfaces, `Usage`, `Credential`, `Artifact`,
+   `JobHandle`, conformance suite. No behaviour change.
+2. Mock driver for every modality, passing conformance.
+3. **Migrate the four existing modalities onto it**, replacing the four
+   format enums. Behaviour-preserving, and the checkpoint: if the
+   interface cannot express what already ships, it changes here while
+   that is still cheap.
+4. The single `[[provider]]` table, existing config shimmed.
+5. The no-network end-to-end harness — a full node on mock drivers
+   serving a real turn.
+6. Per-modality failover, three classes.
+7. Async job plumbing: `JobDriver`, artifact resolution, commitment-
+   backed poll handler.
+8. New modalities: `speak`, then `image`, then `video`.
+9. External drivers via skills.
+
+Steps 1–5 add no capability, and that is the point: they make step 8 a
+day per modality rather than a fresh argument each time.
 
 ### Acceptance
 

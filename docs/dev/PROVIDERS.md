@@ -296,6 +296,192 @@ So the failover taxonomy is:
 
 ---
 
+## The interface
+
+Three rounds of research changed this design three times, and each time
+the thing that moved was one of four axes: **interaction shape**,
+**billing unit**, **credential kind**, **artifact delivery**. They will
+keep moving. The abstraction's job is to make those the *only* things a
+driver states, and to make everything above the driver blind to them.
+
+So the waist is deliberately narrow.
+
+### Synchronous modalities
+
+One method each. A driver implements only the modalities it serves.
+
+```go
+type ChatDriver interface {
+	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
+}
+
+type EmbedDriver interface {
+	Embed(ctx context.Context, req EmbedRequest) (*EmbedResponse, error)
+}
+
+type VisionDriver interface {
+	Describe(ctx context.Context, req VisionRequest) (*TextResponse, error)
+}
+
+type TranscribeDriver interface {
+	Transcribe(ctx context.Context, req AudioRequest) (*TextResponse, error)
+}
+
+type SpeakDriver interface {
+	Speak(ctx context.Context, req SpeakRequest) (*Artifact, error)
+}
+```
+
+### Asynchronous modalities
+
+The three vendors surveyed share no protocol, so the interface commits
+to none. `JobHandle` is **opaque and serialisable** — the driver's own
+encoding of an ARN, an operation resource name or a bare task id — and
+polling is a driver method rather than a URL the caller constructs.
+
+Serialisable is the load-bearing word: the handle is stored on a
+commitment and polled later, possibly on a different node after a
+crash takeover. It must survive a round-trip through raft and mean the
+same thing to a different process.
+
+```go
+type JobDriver interface {
+	Submit(ctx context.Context, req JobRequest) (JobHandle, error)
+	Poll(ctx context.Context, h JobHandle) (JobState, error)
+	Fetch(ctx context.Context, st JobState) (*Artifact, error)
+
+	// PollInterval is the driver's own cadence — ~15s for Wan,
+	// 10-60s for Veo. The scheduler asks rather than assumes.
+	PollInterval() time.Duration
+}
+
+type JobHandle struct {
+	Driver string // which driver can interpret Raw
+	Raw    string // driver-owned; opaque above this line
+}
+
+type JobState struct {
+	Status   JobStatus // Pending | Running | Succeeded | Failed
+	Usage    Usage     // often only known at completion
+	Err      string
+	Artifact *ArtifactRef
+}
+```
+
+### Artifacts
+
+Three delivery modes collapse into one type, and a resolver normalises
+them into the thing the agent can actually use: a path inside a
+lobslaw storage mount.
+
+```go
+type Artifact struct {
+	Kind      ArtifactKind // ArtifactURL | ArtifactInline | ArtifactMount
+	URL       string       // ArtifactURL — expiring
+	ExpiresAt time.Time
+	Bytes     []byte       // ArtifactInline
+	Mount     string       // ArtifactMount — already in operator storage
+	Path      string
+	MIME      string
+}
+```
+
+The resolver downloads an `ArtifactURL` before `ExpiresAt`, writes an
+`ArtifactInline` to a mount, and leaves an `ArtifactMount` alone. Above
+that point every modality returns the same thing.
+
+### Usage
+
+Billing units are not tokens, so the unit is a field. Token detail
+becomes one case rather than the only one.
+
+```go
+type Usage struct {
+	Unit     Unit    // Tokens | Images | Megapixels | VideoSeconds | GPUSeconds | Credits
+	Quantity float64
+	Tokens   *TokenUsage // non-nil only when Unit == Tokens
+	BilledTo Billing     // Balance | Plan
+	CostUSD  float64     // zero and meaningless when BilledTo == Plan
+}
+```
+
+`BilledTo == Plan` is what stops a trace reporting £0 as though it were
+free: the meaningful number there is `Quantity` against the plan, not
+the spend.
+
+### Credentials
+
+Every auth model reduces to "mutate this outbound request", which is
+the narrowest waist available and hides refresh and signing entirely.
+
+```go
+type Credential interface {
+	Apply(ctx context.Context, req *http.Request) error
+}
+```
+
+- `static` sets a header from a resolved secret ref.
+- `gcp-service-account` mints an OAuth token, caches it, and refreshes
+  before expiry — reusing `CredentialService`, which already does this
+  for skills.
+- `aws-sigv4` signs the request.
+
+A driver never asks what kind it holds.
+
+---
+
+## Adding a driver
+
+The measure of "easy" is how many places you touch. The target is
+**one file and one registry line**, and the way to keep it there is to
+put every cross-cutting concern above the driver: retries, failover,
+budget, policy, tracing, artifact resolution and credential refresh
+are all the registry's business, not the driver's.
+
+A new driver therefore implements only the modality methods it serves
+and states its four axes. It does not know that failover exists.
+
+### The conformance suite is the accelerator
+
+```go
+drivertest.RunConformance(t, drivertest.Subject{
+	Driver:     myDriver,
+	Modalities: []Modality{ModalityImage, ModalityVideo},
+	Live:       os.Getenv("LOBSLAW_LIVE_DRIVER_TESTS") != "",
+})
+```
+
+One shared suite every driver must pass, asserting the properties the
+layer above depends on:
+
+- a submitted job's handle survives marshal/unmarshal and still polls;
+- a failed job reports `Failed` rather than blocking forever;
+- usage carries a unit, and a non-token-billed call does not report
+  zero;
+- an expiring artifact is fetched before `ExpiresAt`;
+- a transient failure is classified transient, a quota exhaustion as
+  quota, a bad request as permanent;
+- cancellation is honoured.
+
+Run against mocks by default and against the real endpoint when
+credentials are present. This is what makes the eighth driver a known
+quantity rather than an adventure, and it is what catches a vendor
+changing shape under you — which, on the evidence of this document,
+they will.
+
+### External drivers get the same interface
+
+The skill-backed driver is **one more in-code driver** whose methods
+shell out to a subprocess over the JSON contract. It is not a parallel
+system: it passes the same conformance suite, resolves artifacts the
+same way, and is subject to the same failover.
+
+That is what keeps external extensibility honest. A separate external
+path would drift from the in-code one, and the drift would be
+discovered by an operator rather than by a test.
+
+---
+
 ## Configuration
 
 One table replaces `[[compute.providers]]` plus the separate
@@ -448,20 +634,35 @@ easier to test once it exists.
 
 ## Sequencing
 
-1. **Unify the driver concept.** One `Driver` type replacing
-   `VisionFormat` / `AudioFormat` / `EmbeddingFormat` /
-   `ProviderConfig.Format`. Mechanical, and it is what makes the rest
-   expressible.
-2. **Modality-keyed provider registry** and the single `[[provider]]`
-   table, with the existing per-builtin config kept working via a
-   compatibility shim for one release.
-3. **Mock driver for every modality**, then the end-to-end harness.
-4. **Per-modality failover**, generalising `Backup` and finishing what
-   `SelectByCapability` was written to support.
-5. **New modalities**: `speak`, `image`, `video` as tools.
-6. **External drivers via skills.**
+The ordering principle: **prove the abstraction against what already
+works before betting new work on it.** If the interface cannot express
+the four modalities already shipping, it is wrong, and that is far
+cheaper to discover during a migration than during a new build.
 
-Steps 1–3 are refactoring plus test infrastructure and unlock the
-rest. Step 5 is where new capability actually appears, and it is
-deliberately last, because adding modalities before the layer is
-unified means adding a fourth format enum and a fifth config block.
+1. **The waist.** Driver interfaces, `Usage` with a unit, `Credential`,
+   `Artifact`, `JobHandle`. Types and the conformance suite only —
+   no behaviour change.
+2. **Mock driver for every modality**, passing conformance. This comes
+   before the migration, not after, because it is what makes the
+   migration verifiable.
+3. **Migrate the four existing modalities** — chat, embedding, vision,
+   document/audio — onto the waist, replacing the four format enums.
+   Behaviour-preserving. **This is the step that validates the design**,
+   and if something does not fit, the interface changes here while it
+   is still cheap.
+4. **The single `[[provider]]` table**, with the existing per-builtin
+   config shimmed for one release.
+5. **The no-network end-to-end harness** — a full node on mock drivers,
+   serving a real turn. Answers the testing question directly.
+6. **Per-modality failover**, three classes, finishing what
+   `SelectByCapability` was written for.
+7. **Async job plumbing**: `JobDriver`, artifact resolution, and the
+   commitment-backed poll handler.
+8. **New modalities**: `speak` (sync), then `image`, then `video` —
+   in ascending order of how much of step 7 they exercise.
+9. **External drivers via skills**, passing the same conformance suite.
+
+Steps 1–5 add no capability and are the whole point: they are what
+make step 8 a day's work per modality instead of a fresh argument each
+time. Step 3 is the checkpoint — if the abstraction survives contact
+with four existing implementations, it will survive the fifth.
