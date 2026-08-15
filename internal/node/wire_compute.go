@@ -21,6 +21,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 	"github.com/jmylchreest/lobslaw/internal/policy"
+	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
@@ -660,6 +661,13 @@ func (n *Node) seedSessionPruneTask(ctx context.Context) error {
 func (n *Node) registerAgentTurnHandlers() {
 	_ = n.scheduler.Handlers().RegisterTask(AgentTurnHandlerRef, n.runTaskAsAgentTurn)
 	_ = n.scheduler.Handlers().RegisterCommitment(AgentTurnHandlerRef, n.runCommitmentAsAgentTurn)
+
+	// Idempotent, unlike every other commitment handler here. Polling a
+	// provider for a job it is already running costs one cheap request
+	// if it happens twice; losing the only poll orphans work that is
+	// already being billed. See scheduler.Idempotent.
+	_ = n.scheduler.Handlers().RegisterCommitment(
+		GenerationPollHandlerRef, n.runGenerationPoll, scheduler.Idempotent())
 }
 
 // researchIDEntropy is a process-wide ULID monotonic source for

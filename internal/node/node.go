@@ -8,6 +8,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -223,6 +224,12 @@ type Node struct {
 	storageSvc       *storage.Service
 	storageMgr       *storage.Manager
 	skillRegistry    *skills.Registry
+	// jobDrivers maps a generation driver's name to its
+	// implementation. The name is embedded in every JobHandle the
+	// driver mints, so a handle polled after a crash takeover is
+	// routed back to the same driver on a different node.
+	jobDriverMu sync.RWMutex
+	jobDrivers  map[string]compute.JobDriver
 	// Soul is held behind an atomic pointer so the config watcher
 	// can hot-swap SOUL.md edits without racing readers. Callers
 	// go through the Soul() accessor; never read soul directly.

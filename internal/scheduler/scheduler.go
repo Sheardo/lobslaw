@@ -649,6 +649,15 @@ func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.Agent
 		return
 	}
 
+	// A handler that opted into Idempotent() runs BEFORE completion.
+	// The default ordering below protects a human from a duplicate
+	// message; this one protects work that is already running and
+	// already being billed from being dropped on the floor.
+	if s.handlers.IsIdempotent(c.HandlerRef) {
+		s.runIdempotentCommitment(ctx, handler, c)
+		return
+	}
+
 	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
 	updated.Status = string(statusDone)
 	updated.ClaimedBy = ""
@@ -672,6 +681,72 @@ func (s *Scheduler) runCommitmentHandler(ctx context.Context, c *lobslawv1.Agent
 		s.log.Error("scheduler: commitment handler error (delivery lost — at-most-once)",
 			"id", c.Id, "handler_ref", c.HandlerRef, "err", err)
 	}
+}
+
+// runIdempotentCommitment is the at-least-once ordering: run first,
+// then record the outcome.
+//
+// Three outcomes rather than two. A polling handler is not finished
+// when it returns — it is finished when the JOB is — so RetryAfter
+// re-arms the commitment instead of closing it. If this node dies
+// anywhere in here, the claim TTL expires and another node re-runs
+// the handler against the same still-pending commitment, which is
+// exactly the recovery the default ordering cannot offer.
+func (s *Scheduler) runIdempotentCommitment(ctx context.Context, handler CommitmentHandler, c *lobslawv1.AgentCommitment) {
+	err := handler(ctx, c)
+
+	if r, ok := AsRetryAfter(err); ok {
+		s.rearmCommitment(c, r)
+		return
+	}
+
+	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
+	updated.Status = string(statusDone)
+	updated.ClaimedBy = ""
+	updated.ClaimExpiresAt = nil
+	if applyErr := s.applyClaim(&lobslawv1.LogEntry{
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               c.Id,
+		Payload:          &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &c.Revision,
+	}); applyErr != nil {
+		// The claim was stolen mid-run, so the work may be repeated by
+		// the new claimer. Harmless by construction — the handler said
+		// it was idempotent — but worth saying out loud.
+		s.log.Warn("scheduler: complete idempotent commitment failed (may re-run)",
+			"id", c.Id, "err", applyErr)
+	}
+	if err != nil {
+		s.log.Error("scheduler: idempotent commitment handler error",
+			"id", c.Id, "handler_ref", c.HandlerRef, "err", err)
+	}
+}
+
+// rearmCommitment leaves the commitment pending and moves it to the
+// time the handler asked for, releasing the claim so any node may
+// take the next poll.
+func (s *Scheduler) rearmCommitment(c *lobslawv1.AgentCommitment, r *RetryAfter) {
+	updated := proto.Clone(c).(*lobslawv1.AgentCommitment)
+	updated.DueAt = timestamppb.New(r.At)
+	updated.ClaimedBy = ""
+	updated.ClaimExpiresAt = nil
+	if err := s.applyClaim(&lobslawv1.LogEntry{
+		Op:               lobslawv1.LogOp_LOG_OP_CLAIM,
+		Id:               c.Id,
+		Payload:          &lobslawv1.LogEntry_Commitment{Commitment: updated},
+		ExpectedClaimer:  s.cfg.NodeID,
+		ExpectedRevision: &c.Revision,
+	}); err != nil {
+		// Could not re-arm. The commitment stays pending with its old
+		// DueAt and an expiring claim, so it is retried anyway — later
+		// than asked, but never lost.
+		s.log.Warn("scheduler: re-arm commitment failed (will retry via claim expiry)",
+			"id", c.Id, "err", err)
+		return
+	}
+	s.log.Debug("scheduler: commitment re-armed",
+		"id", c.Id, "due_at", r.At, "reason", r.Reason)
 }
 
 func (s *Scheduler) releaseCommitmentClaim(_ context.Context, c *lobslawv1.AgentCommitment) {
