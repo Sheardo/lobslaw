@@ -219,6 +219,29 @@ A **session** is the durable transcript of one conversation on one channel. It i
 
 Both exist because they answer different questions. "What do I know about James's deploy preferences?" is memory. "What did we just say to each other?" is a session. Before sessions, the second question was answered by a per-process in-memory map that died on restart.
 
+### Why both, rather than one pointing at the other
+
+Every turn's text is therefore written twice: an `EpisodicRecord` (lossy, scored,
+consolidated by Dream, pruned at 24h under `RETENTION_SESSION`) and a
+`SessionMessage` per message (verbatim, ordered, capped). The obvious
+simplification is to collapse that — episodic keeps the embedding plus a
+`session_id:seq` pointer, and the text lives once.
+
+It was considered and rejected, because it inverts the dependency. Memory is
+meant to outlive the conversation — that is the whole point of the split — and
+under a pointer a durable consolidated memory would depend on a transcript that
+is capped, evicted oldest-first, and hard-deleted by `Forget`. "Forget this
+thread" would then blow holes in memories that were never about that thread. The
+expensive artifact is the embedding, which is not duplicated either way, and the
+duplicated text is `RETENTION_SESSION`, so the pruner clears it within a day.
+
+The pointer exists anyway, as metadata rather than as the storage model:
+episodic records carry `session_ref`, so a recall hit can offer to read the
+surrounding thread. It addresses the **thread, not the message** — ingest runs
+before the transcript append, so the sequence number does not exist yet. Advisory
+either way: a dead pointer means the link is stale, never that the memory is
+wrong.
+
 ### Storage layout
 
 ```
@@ -269,6 +292,11 @@ already embeds every turn and answers "what do I know about X" through
 a command that was run, an error string, a name. Building a second embedding
 pipeline over the same content would duplicate the cost for a worse version of a
 capability we already have.
+
+It is also a **full scan** of every session's every message — no index. That is
+fine at one-session-per-live-chat scale, which is what a personal deployment is;
+it is the first thing to reconsider if a deployment ever holds thousands of
+threads.
 
 Results are ranked most-recently-active first: when several threads mention the
 same thing, the live one is nearly always the one meant. Snippets are windowed
