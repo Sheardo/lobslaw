@@ -62,6 +62,9 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ⬜ | 🟡 P2 | M | — |
 | **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ⬜ | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
+| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
+| **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
+| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | ⬜ | 🟠 P1 | M | — |
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -2012,3 +2015,184 @@ currently documents the bug.
 resolver/capability/roles tests (R8). In each case the test's *assertion* should survive with the
 implementation swapped underneath it. Where it can't, that's a behaviour change worth calling out in
 the commit message rather than quietly rewriting the test.
+
+---
+
+## R22 — Provider / modality layer
+
+Full design: [`docs/dev/PROVIDERS.md`](/dev/PROVIDERS). Decision:
+`lobslaw-provider-modality`.
+
+### Problem
+
+The provider layer grew one modality at a time, and each one reinvented
+the same two ideas under a different name.
+
+**The driver concept exists four times.** `VisionFormat`
+(openai/anthropic/gemini), `AudioFormat` (openai/openrouter),
+`EmbeddingFormat` (openai/minimax), and `ProviderConfig.Format`. Four
+spellings of "which wire protocol does this endpoint speak", none of
+them shared.
+
+**Failover exists once.** Chat has it via `ProviderConfig.Backup` and
+`Registry.Chain`. Vision, audio, PDF and embeddings have a single
+endpoint each and no fallback — if it is down, the capability is gone.
+This is not an oversight so much as unfinished work:
+`SelectByCapability`'s own doc comment says its ordered result exists
+*"for the future fallback-chain layer that will try each in turn on
+transient failures."*
+
+**Configuration is scattered.** `[[compute.providers]]` plus separate
+config structs for vision, audio, PDF and embeddings, each with its own
+endpoint, key and format.
+
+And there is no generation of any kind — no speech, image or video.
+Adding one today means a fifth format enum and a fifth config block.
+
+### Proposal
+
+Separate **drivers** (compiled-in wire protocols) from **providers**
+(configured instances), collapse the config into one `[[provider]]`
+table keyed by modality, and generalise failover to every modality.
+
+Modalities: `chat`, `embedding`, `vision`, `transcribe`, `document`,
+`speak`, `image`, `video`. `chat` and `embedding` are infrastructure;
+every other modality is surfaced to the model as a **tool**, which is
+the pattern `read_image` / `read_audio` / `read_pdf` already use.
+
+Keeping them as tools is the load-bearing choice — it means any text
+model works, `require_confirmation` already gates `generate_video`,
+`TurnBudget` already counts them, and an unwired modality already
+degrades honestly instead of the model pretending. See the doc for why
+teaching the chat driver about multimodal content parts was rejected.
+
+"Custom variants such as Qwen Cloud" need no new driver: they are
+providers using the `openai` driver at a different endpoint, which is
+already how `LLMClient` works.
+
+### Sequencing
+
+1. One `Driver` type replacing the four format enums.
+2. Modality-keyed registry + the single `[[provider]]` table, with the
+   existing per-builtin config shimmed for one release.
+3. **Mock driver for every modality**, then the turn-level end-to-end
+   harness — a full node bootable with no network at all. This is the
+   class of test lobslaw lacks, and the class that catches wiring
+   regressions unit tests do not.
+4. Per-modality failover.
+5. New modalities: `speak`, `image`, `video`.
+
+Steps 1–3 are refactoring plus test infrastructure. Step 5 is where new
+capability appears, and it is last on purpose.
+
+### Acceptance
+
+- [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
+      `EmbeddingFormat` remain.
+- [ ] A node boots from a config whose every provider is `driver =
+      "mock"`, with no network access, and serves a full turn.
+- [ ] A vision provider whose primary returns 503 falls through to its
+      backup within the same turn, and the fallthrough is logged.
+- [ ] A provider declaring a modality its model does not support is
+      warned about at boot via the existing models.dev capability data.
+- [ ] `generate_image` can be gated by `effect =
+      "require_confirmation"` with no new machinery.
+
+---
+
+## R23 — External drivers as skills
+
+Full design: [`docs/dev/PROVIDERS.md`](/dev/PROVIDERS). Decision:
+`lobslaw-external-drivers`.
+
+### Problem
+
+An operator wanting a provider lobslaw has never heard of must write Go
+and rebuild. That is the wrong bar for something that is, in most
+cases, thirty lines of HTTP.
+
+### Proposal
+
+A skill manifest may declare `provides.modality`. Such a skill is
+registered as a provider for that modality rather than as a bare tool,
+and invoked with the modality's JSON request shape on stdin/stdout — so
+any language works.
+
+No new security boundary is introduced, because skills already have the
+one this needs: signed manifests with a pinned handler digest (R19), a
+Landlock/seccomp sandbox, optional netns isolation, an egress proxy
+with a per-role allowlist, credential injection, and policy gating.
+
+MCP was rejected — no signing, no sandbox, and a driver holds provider
+credentials. Go plugins were rejected — in-process, so no boundary at
+all. A bespoke driver protocol was rejected — it would duplicate four
+things that are already right.
+
+Offered for the tool modalities only. A subprocess spawn per invocation
+is irrelevant for generation and unacceptable for `chat`.
+
+### Acceptance
+
+- [ ] A Python skill declaring `provides.modality: image` serves
+      `generate_image` with no Go changes.
+- [ ] It runs under the same sandbox, egress allowlist and signature
+      policy as any other skill.
+- [ ] Declaring `provides.modality: chat` is rejected at load with a
+      clear reason.
+- [ ] An unsigned external driver is refused under `signing_policy =
+      "require"`, like any other skill.
+
+---
+
+## R24 — Turn trace export
+
+Full design: [`docs/dev/TRACE.md`](/dev/TRACE). Decision:
+`lobslaw-turn-trace`.
+
+### Problem
+
+Three questions an operator cannot answer:
+
+1. *Why did that turn take 40 seconds?* There is no per-span timing,
+   and the non-LLM work — retrieval, compaction, ingest — is entirely
+   invisible.
+2. *What is costing me money?* `CostRecord{ProviderLabel, Model, Usage,
+   CostUSD}` is computed per LLM round-trip and then **discarded** into
+   `TurnBudget` totals. `ToolInvocation` has no timing at all.
+3. *Is my primary provider being used?* Failover walks silently.
+
+### Proposal
+
+A turn emits a tree of spans — `llm_call`, `tool_call`, `embedding`,
+`retrieval`, `compaction`, `ingest` — with parent links, timings, usage
+and cost, exported to any combination of OpenTelemetry, a
+newline-delimited JSON file, and a webhook.
+
+**Exported, not stored.** No raft bucket and no reporting command: a
+trace is high-volume, short-lived, and neither agreed-upon nor state.
+lobslaw is a harness; this is telemetry for whatever the operator
+already runs.
+
+The one genuinely new calculation is **tool context attribution**, and
+the obvious version is wrong. A tool's cost is not the call that ran
+it — it is the tokens its output contributed to every *subsequent*
+prompt in the turn. A tool returning 8k tokens on the first of six
+model calls is carried in five later prompts, so it costs roughly 40k
+prompt tokens. That is usually the dominant cost in an agentic turn and
+is currently attributable to nothing.
+
+Kept separate from the hash-chained audit log: an audit entry that may
+be dropped under load is not an audit entry, and a trace that must
+never be dropped becomes a reliability problem on the reply path.
+
+### Acceptance
+
+- [ ] Off by default.
+- [ ] A turn's spans nest correctly in an OTel backend, with tokens and
+      cost as attributes.
+- [ ] No span carries message text, tool arguments or tool output.
+- [ ] A collector that hangs neither slows nor fails a turn; dropped
+      spans are counted.
+- [ ] Tool attribution reflects re-sent context, not just the
+      producing call — verifiable on a scripted multi-tool turn.
+- [ ] Cached tokens are priced as cached, not fresh.
