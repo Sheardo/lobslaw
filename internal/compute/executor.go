@@ -98,7 +98,18 @@ type Executor struct {
 	builtins *Builtins
 	cfg      ExecutorConfig
 	logger   *slog.Logger
+
+	// approvals holds "approved for the rest of this conversation"
+	// grants. Consulted here rather than at each channel so every
+	// dispatch path — builtins, skills, MCP — honours a grant the
+	// user already gave. Nil grants nothing.
+	approvals *SessionApprovals
 }
+
+// SetSessionApprovals wires the session-scoped approval store. The
+// channel that raised a confirmation records grants into the same
+// instance; the executor is where they are spent.
+func (e *Executor) SetSessionApprovals(a *SessionApprovals) { e.approvals = a }
 
 // NewExecutor wires the dependencies. hooks may be nil; cfg zero
 // fields take defaults. policy may be nil on nodes without it, in
@@ -409,6 +420,20 @@ func (e *Executor) policyAllow(ctx context.Context, claims *types.Claims, action
 	case types.EffectAllow:
 		return nil
 	case types.EffectRequireConfirmation:
+		// A confirmation the user already gave for this conversation
+		// is not asked again. Without this every approval is one-shot
+		// and the same prompt returns for the same operation forever,
+		// which trains the operator to approve without reading and
+		// eventually to switch confirmations off.
+		//
+		// Only session grants are consulted here. "always" is a
+		// policy allow rule, so it is already handled above by
+		// Evaluate returning allow — there is nothing to check.
+		if e.approvals.Granted(ctx, action, resource) {
+			e.logger.Debug("policy: confirmation already approved for this conversation",
+				"action", action, "resource", resource)
+			return nil
+		}
 		return fmt.Errorf("%w: %s", ErrRequireConfirm, dec.Reason)
 	default:
 		return fmt.Errorf("%w: %s", ErrPolicyDenied, dec.Reason)

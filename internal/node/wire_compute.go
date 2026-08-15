@@ -56,6 +56,11 @@ func (n *Node) wireCompute() error {
 
 	n.toolRegistry = compute.NewRegistry()
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
+	// One store, shared: the channel records "approve for this chat"
+	// and the executor spends it. Two instances would mean the user
+	// approves and is asked again anyway.
+	n.approvals = compute.NewSessionApprovals()
+	n.executor.SetSessionApprovals(n.approvals)
 
 	builtins, err := n.wireStdlibTools()
 	if err != nil {

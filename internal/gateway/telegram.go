@@ -153,6 +153,12 @@ type TelegramConfig struct {
 
 	// Conversation tunes replay depth and the degraded-mode cache.
 	Conversation ConversationConfig
+
+	// Approvals records "approve for the rest of this chat" grants.
+	// The executor consults the same instance, so a grant recorded
+	// here suppresses the next prompt for that operation. Nil leaves
+	// every confirmation one-shot.
+	Approvals *compute.SessionApprovals
 }
 
 // ChannelStateStore is a minimal raft-backed key-value interface for
@@ -173,6 +179,13 @@ type TelegramHandler struct {
 	log    *slog.Logger
 	client *http.Client
 	base   string
+
+	// pendingScope remembers which operation each prompt is about, so
+	// an "approve for this chat" tap can record a grant that matches.
+	// Keyed by prompt id and drained by the same paths that drain
+	// continuations.
+	pendingScopeMu sync.Mutex
+	pendingScope   map[string]scopedOperation
 
 	// gate serialises turns per conversation. See turnqueue.go — in
 	// webhook mode every update lands on its own net/http goroutine,
@@ -331,6 +344,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		client:        client,
 		base:          base,
 		gate:          NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0),
+		pendingScope:  make(map[string]scopedOperation),
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
 		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
@@ -565,19 +579,33 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	}
 	h.continuationsMu.Unlock()
 
-	body := map[string]any{
-		"chat_id": chatID,
-		"text":    "Confirmation required: " + resp.ConfirmationReason,
-		"reply_markup": map[string]any{
-			"inline_keyboard": [][]map[string]string{
-				{
-					{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
-					{"text": "Deny", "callback_data": "prompt:deny:" + p.ID},
-				},
-			},
-		},
+	buttons := []map[string]string{
+		{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
 	}
-	h.postJSON("sendMessage", body)
+	// "for this chat" is offered only when a policy rule asked. A
+	// budget confirmation is about spend, not an operation, so there
+	// is nothing coherent to remember — and a button that silenced
+	// future budget warnings would be the last thing an operator
+	// wants on that particular prompt.
+	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" {
+		h.pendingScopeMu.Lock()
+		h.pendingScope[p.ID] = scopedOperation{
+			action: resp.ConfirmationAction, resource: resp.ConfirmationResource,
+		}
+		h.pendingScopeMu.Unlock()
+		buttons = append(buttons, map[string]string{
+			"text": "Approve for this chat", "callback_data": "prompt:approve-session:" + p.ID,
+		})
+	}
+	buttons = append(buttons, map[string]string{
+		"text": "Deny", "callback_data": "prompt:deny:" + p.ID,
+	})
+
+	h.postJSON("sendMessage", map[string]any{
+		"chat_id":      chatID,
+		"text":         "Confirmation required: " + resp.ConfirmationReason,
+		"reply_markup": map[string]any{"inline_keyboard": [][]map[string]string{buttons}},
+	})
 }
 
 // takeContinuation pops and returns the stored continuation for the
@@ -622,6 +650,15 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	case "approve":
 		decision = PromptApproved
 		reply = "Approved."
+	case "approve-session":
+		decision = PromptApproved
+		reply = "Approved — I won't ask again for this in this chat."
+		// Recorded before Resolve, so the resumed turn already sees
+		// the grant. Resolving first would let the resume race the
+		// grant and prompt a second time for the same operation.
+		if !h.grantForSession(ctx, promptID, q) {
+			reply = "Approved."
+		}
 	case "deny":
 		decision = PromptDenied
 		reply = "Denied."
@@ -1293,4 +1330,44 @@ func turnText(msg *tgMessage) string {
 		return msg.Text
 	}
 	return msg.Caption
+}
+
+// scopedOperation is the (action, resource) a pending prompt is about.
+type scopedOperation struct {
+	action   string
+	resource string
+}
+
+// grantForSession records "approved for the rest of this chat" for the
+// operation the prompt was raised about. Reports whether a grant was
+// actually recorded, so the reply does not promise something that did
+// not happen — no approvals store wired, or a prompt whose operation
+// we no longer know.
+func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
+	if h.cfg.Approvals == nil || q.Message == nil {
+		return false
+	}
+	h.pendingScopeMu.Lock()
+	op, ok := h.pendingScope[promptID]
+	delete(h.pendingScope, promptID)
+	h.pendingScopeMu.Unlock()
+	if !ok {
+		return false
+	}
+
+	// The grant is scoped by the conversation on the context, not by
+	// anything in the callback payload — the same rule ownership
+	// follows, because a callback is attacker-shaped input.
+	grantCtx := compute.WithTurnIdentity(ctx, compute.TurnIdentity{
+		Channel:   "telegram",
+		ChannelID: strconv.FormatInt(q.Message.Chat.ID, 10),
+	})
+	if !h.cfg.Approvals.Grant(grantCtx, op.action, op.resource) {
+		h.log.Warn("telegram: could not record session approval",
+			"action", op.action, "resource", op.resource)
+		return false
+	}
+	h.log.Info("telegram: approved for this chat",
+		"action", op.action, "resource", op.resource, "chat_id", q.Message.Chat.ID)
+	return true
 }
