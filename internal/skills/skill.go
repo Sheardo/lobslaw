@@ -62,11 +62,22 @@ type StorageAccess struct {
 // Versioning follows semver; the registry prefers the highest
 // version when two mounts expose the same skill name.
 type Manifest struct {
-	Name             string             `yaml:"name"`
-	Version          string             `yaml:"version"`
-	Description      string             `yaml:"description,omitempty"`
-	Runtime          Runtime            `yaml:"runtime"`
-	Handler          string             `yaml:"handler"` // relative to manifest dir
+	Name        string  `yaml:"name"`
+	Version     string  `yaml:"version"`
+	Description string  `yaml:"description,omitempty"`
+	Runtime     Runtime `yaml:"runtime"`
+	Handler     string  `yaml:"handler"` // relative to manifest dir
+	// HandlerSHA256 is the hex SHA-256 of the handler file, and is
+	// what makes a manifest signature worth anything. The signature
+	// covers these bytes, so declaring the digest here transitively
+	// covers the code: without it a publisher signs a document that
+	// merely names a script, and swapping the script afterwards
+	// leaves the signature perfectly valid.
+	//
+	// Required whenever a manifest is signed. Optional otherwise, but
+	// honoured if present — a declared digest that does not match is
+	// tampering regardless of the signing policy.
+	HandlerSHA256    string             `yaml:"handler_sha256,omitempty"`
 	Storage          []StorageAccess    `yaml:"storage,omitempty"`
 	Network          []string           `yaml:"network,omitempty"`
 	NetworkIsolation bool               `yaml:"network_isolation,omitempty"`
@@ -139,6 +150,12 @@ type Skill struct {
 	HandlerPath string // absolute path to the handler script
 	SHA256      string // hex-encoded manifest-file digest
 
+	// HandlerSHA256 is the verified digest of the handler as it was
+	// on disk at parse time, empty when the manifest declared none.
+	// The invoker re-hashes against this immediately before exec, so
+	// a handler swapped after registration is caught.
+	HandlerSHA256 string
+
 	// IsSigned is true iff a valid ed25519 signature by a trusted
 	// publisher accompanied the manifest. Under SigningOff this is
 	// always false (we never verify); under SigningPrefer /
@@ -152,6 +169,23 @@ type Skill struct {
 
 // Name returns the skill's name. Convenience for registry callers.
 func (s *Skill) Name() string { return s.Manifest.Name }
+
+// fileDigest returns the hex SHA-256 of a file's contents, streamed
+// rather than read whole — handlers are small, but this is also the
+// path a bundled binary would take.
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
 
 // Parse reads manifest.yaml from dir without signature checks. Kept
 // as the ergonomic default for tests and for deployments running
@@ -210,6 +244,21 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 		SHA256:      hex.EncodeToString(sum[:]),
 	}
 
+	// A declared handler digest is checked whatever the signing
+	// policy says. The policy governs whether we demand provenance,
+	// not whether we believe a digest the manifest itself states.
+	if declared := strings.TrimSpace(m.HandlerSHA256); declared != "" {
+		actual, err := fileDigest(handler)
+		if err != nil {
+			return nil, fmt.Errorf("skills: hash handler %q: %w", handler, err)
+		}
+		if !strings.EqualFold(actual, declared) {
+			return nil, fmt.Errorf("skills: handler %q does not match manifest handler_sha256 "+
+				"(declared %s, found %s)", handler, declared, actual)
+		}
+		skill.HandlerSHA256 = actual
+	}
+
 	if policy == SigningOff {
 		return skill, nil
 	}
@@ -229,6 +278,15 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 	signer, ok := verifier.Verify(raw, sig)
 	if !ok {
 		return nil, fmt.Errorf("skills: %q: signature present but did not verify against any trusted key", manifestPath)
+	}
+	// A verified signature over a manifest that does not pin its
+	// handler is worse than no signature: it reads as provenance in
+	// logs and in the registry's signed-candidate preference, while
+	// covering nothing that executes. Refuse it rather than record a
+	// guarantee we cannot make.
+	if skill.HandlerSHA256 == "" {
+		return nil, fmt.Errorf("skills: %q: signed manifest does not declare handler_sha256, "+
+			"so the signature covers no executable content; re-publish with the handler digest pinned", manifestPath)
 	}
 	skill.IsSigned = true
 	skill.SignedBy = signer

@@ -232,6 +232,27 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		}
 	}
 
+	// Re-check the handler against the digest verified at parse time.
+	// Registration and invocation are separated by however long the
+	// node has been up, and the registry holds a path, not content —
+	// so everything proved at load is a statement about a file that
+	// may since have been rewritten. Hashing here does not make the
+	// window zero (something could swap the file between this read
+	// and the exec below), but it reduces it from hours to
+	// microseconds, and it catches the realistic case: a handler
+	// edited or replaced on disk after the node started.
+	if skill.HandlerSHA256 != "" {
+		actual, err := fileDigest(skill.HandlerPath)
+		if err != nil {
+			return nil, fmt.Errorf("skills: skill %q: re-hash handler before exec: %w", skill.Name(), err)
+		}
+		if !strings.EqualFold(actual, skill.HandlerSHA256) {
+			return nil, fmt.Errorf("skills: skill %q: handler %q changed since it was registered "+
+				"(expected %s, found %s); refusing to execute",
+				skill.Name(), skill.HandlerPath, skill.HandlerSHA256, actual)
+		}
+	}
+
 	for _, name := range skill.Manifest.RequiresBinary {
 		if _, err := i.binaryLookup(name); err != nil {
 			return nil, fmt.Errorf("skills: skill %q: required binary %q not on PATH — install it via clawhub_install <skill> (the skill bundle's clawdbot.install array satisfies host bin requirements automatically), or pre-install on the host: %w", skill.Name(), name, err)

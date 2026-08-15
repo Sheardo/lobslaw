@@ -83,6 +83,9 @@ func (e *Engine) lookupEvaluator(key string) (ConditionEvaluator, bool) {
 // context of claims. Rules are walked in descending priority order;
 // the first matching rule's effect wins. Default is deny — if no
 // rule matches, Decision.Effect is EffectDeny with an empty RuleID.
+//
+// A rule whose conditions cannot be evaluated is skipped only if it
+// would have allowed; deny and require_confirmation apply anyway.
 func (e *Engine) Evaluate(ctx context.Context, claims *types.Claims, action, resource string) (Decision, error) {
 	if claims == nil {
 		return Decision{
@@ -109,9 +112,29 @@ func (e *Engine) Evaluate(ctx context.Context, claims *types.Claims, action, res
 			continue
 		}
 		if ok, err := e.conditionsHold(ctx, rule.Conditions); err != nil {
+			// An error means we do not know whether this rule applies —
+			// its condition referenced an evaluator that isn't
+			// registered, or one that failed. That is different from a
+			// condition that evaluated cleanly to false, which is a
+			// definite "this rule does not apply" and skips below.
+			//
+			// Skipping on error is only safe for a rule that would have
+			// granted something. An allow we drop costs access; a deny
+			// we drop costs exactly the protection the rule exists to
+			// provide, and evaluation then continues to lower-priority
+			// rules — so a broken condition on a high-priority deny
+			// hands the request to whatever allow sits underneath it.
+			// Restrictive effects therefore apply on error.
 			e.logger.Warn("policy: condition evaluation error",
-				"rule_id", rule.ID, "err", err)
-			continue
+				"rule_id", rule.ID, "effect", rule.Effect, "err", err)
+			if rule.Effect == types.EffectAllow {
+				continue
+			}
+			return Decision{
+				Effect: rule.Effect,
+				RuleID: rule.ID,
+				Reason: fmt.Sprintf("rule %q applied without evaluating its conditions (%v)", rule.ID, err),
+			}, nil
 		} else if !ok {
 			continue
 		}
@@ -157,9 +180,12 @@ func (e *Engine) loadRules() ([]types.PolicyRule, error) {
 }
 
 // conditionsHold returns true when ALL conditions are satisfied.
-// Unknown condition types fail the entire rule (unknown = not-matched),
-// so an attacker who adds a rule with a novel condition can't slip
-// past the check.
+//
+// An unregistered condition key is an error, not a false — the caller
+// distinguishes the two. "I evaluated this and it does not hold" lets
+// a rule be skipped safely; "I could not evaluate this" must not,
+// because a rule carrying a condition nobody understands is exactly
+// how an attacker would disarm a deny. See Evaluate.
 func (e *Engine) conditionsHold(ctx context.Context, conds []types.Condition) (bool, error) {
 	for _, c := range conds {
 		fn, ok := e.lookupEvaluator(c.Key)
