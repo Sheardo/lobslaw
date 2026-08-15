@@ -123,6 +123,13 @@ func (n *Node) wireCompute() error {
 			}
 		}
 		n.log.Debug("compute: memory_search + memory_write registered")
+
+		// Conversation transcripts: search / list / read. Distinct
+		// from memory_search, which answers "what do I know about X"
+		// semantically; these find literal text in a specific thread.
+		if err := n.registerSessionTools(); err != nil {
+			return err
+		}
 	}
 
 	// Schedule tools: schedule_create / list / get / delete. Need

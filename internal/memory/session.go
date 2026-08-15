@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -198,6 +200,9 @@ type Transcript struct {
 	// NextSeq is the sequence the next appended message will take.
 	// Callers use it to decide what is eligible for compaction.
 	NextSeq uint64
+	// Title is the conversation's generated label, empty until one
+	// has been produced.
+	Title string
 }
 
 // LoadTranscript returns the summary plus the messages after it.
@@ -223,6 +228,7 @@ func (s *SessionService) LoadTranscript(_ context.Context, ref SessionRef) (*Tra
 		out.Summary = rec.Summary
 		out.SummaryThroughSeq = rec.SummaryThroughSeq
 		out.NextSeq = rec.NextSeq
+		out.Title = rec.Title
 	}
 	err = s.store.ForEachPrefix(BucketSessionMessages, sessionMessagePrefix(id),
 		func(key string, raw []byte) error {
@@ -518,4 +524,228 @@ func fromProtoMessage(msg *lobslawv1.SessionMessage) TranscriptMessage {
 		})
 	}
 	return out
+}
+
+// SessionSearchQuery filters a transcript search.
+type SessionSearchQuery struct {
+	// Text is matched case-insensitively against message content.
+	// Required — this is search, not enumeration; List covers that.
+	Text string
+	// Channel, when set, restricts to one channel kind.
+	Channel string
+	// UserID, when set, restricts to sessions opened by that user.
+	UserID string
+	// Limit caps the number of SESSIONS returned (not messages).
+	// <= 0 takes DefaultSessionSearchLimit.
+	Limit int
+	// SnippetsPerSession caps matching messages returned per session.
+	// <= 0 takes DefaultSnippetsPerSession.
+	SnippetsPerSession int
+}
+
+// SessionSearchHit is one matching conversation.
+type SessionSearchHit struct {
+	Session  *lobslawv1.SessionRecord
+	Snippets []SessionSnippet
+	// Matches is the total number of matching messages, which may
+	// exceed len(Snippets).
+	Matches int
+}
+
+// SessionSnippet locates one match inside a transcript.
+type SessionSnippet struct {
+	Seq  uint64
+	Role string
+	Text string
+}
+
+// Session search defaults.
+const (
+	DefaultSessionSearchLimit = 5
+	DefaultSnippetsPerSession = 3
+	// snippetContextBytes is how much of a matching message is
+	// returned around the hit. Enough to judge relevance without
+	// pulling a whole tool result into the agent's context.
+	snippetContextBytes = 240
+)
+
+// SearchTranscripts finds conversations containing text.
+//
+// Substring, not semantic: episodic memory already embeds every turn
+// and answers "what do I know about X" through memory_search. What
+// that cannot do is find the exact words in the exact thread — quoting
+// a command, an error string, a name — which is what this is for.
+// Building a second embedding pipeline over the same content would
+// duplicate cost for a worse version of a capability we already have.
+func (s *SessionService) SearchTranscripts(_ context.Context, q SessionSearchQuery) ([]SessionSearchHit, error) {
+	if s.store == nil {
+		return nil, errors.New("session: store not wired")
+	}
+	needle := strings.ToLower(strings.TrimSpace(q.Text))
+	if needle == "" {
+		return nil, errors.New("session: search text required")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultSessionSearchLimit
+	}
+	perSession := q.SnippetsPerSession
+	if perSession <= 0 {
+		perSession = DefaultSnippetsPerSession
+	}
+
+	records, err := s.List(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	var hits []SessionSearchHit
+	for _, rec := range records {
+		if q.Channel != "" && rec.Channel != q.Channel {
+			continue
+		}
+		if q.UserID != "" && rec.UserId != q.UserID {
+			continue
+		}
+		hit := SessionSearchHit{Session: rec}
+		err := s.store.ForEachPrefix(BucketSessionMessages, sessionMessagePrefix(rec.Id),
+			func(key string, raw []byte) error {
+				var msg lobslawv1.SessionMessage
+				if err := proto.Unmarshal(raw, &msg); err != nil {
+					return fmt.Errorf("session: unmarshal %s: %w", key, err)
+				}
+				idx := strings.Index(strings.ToLower(msg.Content), needle)
+				if idx < 0 {
+					return nil
+				}
+				hit.Matches++
+				if len(hit.Snippets) < perSession {
+					hit.Snippets = append(hit.Snippets, SessionSnippet{
+						Seq:  msg.Seq,
+						Role: msg.Role,
+						Text: snippetAround(msg.Content, idx, len(needle)),
+					})
+				}
+				return nil
+			})
+		if err != nil {
+			return nil, err
+		}
+		if hit.Matches > 0 {
+			hits = append(hits, hit)
+		}
+	}
+	// Most recently updated first: when several threads mention the
+	// same thing, the live one is nearly always the one meant.
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].Session.UpdatedAt.AsTime().After(hits[j].Session.UpdatedAt.AsTime())
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+// snippetAround returns a window of text centred on a match, with
+// ellipses where it was cut.
+//
+// idx is an offset into the LOWERCASED copy of content that the search
+// matched against, so for text where lowercasing changes a character's
+// encoded width it addresses a slightly different place in the
+// original. The window is 240 bytes wide and only has to be roughly
+// centred, so a few bytes of drift is invisible — but the offset is
+// clamped rather than trusted, because "no lowercase mapping is ever
+// wider than the character it replaces" is an assumption about the
+// whole of Unicode, and being wrong about it here is a panic on a
+// slice bound in the middle of a search.
+//
+// Boundaries are then aligned to whole characters: cutting a
+// multi-byte character in half yields U+FFFD in a snippet that goes
+// straight into the agent's context.
+func snippetAround(content string, idx, matchLen int) string {
+	if idx > len(content) {
+		idx = len(content)
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	start := idx - snippetContextBytes/2
+	if start < 0 {
+		start = 0
+	}
+	end := idx + matchLen + snippetContextBytes/2
+	if end > len(content) {
+		end = len(content)
+	}
+	start = alignRuneStart(content, start)
+	end = alignRuneStart(content, end)
+	out := content[start:end]
+	if start > 0 {
+		out = "…" + out
+	}
+	if end < len(content) {
+		out += "…"
+	}
+	return out
+}
+
+// alignRuneStart moves an offset back to the nearest character
+// boundary. Used for both ends of a snippet: backing a start offset up
+// keeps the character it landed inside, and backing an end offset up
+// drops the partial character it would otherwise have cut.
+func alignRuneStart(s string, i int) int {
+	if i <= 0 {
+		return 0
+	}
+	if i >= len(s) {
+		return len(s)
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
+// PutTitle sets a conversation's human-readable label. Titles are
+// advisory — nothing keys off them — so an empty or duplicate title
+// is not an error.
+func (s *SessionService) PutTitle(_ context.Context, ref SessionRef, title string) error {
+	if s.store == nil {
+		return errors.New("session: store not wired")
+	}
+	id, err := sessionID(ref.Channel, ref.ChannelID)
+	if err != nil {
+		return err
+	}
+	if s.raft == nil {
+		return fmt.Errorf("%w: raft not wired", ErrNotLeader)
+	}
+	if !s.raft.IsLeader() {
+		return fmt.Errorf("%w; current leader is %s", ErrNotLeader, s.raft.LeaderAddress())
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rec, err := s.loadRecord(id)
+	if err != nil {
+		return err
+	}
+	if rec == nil {
+		return fmt.Errorf("session: %s does not exist", id)
+	}
+	rec.Title = strings.TrimSpace(title)
+	rec.UpdatedAt = timestamppb.Now()
+	entry := &lobslawv1.LogEntry{
+		Op: lobslawv1.LogOp_LOG_OP_PUT,
+		Id: id,
+		Payload: &lobslawv1.LogEntry_SessionAppend{
+			SessionAppend: &lobslawv1.SessionAppendRecord{Session: rec},
+		},
+	}
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("session: marshal: %w", err)
+	}
+	if _, err := s.raft.Apply(data, sessionApplyTimeout); err != nil {
+		return fmt.Errorf("session: raft apply: %w", err)
+	}
+	return nil
 }

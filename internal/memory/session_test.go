@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func testSessionService(t *testing.T, maxMessages int) *SessionService {
@@ -491,5 +492,244 @@ func TestSessionLoadRangeIsExclusiveOfAfter(t *testing.T) {
 	}
 	if got[0].Content != "m3" || got[2].Content != "m5" {
 		t.Errorf("range = %+v; want m3..m5", got)
+	}
+}
+
+func seedSession(t *testing.T, s *SessionService, ref SessionRef, texts ...string) {
+	t.Helper()
+	for _, txt := range texts {
+		if _, err := s.Append(context.Background(), ref, "t", []TranscriptMessage{userMsg(txt)}); err != nil {
+			t.Fatalf("seed %q: %v", txt, err)
+		}
+	}
+}
+
+func TestSearchTranscriptsFindsLiteralText(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	a := SessionRef{Channel: "rest", ChannelID: "a"}
+	b := SessionRef{Channel: "rest", ChannelID: "b"}
+	seedSession(t, s, a, "the deploy failed with ERR_CONN_REFUSED", "trying again")
+	seedSession(t, s, b, "lunch plans")
+
+	hits, err := s.SearchTranscripts(ctx, SessionSearchQuery{Text: "err_conn_refused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits, want 1: %+v", len(hits), hits)
+	}
+	if hits[0].Session.Id != "rest:a" {
+		t.Errorf("matched %s", hits[0].Session.Id)
+	}
+	if len(hits[0].Snippets) != 1 || !strings.Contains(hits[0].Snippets[0].Text, "ERR_CONN_REFUSED") {
+		t.Errorf("snippet missing the match: %+v", hits[0].Snippets)
+	}
+}
+
+func TestSearchTranscriptsIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	seedSession(t, s, SessionRef{Channel: "rest", ChannelID: "c"}, "Kubernetes Ingress")
+	hits, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "kubernetes ingress"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Errorf("case-insensitive search found %d hits", len(hits))
+	}
+}
+
+func TestSearchTranscriptsRequiresText(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	if _, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "  "}); err == nil {
+		t.Error("empty search should be rejected, not return everything")
+	}
+}
+
+func TestSearchTranscriptsRespectsLimits(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	for i := range 6 {
+		seedSession(t, s, SessionRef{Channel: "rest", ChannelID: fmt.Sprintf("s%d", i)}, "shared needle")
+	}
+	hits, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "needle", Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Errorf("got %d hits, want the limit of 2", len(hits))
+	}
+}
+
+func TestSearchTranscriptsCountsAllMatchesButCapsSnippets(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ref := SessionRef{Channel: "rest", ChannelID: "many"}
+	for range 8 {
+		seedSession(t, s, ref, "repeated needle here")
+	}
+	hits, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "needle", SnippetsPerSession: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 {
+		t.Fatalf("got %d hits", len(hits))
+	}
+	if hits[0].Matches != 8 {
+		t.Errorf("Matches = %d, want all 8", hits[0].Matches)
+	}
+	if len(hits[0].Snippets) != 2 {
+		t.Errorf("got %d snippets, want the cap of 2", len(hits[0].Snippets))
+	}
+}
+
+func TestSearchTranscriptsFiltersByChannel(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	seedSession(t, s, SessionRef{Channel: "rest", ChannelID: "1"}, "shared word")
+	seedSession(t, s, SessionRef{Channel: "telegram", ChannelID: "2"}, "shared word")
+	hits, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "shared", Channel: "telegram"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].Session.Channel != "telegram" {
+		t.Errorf("channel filter ignored: %+v", hits)
+	}
+}
+
+// A long message must not drag its whole body into the result.
+func TestSearchSnippetIsBounded(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	huge := strings.Repeat("padding ", 500) + "NEEDLE" + strings.Repeat(" padding", 500)
+	seedSession(t, s, SessionRef{Channel: "rest", ChannelID: "big"}, huge)
+	hits, err := s.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "needle"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snip := hits[0].Snippets[0].Text
+	if len(snip) > snippetContextBytes*2 {
+		t.Errorf("snippet is %d bytes, want ~%d", len(snip), snippetContextBytes)
+	}
+	if !strings.Contains(snip, "NEEDLE") {
+		t.Error("snippet lost the match it was centred on")
+	}
+}
+
+func TestPutTitleRoundTrip(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "titled"}
+	seedSession(t, s, ref, "hello")
+	if err := s.PutTitle(ctx, ref, "  A named thread  "); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := s.LoadTranscript(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Title != "A named thread" {
+		t.Errorf("title = %q (should be trimmed)", tr.Title)
+	}
+}
+
+func TestPutTitlePreservesSummary(t *testing.T) {
+	t.Parallel()
+	s := testSessionService(t, 0)
+	ctx := context.Background()
+	ref := SessionRef{Channel: "rest", ChannelID: "both"}
+	for range 6 {
+		seedSession(t, s, ref, "x")
+	}
+	if err := s.PutSummary(ctx, ref, "the summary", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutTitle(ctx, ref, "the title"); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := s.LoadTranscript(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Summary != "the summary" || tr.SummaryThroughSeq != 3 {
+		t.Errorf("titling clobbered the summary: %q through %d", tr.Summary, tr.SummaryThroughSeq)
+	}
+	if tr.Title != "the title" {
+		t.Errorf("title = %q", tr.Title)
+	}
+}
+
+// --- snippet windowing -------------------------------------------------
+
+// Search snippets go straight into the agent's context, so a window
+// that cuts a character in half is corruption the model reads back as
+// conversation.
+func TestSnippetAroundKeepsValidUTF8(t *testing.T) {
+	t.Parallel()
+	// The window is snippetContextBytes/2 either side of the match, so
+	// whether it lands mid-character depends on where the match sits
+	// relative to the 3-byte runes around it. The padding goes BETWEEN
+	// the match and the surrounding text: padding the front instead
+	// would shift the match and the rune grid together and cancel out,
+	// leaving a fixture that passes by alignment alone.
+	for pad := range 3 {
+		gap := strings.Repeat("x", pad)
+		content := strings.Repeat("日本語のテキスト", 60) +
+			gap + "ERROR" + gap + strings.Repeat("さらに文章", 60)
+		idx := strings.Index(content, "ERROR")
+		got := snippetAround(content, idx, len("ERROR"))
+		if !utf8.ValidString(got) {
+			t.Errorf("pad=%d: snippet is not valid UTF-8: %q", pad, got)
+		}
+		if strings.ContainsRune(got, utf8.RuneError) {
+			t.Errorf("pad=%d: snippet contains U+FFFD: %q", pad, got)
+		}
+		if !strings.Contains(got, "ERROR") {
+			t.Errorf("pad=%d: snippet lost the match it was centred on: %q", pad, got)
+		}
+	}
+}
+
+// The match offset comes from a lowercased copy of the content, so it
+// is not guaranteed to address the same byte in the original. Whatever
+// it points at, the window must not panic on a slice bound.
+func TestSnippetAroundToleratesOutOfRangeOffset(t *testing.T) {
+	t.Parallel()
+	content := "短いテキスト"
+	for _, idx := range []int{-5, 0, len(content), len(content) + 50} {
+		got := snippetAround(content, idx, 3)
+		if !utf8.ValidString(got) {
+			t.Errorf("idx=%d: snippet is not valid UTF-8: %q", idx, got)
+		}
+	}
+}
+
+// A real search over non-ASCII content, end to end through the store.
+func TestSearchTranscriptsNonASCIISnippets(t *testing.T) {
+	t.Parallel()
+	svc := testSessionService(t, 100)
+	ref := SessionRef{Channel: "rest", ChannelID: "jp", UserID: "u1"}
+	if _, err := svc.Append(context.Background(), ref, "t1", []TranscriptMessage{
+		{Role: "user", Content: strings.Repeat("これはテストです。", 40) + "ERR_CONN_REFUSED" + strings.Repeat("続きの文章です。", 40)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := svc.SearchTranscripts(context.Background(), SessionSearchQuery{Text: "err_conn_refused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || len(hits[0].Snippets) != 1 {
+		t.Fatalf("got %d hits, want 1 with a snippet", len(hits))
+	}
+	snip := hits[0].Snippets[0].Text
+	if !utf8.ValidString(snip) {
+		t.Errorf("snippet is not valid UTF-8: %q", snip)
+	}
+	if !strings.Contains(snip, "ERR_CONN_REFUSED") {
+		t.Errorf("snippet lost the match: %q", snip)
 	}
 }

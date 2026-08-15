@@ -6,10 +6,12 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -20,7 +22,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: inspect <path-to-state.db>")
+		fmt.Fprintln(os.Stderr, "usage: inspect <path-to-state.db> [search-text]")
 		os.Exit(1)
 	}
 	path := os.Args[1]
@@ -43,6 +45,14 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// With a search argument, run a transcript search instead of the
+	// full dump — the operator-side view of what session_search
+	// gives the agent.
+	if len(os.Args) > 2 {
+		searchTranscripts(store, strings.Join(os.Args[2:], " "))
+		return
+	}
 
 	fmt.Println("=== EPISODIC RECORDS ===")
 	count := 0
@@ -119,4 +129,31 @@ func main() {
 		return nil
 	})
 	fmt.Printf("\nTotal sessions: %d\n", scount)
+}
+
+// searchTranscripts mirrors the agent's session_search tool so an
+// operator can check what it would find without driving a turn.
+func searchTranscripts(store *memory.Store, query string) {
+	svc := memory.NewSessionService(nil, store, memory.SessionConfig{})
+	hits, err := svc.SearchTranscripts(context.Background(), memory.SessionSearchQuery{Text: query})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "search:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("=== TRANSCRIPT SEARCH: %q ===\n", query)
+	if len(hits) == 0 {
+		fmt.Println("no matches")
+		return
+	}
+	for _, h := range hits {
+		title := h.Session.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		fmt.Printf("\n  %s [%s]  %d match(es)\n", title, h.Session.Id, h.Matches)
+		for _, sn := range h.Snippets {
+			text := strings.Join(strings.Fields(sn.Text), " ")
+			fmt.Printf("    [#%d %s] %s\n", sn.Seq, sn.Role, text)
+		}
+	}
 }

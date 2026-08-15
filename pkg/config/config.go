@@ -111,9 +111,9 @@ type StorageConfig struct {
 }
 
 type StorageMountConfig struct {
-	Label            string            `koanf:"label"`
-	Type             string            `koanf:"type"`
-	Path             string            `koanf:"path,omitempty"`
+	Label string `koanf:"label"`
+	Type  string `koanf:"type"`
+	Path  string `koanf:"path,omitempty"`
 	// Mode is the access bits granted to the agent for this mount,
 	// expressed as any subset of "rwx" (case-insensitive). Empty or
 	// "r"/"ro" → read-only (the safe default). "rw" enables write,
@@ -127,7 +127,7 @@ type StorageMountConfig struct {
 	// "node_modules/**") hidden from list/glob/grep/read inside
 	// this mount. Hardcoded internal excludes (.snapshot, state.db,
 	// *.pem) always apply on top of these.
-	Excludes []string `koanf:"excludes,omitempty"`
+	Excludes         []string          `koanf:"excludes,omitempty"`
 	Bucket           string            `koanf:"bucket,omitempty"`
 	Endpoint         string            `koanf:"endpoint,omitempty"`
 	Account          string            `koanf:"account,omitempty"`
@@ -157,8 +157,8 @@ type PolicyRuleConfig struct {
 	Subject  string `koanf:"subject"`
 	Action   string `koanf:"action"`
 	Resource string `koanf:"resource"`
-	Effect   string `koanf:"effect"`              // "allow" | "deny"
-	Priority int32  `koanf:"priority,omitempty"`  // higher wins
+	Effect   string `koanf:"effect"`             // "allow" | "deny"
+	Priority int32  `koanf:"priority,omitempty"` // higher wins
 }
 
 type ComputeConfig struct {
@@ -167,7 +167,7 @@ type ComputeConfig struct {
 	Chains              []ChainConfig    `koanf:"chains"`
 	DefaultChain        string           `koanf:"default_chain"`
 	ComplexityEstimator string           `koanf:"complexity_estimator"`
-	Budgets             BudgetsConfig    `koanf:"budgets"`  // deprecated; use Limits
+	Budgets             BudgetsConfig    `koanf:"budgets"` // deprecated; use Limits
 	Limits              LimitsConfig     `koanf:"limits,omitempty"`
 	Plugins             []PluginConfig   `koanf:"plugins"`
 	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
@@ -244,6 +244,23 @@ type ContextConfig struct {
 	// it megabytes of grep output defeats that on the very call
 	// meant to help.
 	CompactToolResultBytes *int `koanf:"compact_tool_result_bytes,omitempty"`
+
+	// TitleMaxChars caps generated conversation titles. Titles are
+	// for scanning a list, so long ones cost more than they help.
+	TitleMaxChars *int `koanf:"title_max_chars,omitempty"`
+
+	// TitlesEnabled turns title generation off while leaving
+	// compaction on. Titles cost one extra small call per
+	// conversation, once.
+	TitlesEnabled *bool `koanf:"titles_enabled,omitempty"`
+
+	// SessionSearchResults, SessionSearchSnippets and
+	// SessionReadMessages bound what the session_* tools may pull
+	// into the agent's context. Unbounded, one session_read would
+	// undo the context budget in a single tool call.
+	SessionSearchResults  *int `koanf:"session_search_results,omitempty"`
+	SessionSearchSnippets *int `koanf:"session_search_snippets,omitempty"`
+	SessionReadMessages   *int `koanf:"session_read_messages,omitempty"`
 
 	// CompactInstructions are appended to the built-in summariser
 	// prompt — use it to name what this deployment must never lose
@@ -364,21 +381,21 @@ type EmbeddingsConfig struct {
 //
 // Higher Priority wins ties; declaration order breaks Priority ties.
 type ProviderConfig struct {
-	Label        string                `koanf:"label"`
-	Endpoint     string                `koanf:"endpoint"`
-	Model        string                `koanf:"model"`
-	Format       string                `koanf:"format,omitempty"`
-	Priority     int                   `koanf:"priority,omitempty"`
+	Label    string `koanf:"label"`
+	Endpoint string `koanf:"endpoint"`
+	Model    string `koanf:"model"`
+	Format   string `koanf:"format,omitempty"`
+	Priority int    `koanf:"priority,omitempty"`
 	// AutoCapabilities turns on models.dev capability discovery for
 	// this provider entry. At node boot the catalog is fetched (24h
 	// disk cache), the configured model is looked up, and the
 	// discovered modalities are MERGED with declared capabilities.
 	// Declared capabilities always win on conflict. Off by default.
 	AutoCapabilities bool                  `koanf:"auto_capabilities,omitempty"`
-	APIKeyRef    string                `koanf:"api_key_ref,omitempty"`
-	Capabilities []string              `koanf:"capabilities,omitempty"`
-	TrustTier    types.TrustTier       `koanf:"trust_tier"`
-	Pricing      types.ProviderPricing `koanf:"pricing,omitempty"`
+	APIKeyRef        string                `koanf:"api_key_ref,omitempty"`
+	Capabilities     []string              `koanf:"capabilities,omitempty"`
+	TrustTier        types.TrustTier       `koanf:"trust_tier"`
+	Pricing          types.ProviderPricing `koanf:"pricing,omitempty"`
 
 	// Backup is the label of the provider to fall back to when this
 	// one fails with a transient hard error (5xx, rate-limit, network
@@ -432,7 +449,7 @@ type ChainTriggerConfig struct {
 // [compute.limits].
 type BudgetsConfig struct {
 	MaxToolCallsPerTurn   int     `koanf:"max_tool_calls_per_turn"`
-	MaxSpendUSDPerTurn    float64 `koanf:"max_spend_usd_per_turn,omitempty"`   // deprecated: no-op
+	MaxSpendUSDPerTurn    float64 `koanf:"max_spend_usd_per_turn,omitempty"`    // deprecated: no-op
 	MaxEgressBytesPerTurn int64   `koanf:"max_egress_bytes_per_turn,omitempty"` // deprecated: no-op
 }
 
@@ -581,10 +598,10 @@ type GatewayChannelConfig struct {
 	// inbound requests via Authorization: Bearer <secret>. Scope
 	// applied to dispatched turns; operator controls what the
 	// inbound caller can do.
-	Name             string `koanf:"name,omitempty"`
-	WebhookPath      string `koanf:"webhook_path,omitempty"`
-	SharedSecretRef  string `koanf:"shared_secret_ref,omitempty"`
-	Scope            string `koanf:"scope,omitempty"`
+	Name            string `koanf:"name,omitempty"`
+	WebhookPath     string `koanf:"webhook_path,omitempty"`
+	SharedSecretRef string `koanf:"shared_secret_ref,omitempty"`
+	Scope           string `koanf:"scope,omitempty"`
 }
 
 type DiscoveryConfig struct {
@@ -859,7 +876,6 @@ type OAuthProviderConfig struct {
 	SubjectClaim string `koanf:"subject_claim,omitempty"`
 }
 
-
 // LoggingConfig covers static log settings plus a slice of
 // initial filters applied at startup (slog-logfilter). Runtime
 // mutation of filters happens via the logfilter package's API,
@@ -879,8 +895,6 @@ type LogFilterConfig struct {
 	OutputLevel string `koanf:"output_level"` // optional — transform the output level when filter matches
 	Enabled     bool   `koanf:"enabled"`
 }
-
-
 
 // BinaryConfig is one operator-declared host binary. Mirrors the
 // shape of a clawhub bundle's clawdbot.requires/install pair so the
