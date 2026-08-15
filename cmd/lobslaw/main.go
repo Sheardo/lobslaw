@@ -8,7 +8,8 @@
 // Beyond starting a node, the binary hosts the operator subcommands:
 // init to scaffold a config, doctor to check the environment,
 // cluster for membership and certificates, plugin for skill
-// management, and audit to verify the local log's hash chain.
+// management, audit to verify the local log's hash chain, and memory
+// and session to read and edit a stopped node's store directly.
 package main
 
 import (
@@ -203,6 +204,12 @@ func main() {
 		return
 	}
 	if dispatchAudit(os.Args[1:]) {
+		return
+	}
+	if dispatchMemory(os.Args[1:]) {
+		return
+	}
+	if dispatchSession(os.Args[1:]) {
 		return
 	}
 	if dispatchInit(os.Args[1:]) {

@@ -470,8 +470,8 @@ Three properties worth keeping:
 A context with *no* scope is unscoped and sees everything. That is deliberate,
 and it is only safe because of who can reach it: the agent loop attaches a scope
 to every turn, including anonymous ones, so nothing the model drives arrives
-without one. Bare contexts come from operator tooling (`cmd/inspect` reads the
-store directly) and the compactor — callers that already hold the whole
+without one. Bare contexts come from operator tooling (`lobslaw session` reads
+the store directly) and the compactor — callers that already hold the whole
 database. Any new driver of these builtins must attach a scope.
 
 Known consequence: scope identity is `Claims.UserID`, which is per-channel

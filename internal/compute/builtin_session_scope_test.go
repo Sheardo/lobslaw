@@ -140,8 +140,8 @@ func TestSessionReadAllowsAnotherMemberOfTheCurrentChat(t *testing.T) {
 	}
 }
 
-// The operator path: cmd/inspect and the compactor drive the store
-// with no turn identity and must keep seeing everything.
+// The operator path: `lobslaw session` and the compactor drive the
+// store with no turn identity and must keep seeing everything.
 func TestSessionToolsUnscopedContextSeesEverything(t *testing.T) {
 	t.Parallel()
 	b := newTestSessionTools(t, twoUserBrowser(), SessionToolConfig{})
