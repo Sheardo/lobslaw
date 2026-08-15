@@ -35,33 +35,37 @@ The comparison's one-line conclusion, which sets the ordering below:
 
 ## Order of work
 
-| # | Item | Priority | Effort | Blocks |
-|---|---|---|---|---|
-| **R0** | [Leader-forwarding write path](#r0--leader-forwarding-write-path) | 🔴 P0 | S | R1, R2, R3 |
-| **R1** | [Session layer](#r1--session-layer) | 🔴 P0 | L | R2, R3, R4 |
-| **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | 🔴 P0 | M | — |
-| **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🔴 P0 | M | — |
-| **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | 🔴 P0 | XS | — |
-| **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | 🔴 P0 | M | — |
-| **R6** | [Retrieval mechanics](#r6--retrieval-mechanics) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | L | — |
-| **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | M | — |
-| **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟠 P1 | S | — |
-| **R7** | [Principal identity](#r7--principal-identity) | 🟠 P1 | M | — |
-| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | 🟠 P1 | M | — |
-| **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | 🟠 P1 | S | — |
-| **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | 🟡 P2 | M | R11 |
-| **R11** | [Channel breadth](#r11--channel-breadth) | 🟡 P2 | L | — |
-| **R12** | [Memory transparency](#r12--memory-transparency) | 🟡 P2 | M | — |
-| **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | 🟠 P1 | M | R15, R16 |
-| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟠 P1 | S | — |
-| **R15** | [Self-taught store](#r15--self-taught-store) | 🟠 P1 | M | R16, R17 |
-| **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | 🟡 P2 | M | R17 |
-| **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | 🟡 P2 | M | — |
-| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟠 P1 | L | R15, R17 |
-| **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | 🔴 P0 | S | — |
+Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detail).
+✅ done · 🟨 partial · ⬜ not started.
 
-**R19 is exploitable today** and depends on nothing. It belongs with R4 in the
-"land independently, first" set.
+| # | Item | Status | Priority | Effort | Blocks |
+|---|---|---|---|---|---|
+| **R0** | [Leader-forwarding write path](#r0--leader-forwarding-write-path) | ✅ | 🔴 P0 | S | R1, R2, R3 |
+| **R1** | [Session layer](#r1--session-layer) | ✅ | 🔴 P0 | L | R2, R3, R4 |
+| **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ⬜ | 🔴 P0 | M | — |
+| **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🟨 | 🔴 P0 | M | — |
+| **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | ✅ | 🔴 P0 | XS | — |
+| **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ⬜ | 🔴 P0 | M | — |
+| **R6** | [Retrieval mechanics](#r6--retrieval-mechanics) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | L | — |
+| **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | M | — |
+| **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | S | — |
+| **R7** | [Principal identity](#r7--principal-identity) | 🟨 | 🟠 P1 | M | — |
+| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | ⬜ | 🟠 P1 | M | — |
+| **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ⬜ | 🟠 P1 | S | — |
+| **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ⬜ | 🟡 P2 | M | R11 |
+| **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
+| **R12** | [Memory transparency](#r12--memory-transparency) | ⬜ | 🟡 P2 | M | — |
+| **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ⬜ | 🟠 P1 | M | R15, R16 |
+| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | ⬜ | 🟠 P1 | S | — |
+| **R15** | [Self-taught store](#r15--self-taught-store) | ⬜ | 🟠 P1 | M | R16, R17 |
+| **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ⬜ | 🟡 P2 | M | R17 |
+| **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ⬜ | 🟡 P2 | M | — |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ⬜ | 🟠 P1 | L | R15, R17 |
+| **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
+
+**Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
+persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
+`LogEntry.expected_revision`, which is the CAS primitive its atomic resolve needs.
 
 R13–R17 are the self-learning group, derived from reading hermes-agent's implementation
 (`agent/background_review.py`, `agent/curator.py`, `tools/memory_tool.py`,
@@ -75,9 +79,10 @@ alongside it.
 
 ### Status drift
 
-Written before Phase-12-era work landed. Re-verified against the code on
-2026-08-15 — the table below is what the tree actually does, not what the
-sections further down propose:
+Written before Phase-12-era work landed, and re-verified against the tree on 2026-08-15 after
+PRs #21–#30. The table below is what the code actually does; the sections further down are the
+proposals, some of which have since been superseded by what shipped. Where the two disagree, the
+table wins — and the section says so at its head.
 
 | # | State |
 |---|---|
@@ -89,7 +94,10 @@ sections further down propose:
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
 | R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
 | R3 | **Partial.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`) and the cluster-wide per-conversation lease (`internal/memory/session_lease.go`) are both in, wired into Telegram and REST. The persisted pending queue is not — a restart mid-queue still loses queued messages. See the section |
-| R5 | Partial — `internal/soul/trust.go` and skill signing exist; the single trust contract and ingest scanning do not |
+| R5 | **Not started** — `internal/soul/trust.go` and skill signing exist, but neither half of R5 does: `ContextEngine` still appends a bespoke `<relevant_context>` block to the system prompt rather than going through `promptgen.WrapContext`, and there is no `internal/promptguard` |
+| R20 | **20a/20b/20c done** (#21) plus the decrypt work the measurement turned up (#25). Latency −73% and allocation −99% geomean versus the starting point; allocation no longer scales with corpus size. **20d (the band prefilter) is open**, and its case is weaker than written — decrypt fell from ~71% to ~32% of a query, so the cosine arithmetic is now the largest share. The minimum score floor is also still open |
+| R21 | Not started. Embedding failures at ingest are still skipped silently, and the backfill `builtin_memory.go` reasons about still does not exist |
+| R8–R18 | Not started, except R19. R13–R18 (skills + self-learning) are untouched; R18 is a prerequisite for R15, and both are now documented as aide decisions (`lobslaw-skill-storage-model`, `lobslaw-skill-approval-lifecycle`) |
 
 R5 is P0 on security grounds and independent of everything else. With R0 landed,
 R2 and R3 are unblocked and are the remaining P0s.
@@ -658,33 +666,66 @@ Anything that cannot be expressed as Raft-resident derived state is out of scope
 
 ## Measured baseline
 
-`internal/memory/search_bench_test.go` (new — first benchmark this path has ever had). D=1536,
-sealed bbolt store, `go test ./internal/memory -run '^$' -bench Vector -benchmem`:
+`internal/memory/search_bench_test.go` and `sweep_test.go` (both new — this path had no benchmark of
+any kind before). D=1536, sealed bbolt store.
 
-| N | ns/op | per record | B/op |
+**Where it started**, and why this section exists:
+
+| N | latency | per record | allocated | retained after return |
+|---|---|---|---|---|
+| 1,000 | 16.3 ms | 16.3 µs | 13.2 MB | 6.7 MB |
+| 10,000 | 145 ms | 14.5 µs | 132 MB | 66.9 MB |
+| 100,000 | 1.59 s | 15.9 µs | 1.29 GB | **670 MB** |
+| 1,000,000 | 19.2 s | 19.2 µs | 12.95 GB | **6.54 GB** |
+
+Exactly linear, and `ContextEngine` called it passively on every turn. `search.go` claimed *"Fine for
+personal scale (< ~100k records)"* — off by roughly three orders of magnitude in cost terms, and the
+reason nobody looked. That comment is now deleted.
+
+The retained column was the real ceiling: a top-3 result pinned ~6.7 KB per record in the whole
+store, because truncating the candidate slice left its backing array — and every decoded record it
+pointed at — alive. 670 MB held after a query at 100k records is an OOM on a small node, not a slow
+query. No benchmark reports that, which is why `sweep_test.go` exists.
+
+**Where it is now**, after 20a–20c and the AEAD work:
+
+| N | latency | allocated | retained |
 |---|---|---|---|
-| 100 | 1.33 ms | 13.3 µs | 1.4 MB |
-| 1,000 | 13.9 ms | 13.9 µs | 13.8 MB |
-| 10,000 | **125.5 ms** | 12.6 µs | **138.8 MB** |
+| 1,000 | **4.9 ms** | **127 KB** | ~0 |
+| 10,000 | **48–50 ms** | **453 KB** | ~0 |
+| 100,000 | **479 ms** | **3.5 MB** | ~0 |
+| 1,000,000 | **5.17 s** | **34.6 MB** | ~0 |
 
-Exactly linear, ~12.5 µs and ~13.9 KB **per record per query** — and `ContextEngine` calls this
-passively on every turn. The comment in `search.go:47` says *"Fine for personal scale (< ~100k
-records)"*. Extrapolated, 100k records is **~1.25 s and ~1.4 GB of allocation per user message.**
-That claim is wrong by a wide margin and should be deleted along with the fix.
+Roughly **−73% latency and −99% allocation** (geomean, pinned, n=8, p=0.000), and allocation no
+longer scales with corpus size. The usable envelope moved about 10×: comfortable to ~10,000 records,
+tolerable to ~100,000. It is still O(N), so 1M is still 5 s — only 20d changes that.
 
-### Where the time actually goes (N=10,000, D=1536)
+### Where the time went, and where it goes now (N=10,000, D=1536)
 
-| Layer | ns/op | share | B/op |
+| Layer | originally | share | now |
 |---|---|---|---|
-| decrypt only — `ForEach` with a no-op body | 88.8 ms | **~71%** | 68.1 MB |
-| \+ `proto.Unmarshal` | 113.6 ms | ~91% | 138.1 MB |
-| cosine arithmetic alone, no I/O | 19.6 ms | ~16% | 0 |
-| └ of which the redundant `norm()` | 3.3 ms | ~3% | 0 |
-| `sort.Slice` over all candidates vs top-3 | 1.3 ms | ~1% | — |
+| decrypt only — `ForEach` with a no-op body | 88.8 ms | **~71%** | **15.2 ms (~32%)** |
+| \+ `proto.Unmarshal` | 113.6 ms | ~91% | folded into the wire scan |
+| cosine arithmetic alone, no I/O | 19.6 ms | ~16% | unchanged — now the largest share |
+| └ of which the redundant `norm()` | 3.3 ms | ~3% | 0 (stored, 20a) |
+| `sort.Slice` over all candidates vs top-3 | 1.3 ms | ~1% | 0 (bounded heap, 20c) |
 
-**The cost is not the cosine.** The arithmetic the algorithm actually needs is its *smallest*
-component. Every query secretbox-decrypts and proto-decodes the entire corpus, including
+**The cost was not the cosine.** The arithmetic the algorithm actually needs was its *smallest*
+component; every query secretbox-decrypted and proto-decoded the entire corpus, including
 `VectorRecord.Text`, which scoring never reads.
+
+> **One prediction here was wrong, and the benchmark caught it.** 20b was written on the assumption
+> that the text field dominated decode allocation. It did not: of the ~70 MB decode added, **61 MB
+> was the embedding slice** (1536 floats × 4 B × 10,000), which `proto.Unmarshal` reallocates per
+> record because `Reset()` drops capacity rather than keeping it. Text was ~6 MB. A narrow generated
+> message with `DiscardUnknown` — the obvious reading of 20b — delivered −6.5% bytes and no
+> measurable time change. The fix that worked was a `protowire` scan into a **reused** buffer.
+> Anything written below about where cost lives should be re-measured before it is trusted.
+
+**The remaining shares have inverted.** Decrypt is now ~32% rather than ~71%, so the cosine
+arithmetic is the largest single component for the first time. That weakens 20d's payoff relative to
+the original estimate and makes the arithmetic worth a look — the opposite of the conclusion this
+section reached when it was written.
 
 Dimension scaling confirms it — at N=2,000, 4× the width costs only 2.3× the time
 (D=384 → 12.5 ms, D=768 → 17.9 ms, D=1536 → 28.3 ms), so roughly half the per-record cost is
@@ -810,16 +851,18 @@ The `session_search` / `session_list` / `session_read` builtins already shipped.
 
 ## R20 — Vector scan cost
 
-Ordered cheapest-first. The first three are hours of work each and need no new concepts; the fourth
-is the structural fix. Re-run `search_bench_test.go` after each and record the delta.
+**20a, 20b and 20c are done** (PR #21), along with the decrypt work that the measurement above
+turned up (PR #25) — see [Decrypt cost](#decrypt-cost--not-originally-a-numbered-item) below, which
+was not a numbered item when this section was written. **20d is open**, with a weaker case than it
+had.
 
-### 20a · Store the norm (≈3% of scan time, trivial)
+### 20a · Store the norm — ✅ done (#21)
 
 `norm(v.Embedding)` is a property of the stored vector, recomputed on every query for every record.
 Add `float32 norm = 11` to `VectorRecord`, populate at write time, fall back to computing it when
 absent so old records still work.
 
-### 20b · Decode only what scoring reads (≈20% of scan time, 70 MB/query of allocation)
+### 20b · Decode only what scoring reads — ✅ done (#21), but not the way this proposed
 
 `proto.Unmarshal` decodes the whole record — `Text`, `metadata`, everything — and scoring reads only
 `embedding`, `scope`, `retention`, `owner`, `visibility`. Two options, in preference order:
@@ -830,13 +873,13 @@ absent so old records still work.
 2. Hand-rolled partial decode of just the needed field numbers. Cheaper to build, uglier, and it
    couples to field numbering.
 
-### 20c · Bounded top-K instead of sort-everything (≈1% time, O(N) → O(K) memory)
+### 20c · Bounded top-K instead of sort-everything — ✅ done (#21)
 
 `vectorSearch` appends every passing record then `sort.Slice`s the lot for a top-3 result. A
 `container/heap` of size K is O(N log K) time and O(K) memory. The time win is small; the allocation
 win is not, and allocation is what is generating 138 MB of GC pressure per query.
 
-### 20d · Prefilter that never touches the sealed payload (the structural fix)
+### 20d · Prefilter that never touches the sealed payload — ⬜ open (the structural fix)
 
 nullclaw's `SqliteAnnVectorStore` computes a 64-bit SimHash per embedding, splits it into 4× 16-bit
 bands, prefilters by band match, then runs exact cosine on candidates, falling back to an exact scan
@@ -863,9 +906,12 @@ BucketVectorBands = "vector_bands"  // key: "<hmac(band_i)>:<record_id>" -> nil
 
 ### Also worth fixing here
 
-- **Delete the "fine for personal scale (< ~100k records)" comment** at `search.go:47`. It is off by
-  roughly three orders of magnitude in cost terms and it is the reason this was never looked at.
-- **Add a minimum score floor.** Nothing anywhere applies one, so a query with no good match still
+- ~~**Delete the "fine for personal scale (< ~100k records)" comment**~~ — ✅ done (#21).
+- ~~**Surface dimension mismatch.**~~ — ✅ done (#21): `vectorSearch` counts skipped records and
+  warns once per query with the query width. Uses `slog.Default()` because it is a free function;
+  threading the node logger through is still open.
+- **Add a minimum score floor** — ⬜ still open, and now the most valuable thing left in this
+  section that is not 20d. Nothing anywhere applies one. Nothing anywhere applies one, so a query with no good match still
   injects the top-3 least-bad records into the prompt as *"Relevant context from prior
   conversations"*. Cosine 0.1 noise presented as relevant context is an effectiveness bug, not a
   performance one. `TestCosineAccumulationPrecision` notes the precision caveat that becomes relevant
@@ -877,17 +923,54 @@ BucketVectorBands = "vector_bands"  // key: "<hmac(band_i)>:<record_id>" -> nil
 
 ### Acceptance
 
-- [ ] `BenchmarkVectorSearch/N=10000` improves by at least an order of magnitude.
-- [ ] Allocation per query is O(K), not O(N).
+- [x] Allocation per query is O(K), not O(N). — 135 MB → 453 KB at N=10,000.
+- [x] A dimension-mismatched corpus produces a warning, not silence.
+- [~] `BenchmarkVectorSearch/N=10000` improves by at least an order of magnitude. — got 3×
+      (145 ms → 48 ms). The order of magnitude needs 20d; it was never achievable by decode tuning
+      alone, which the layer breakdown above should have made obvious when this box was written.
 - [ ] Band lookup performs no `crypto.Open` on non-candidate records — asserted, not assumed.
 - [ ] Band keys are not raw content fingerprints.
 - [ ] ANN recall vs exact scan is measured, with automatic fallback on degradation.
-- [ ] A dimension-mismatched corpus produces a warning, not silence.
 - [ ] A query with no good match returns nothing rather than the least-bad three.
+
+### Decrypt cost — not originally a numbered item
+
+✅ **done (#25).** It has a subsection rather than a number because it did not exist as a plan: the
+layer breakdown above turned it up, and it turned out to be the largest single win available.
+
+Two costs were in `crypto.Open`: Salsa20 has no hardware acceleration, and `Open(nil, ...)`
+allocated a plaintext per record. Measured on one record's worth of payload, 30 interleaved samples
+pinned to dedicated cores:
+
+| AEAD | sec/op | throughput | alloc |
+|---|---|---|---|
+| nacl/secretbox, fresh buffer (was) | 9.08 µs | 708 MiB/s | 6.6 KB |
+| nacl/secretbox, reused buffer | 6.93 µs | 928 MiB/s | 0 |
+| XChaCha20-Poly1305, reused | 2.67 µs | 2.35 GiB/s | 0 |
+| AES-256-GCM, reused | **1.09 µs** | **5.78 GiB/s** | 0 |
+
+Shipped as a per-record versioned envelope with the AEAD chosen at runtime — AES-GCM where the CPU
+accelerates AES, XChaCha20-Poly1305 otherwise, both always openable so mixed hardware interoperates.
+Legacy secretbox values keep opening. See aide decision `lobslaw-encryption`.
+
+Three things worth carrying forward:
+
+- **Buffer reuse was worth 1.31× on CPU, not just allocation.** An earlier read of noisier data said
+  "no CPU change"; that was wrong.
+- **Benchmark interleaving is not optional on this hardware.** A single `-count=30` reported ±30%
+  because Go runs all of one benchmark's samples before the next, and each saw a different frequency
+  state under the `powersave` governor. Interleaved runs report ±1–13%. Every figure in this section
+  was re-measured that way.
+- **Whatever the fastest AEAD is depends on the machine, and the gap is large** (5.78 vs 2.35 GiB/s).
+  Any future "just pick X" reasoning here should be re-measured on the target, not assumed.
 
 ---
 
 ## R21 — Embedding outbox
+
+⬜ **Not started.** Re-verified 2026-08-15: `episodic_ingest.go` still skips silently, and the
+`builtin_memory.go` comment still reasons about a backfill that does not exist. Unchanged by the
+R20 work — that made the scan cheap, not the corpus complete.
 
 ### Problem
 
