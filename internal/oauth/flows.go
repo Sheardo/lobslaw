@@ -9,15 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
-
-	"crypto/rand"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 )
 
 // flowIDEntropy backs Tracker's flow-ID generation. ULIDs are
 // sortable by time so introspecting active flows shows them in
 // initiation order.
-var flowIDEntropy = ulid.Monotonic(rand.Reader, 0)
 
 // Flow is one in-progress device-code authorisation. The tracker
 // keeps a Flow in memory until the polling goroutine resolves
@@ -31,13 +28,13 @@ var flowIDEntropy = ulid.Monotonic(rand.Reader, 0)
 // oauth_start command. This is simpler than persisting flow state
 // across crashes and matches how the IdP's expires_in is set up.
 type Flow struct {
-	ID            string
-	Provider      ProviderConfig
-	Scopes        []string
-	InitiatedBy   string // "scope:owner" or wherever the request came from
-	StartedAt     time.Time
-	ExpiresAt     time.Time
-	UserCode      string
+	ID              string
+	Provider        ProviderConfig
+	Scopes          []string
+	InitiatedBy     string // "scope:owner" or wherever the request came from
+	StartedAt       time.Time
+	ExpiresAt       time.Time
+	UserCode        string
 	VerificationURI string
 
 	// Outcome is set to one of "pending", "complete", "expired",
@@ -100,7 +97,7 @@ type Tracker struct {
 	logger *slog.Logger
 
 	mu     sync.RWMutex
-	flows  map[string]*Flow         // flow ID → flow
+	flows  map[string]*Flow              // flow ID → flow
 	cancel map[string]context.CancelFunc // flow ID → background-poll cancel
 }
 
@@ -133,7 +130,7 @@ func (t *Tracker) Start(ctx context.Context, p ProviderConfig, scopes []string, 
 		return nil, fmt.Errorf("oauth tracker: device auth: %w", err)
 	}
 	flow := &Flow{
-		ID:              ulid.MustNew(ulid.Now(), flowIDEntropy).String(),
+		ID:              ids.New(),
 		Provider:        p,
 		Scopes:          append([]string(nil), scopes...),
 		InitiatedBy:     initiatedBy,

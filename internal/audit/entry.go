@@ -1,16 +1,13 @@
 package audit
 
 import (
-	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/oklog/ulid/v2"
-
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -37,23 +34,11 @@ func ComputeHash(e types.AuditEntry) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Shared monotonic entropy source. Two IDs generated within the same
-// millisecond must sort monotonically, which requires them to share a
-// single ulid.MonotonicReader — a fresh source per call resets the
-// monotonic counter and can produce out-of-order IDs. Guarded by a
-// mutex because ulid.MonotonicReader is not safe for concurrent use.
-var (
-	idEntropyMu sync.Mutex
-	idEntropy   = ulid.Monotonic(cryptorand.Reader, 0)
-)
-
 // NewID returns a fresh ULID for an audit entry. ULIDs sort
 // lexicographically by creation time and are safe as map keys +
 // JSONL cursor positions. 26 characters base-32.
 func NewID() string {
-	idEntropyMu.Lock()
-	defer idEntropyMu.Unlock()
-	return ulid.MustNew(ulid.Now(), idEntropy).String()
+	return ids.New()
 }
 
 // ValidateEntry sanity-checks an entry before Append processes it.

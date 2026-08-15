@@ -123,6 +123,11 @@ type TelegramConfig struct {
 	// persistence (the legacy in-memory-only behaviour, fine for
 	// tests + ephemeral single-shot runs).
 	ChannelState ChannelStateStore
+
+	// Sessions is the durable conversation transcript store. Nil
+	// leaves the handler on its in-memory buffer — conversations then
+	// reset on restart, as they did before sessions existed.
+	Sessions SessionStore
 }
 
 // ChannelStateStore is a minimal raft-backed key-value interface for
@@ -160,11 +165,10 @@ type TelegramHandler struct {
 	continuationsMu sync.Mutex
 	continuations   map[string]*telegramContinuation
 
-	// history is the per-chat rolling conversation buffer feeding
-	// ProcessMessageRequest.ConversationHistory. Stateless across
-	// restarts — persistent recall is the episodic-memory tool's
-	// responsibility, not this cache.
-	history *chatHistory
+	// conv is the per-chat conversation transcript feeding
+	// ProcessMessageRequest.ConversationHistory: durable when a
+	// session store is wired, in-memory otherwise.
+	conv *conversationLog
 }
 
 // telegramContinuation captures everything handleCallbackQuery
@@ -174,6 +178,12 @@ type telegramContinuation struct {
 	messages []compute.Message
 	chatID   int64
 	reason   string
+	// session identifies the conversation to append the resumed
+	// half of the turn to. The messages up to the confirmation were
+	// already recorded when the turn stopped; without this the
+	// approved tool calls and final reply would never be, leaving a
+	// stored transcript that ends mid-turn forever.
+	session SessionRef
 }
 
 // Telegram Update / Message types — minimal subset we consume. The
@@ -292,7 +302,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		base:          base,
 		seenUpdate:    make(map[int64]time.Time),
 		continuations: make(map[string]*telegramContinuation),
-		history:       newChatHistory(0, 0),
+		conv:          newConversationLog(cfg.Sessions, logger),
 	}, nil
 }
 
@@ -365,7 +375,12 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		"scope", scope,
 		"text_len", len(msg.Text))
 
-	priorHistory := h.history.Load(msg.Chat.ID)
+	sessionRef := SessionRef{
+		Channel:   "telegram",
+		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
+		UserID:    claims.UserID,
+	}
+	priorHistory := h.conv.Load(ctx, sessionRef)
 	h.log.Debug("telegram: conversation history loaded",
 		"turn_id", turnID,
 		"chat_id", msg.Chat.ID,
@@ -435,14 +450,14 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	// total messages (not turns) so a single multi-tool turn
 	// doesn't permanently swamp the buffer; oldest messages drop
 	// when the cap is hit.
-	if newTurn := newTurnMessages(resp.Messages, len(priorHistory)); len(newTurn) > 0 {
-		h.history.Append(msg.Chat.ID, newTurn...)
+	if newTurn := newTurnMessages(resp.Messages, resp.TurnStartIndex); len(newTurn) > 0 {
+		h.conv.Append(ctx, sessionRef, turnID, newTurn)
 	}
 
 	switch {
 	case resp.NeedsConfirmation:
 		if h.cfg.Prompts != nil {
-			h.sendConfirmationKeyboard(msg.Chat.ID, agentReq, resp)
+			h.sendConfirmationKeyboard(msg.Chat.ID, agentReq, resp, sessionRef)
 			return
 		}
 		// Fallback: no registry wired — render the reason as plain text.
@@ -464,7 +479,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 // {"inline_keyboard": [[{text, callback_data}, ...]]}. Callback
 // data is prefixed "prompt:approve:<id>" / "prompt:deny:<id>" so
 // the handler can parse the verb + id without a separate mapping.
-func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse) {
+func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
@@ -487,6 +502,7 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 		messages: resp.Messages,
 		chatID:   chatID,
 		reason:   resp.ConfirmationReason,
+		session:  session,
 	}
 	h.continuationsMu.Unlock()
 
@@ -616,9 +632,18 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegra
 		h.sendText(cont.chatID, classifyAgentError(err))
 		return
 	}
+
+	// Record only what the resumed leg added. Everything up to the
+	// confirmation was persisted when the turn first stopped, and
+	// ResumeFromConfirmation sets TurnStartIndex to the end of what
+	// it was handed — so this appends exactly the new tail.
+	if newTurn := newTurnMessages(resp.Messages, resp.TurnStartIndex); len(newTurn) > 0 {
+		h.conv.Append(ctx, cont.session, cont.req.TurnID, newTurn)
+	}
+
 	switch {
 	case resp.NeedsConfirmation:
-		h.sendConfirmationKeyboard(cont.chatID, cont.req, resp)
+		h.sendConfirmationKeyboard(cont.chatID, cont.req, resp, cont.session)
 	case resp.Reply == "":
 		h.sendText(cont.chatID, "(empty reply)")
 	default:

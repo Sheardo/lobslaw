@@ -629,6 +629,90 @@ message UserChannelAddress {
 }
 
 // -----------------------------------------------------------------------------
+// Conversation sessions
+// -----------------------------------------------------------------------------
+//
+// A session is the durable transcript of one conversation on one channel.
+// Distinct from episodic memory: episodic records are what the agent chose
+// to REMEMBER (scored, consolidated, forgettable); a session is the raw
+// message thread the agent needs to REPLAY to keep talking coherently.
+//
+// Storage layout: SessionRecord is the metadata/index record, one per
+// session, keyed "<channel>:<channel_id>". Messages are separate records
+// in their own bucket keyed "<session_id>:<20-digit zero-padded seq>" so
+// bbolt's byte ordering is also sequence ordering and a session's thread
+// is a prefix scan. Keeping messages out of the index record means a turn
+// appends O(new messages) bytes to the raft log rather than rewriting the
+// whole transcript.
+
+// SessionRecord is the per-session index. Message bodies live in
+// BucketSessionMessages; this record tracks the cursor bounds so a
+// reader knows the retained range without scanning.
+message SessionRecord {
+  string id = 1;          // "<channel>:<channel_id>" — bucket key
+  string channel = 2;     // gateway channel kind: "telegram", "rest", ...
+  string channel_id = 3;  // channel-native conversation id (chat_id, ...)
+  string user_id = 4;     // canonical user id of the participant
+  string title = 5;       // human-readable label; empty until summarised
+  // next_seq is the sequence number the next appended message takes.
+  // Monotonic per session and never reused, so message keys are stable
+  // even after trimming.
+  uint64 next_seq = 6;
+  // first_seq is the oldest sequence still retained. Advances when the
+  // append path trims to the message cap. next_seq - first_seq is the
+  // live message count.
+  uint64 first_seq = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// SessionMessage is one message in a transcript — the persisted form of
+// the agent's in-memory Message. Roles match the LLM wire protocol:
+// "system" | "user" | "assistant" | "tool".
+//
+// System messages are NOT persisted: the system prompt is rebuilt per
+// turn by promptgen (it embeds live SOUL state, tool lists, and time),
+// so storing a stale copy would be actively misleading on replay.
+message SessionMessage {
+  string session_id = 1;
+  uint64 seq = 2;
+  string role = 3;
+  string content = 4;
+  // tool_calls is populated on assistant messages that requested tool
+  // invocations; tool_call_id is populated on role="tool" results and
+  // correlates back to the requesting call.
+  repeated SessionToolCall tool_calls = 5;
+  string tool_call_id = 6;
+  // turn_id ties every message produced by one user turn together, for
+  // audit correlation and for trimming on turn boundaries.
+  string turn_id = 7;
+  google.protobuf.Timestamp timestamp = 8;
+}
+
+// SessionToolCall mirrors the tool-call shape on the LLM wire.
+message SessionToolCall {
+  string id = 1;
+  string name = 2;
+  string arguments = 3;  // JSON-encoded
+}
+
+// SessionAppendRecord is the atomic unit of a session write: the updated
+// index record, the messages produced by the turn, and the message keys
+// the trim evicted — all applied in one raft entry so a session can
+// never be observed with a torn transcript.
+//
+// **evict_keys is computed on the leader and shipped explicitly** rather
+// than recomputed inside the FSM. The FSM must be deterministic across
+// live apply and log replay (see fsm.applyClaim's comment for what
+// happens when it isn't); shipping the decision makes replay a pure
+// function of the entry.
+message SessionAppendRecord {
+  SessionRecord session = 1;
+  repeated SessionMessage messages = 2;
+  repeated string evict_keys = 3;
+}
+
+// -----------------------------------------------------------------------------
 // Raft log entry envelope
 // -----------------------------------------------------------------------------
 //
@@ -667,6 +751,11 @@ message LogEntry {
     SoulTuneRecord soul_tune = 18;
     CredentialRecord credential = 19;
     UserPreferences user_prefs = 21;
+    // session_append carries a whole turn (index + messages + evictions)
+    // under LOG_OP_PUT; session carries just an id under LOG_OP_DELETE,
+    // where the FSM also purges the session's message key range.
+    SessionAppendRecord session_append = 22;
+    SessionRecord session = 23;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

@@ -42,9 +42,67 @@ var commonUnixCommands = map[string]struct{}{
 	"node": {}, "npm": {}, "ruby": {}, "bash": {}, "sh": {}, "zsh": {},
 }
 
+// Bounds on the specialty-binary scan. Without them a single hostile
+// or merely unusual $PATH entry can dominate the system prompt on
+// EVERY turn.
+//
+// Observed on WSL2: the Windows PATH is inherited, so
+// /mnt/c/Windows/System32 lands on $PATH. drvfs synthesises mode 0777
+// for every file it exposes, which defeats the executable-bit check
+// below — every .dll, .dat and .nls in the directory reads as a
+// binary. That produced a 124 KB (~31k token) Environment section,
+// larger than the tool list and conversation history combined.
+const (
+	// maxDirEntries skips directories too large to be a curated tool
+	// dir. /usr/local/bin has tens of entries; System32 has thousands.
+	// Deliberately OS-agnostic — "implausibly many" generalises
+	// better than special-casing /mnt.
+	maxDirEntries = 512
+	// maxSpecialtyCommands and maxSpecialtyBytes are the hard
+	// backstop: whatever the filters miss, this section cannot grow
+	// without bound.
+	maxSpecialtyCommands = 150
+	maxSpecialtyBytes    = 4096
+)
+
+// nonExecutableExtensions are suffixes that are never a runnable
+// command from the shell tool's point of view, but which appear in
+// bulk in Windows system directories visible through drvfs.
+var nonExecutableExtensions = map[string]struct{}{
+	".dll": {}, ".sys": {}, ".dat": {}, ".mui": {}, ".nls": {},
+	".ini": {}, ".drv": {}, ".cpl": {}, ".ax": {}, ".tlb": {},
+	".winmd": {}, ".efi": {}, ".msi": {}, ".mof": {}, ".rll": {},
+	".log": {}, ".xml": {}, ".json": {}, ".txt": {}, ".png": {},
+	// Windows executables. lobslaw's sandbox is Linux-only
+	// (namespaces + Landlock + seccomp), so a .exe reachable through
+	// a drvfs mount is not something shell_command can run —
+	// advertising it invites the agent to try.
+	".exe": {}, ".bat": {}, ".cmd": {}, ".com": {}, ".msc": {},
+	".ps1": {}, ".ps1xml": {}, ".psd1": {}, ".psm1": {}, ".vbs": {},
+}
+
+// windowsMountPrefixes are paths where a Linux host sees a Windows
+// filesystem. WSL mounts the Windows drives under /mnt and inherits
+// the Windows PATH, and drvfs synthesises mode 0777 everywhere — so
+// the executable-bit check that filters everywhere else is blind
+// here. Nothing under these paths can run in the Linux sandbox.
+var windowsMountPrefixes = []string{"/mnt/c/", "/mnt/d/", "/mnt/e/"}
+
+// isForeignMount reports whether a $PATH directory lives on a mount
+// whose contents can't be executed by the sandboxed shell tool.
+func isForeignMount(dir string) bool {
+	clean := filepath.Clean(dir) + "/"
+	for _, prefix := range windowsMountPrefixes {
+		if strings.HasPrefix(strings.ToLower(clean), prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 var (
-	pathSnapshotOnce    sync.Once
-	pathSnapshotResult  []string
+	pathSnapshotOnce   sync.Once
+	pathSnapshotResult []string
 )
 
 // discoverSpecialtyCommands walks each directory on $PATH, collects
@@ -73,13 +131,25 @@ func enumerateSpecialtyPath(rawPath string) []string {
 		if dir == "" {
 			continue
 		}
+		if isForeignMount(dir) {
+			continue
+		}
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			continue
+		}
+		// A directory this large is a system directory, not a place
+		// an operator installed tooling. Scanning it yields noise at
+		// best and thousands of Windows DLLs at worst.
+		if len(entries) > maxDirEntries {
 			continue
 		}
 		for _, e := range entries {
 			name := e.Name()
 			if _, dup := seen[name]; dup {
+				continue
+			}
+			if _, skip := nonExecutableExtensions[strings.ToLower(filepath.Ext(name))]; skip {
 				continue
 			}
 			// Reject obvious non-executables. Symlinks are allowed
@@ -107,7 +177,24 @@ func enumerateSpecialtyPath(rawPath string) []string {
 		out = append(out, name)
 	}
 	sort.Strings(out)
-	return out
+	return capSpecialty(out)
+}
+
+// capSpecialty enforces the count and byte ceilings. Truncating is
+// the right failure mode: this section is a hint, and a hint that
+// costs 31k tokens a turn is worse than an incomplete one.
+func capSpecialty(names []string) []string {
+	if len(names) > maxSpecialtyCommands {
+		names = names[:maxSpecialtyCommands]
+	}
+	total := 0
+	for i, n := range names {
+		total += len(n) + 2 // ", " separator
+		if total > maxSpecialtyBytes {
+			return names[:i]
+		}
+	}
+	return names
 }
 
 // BuildEnvironment renders an "Environment" section enumerating the

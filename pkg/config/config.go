@@ -181,6 +181,29 @@ type ComputeConfig struct {
 	// dereferences to the provider. Empty → first provider fills
 	// every role (today's behaviour).
 	Roles RolesConfig `koanf:"roles,omitempty"`
+
+	// Context bounds how much prior conversation is replayed into
+	// each turn. Omitted → compute.DefaultContextBudget().
+	Context ContextConfig `koanf:"context,omitempty"`
+}
+
+// ContextConfig tunes per-turn context assembly.
+//
+// Without bounds, a conversation's cost is quadratic in its length —
+// every turn re-sends every previous turn, and a replayed tool result
+// can be as large as Executor.MaxOutputBytes (10 MB). These two knobs
+// make it roughly flat.
+type ContextConfig struct {
+	// TailTokens caps the estimated tokens of replayed history per
+	// turn; oldest messages drop first. Explicit 0 = unbounded
+	// (the pre-budget behaviour — expensive, and eventually fatal
+	// on long conversations).
+	TailTokens *int `koanf:"tail_tokens,omitempty"`
+
+	// HistoryToolResultBytes truncates REPLAYED tool results to this
+	// many bytes. The turn that produced a result always sees it in
+	// full. Explicit 0 = replay tool output untouched.
+	HistoryToolResultBytes *int `koanf:"history_tool_result_bytes,omitempty"`
 }
 
 // RolesConfig names the provider labels for each agent role.
@@ -434,6 +457,14 @@ type GatewayConfig struct {
 	// times are CONVERTED to this zone for display in agent
 	// responses, scheduled-task descriptions, commitment due_at, etc.
 	DefaultTimezone string `koanf:"default_timezone,omitempty"`
+
+	// SessionMaxMessages caps how many messages each conversation
+	// transcript retains in the durable session store. Trimming drops
+	// the oldest first. Zero takes memory.DefaultSessionMaxMessages.
+	//
+	// This is a storage bound, not a context bound — raising it costs
+	// disk and raft-snapshot size, not tokens per turn.
+	SessionMaxMessages int `koanf:"session_max_messages,omitempty"`
 
 	// Responsiveness timers. Zero on any = disabled. Operators can
 	// tune per deployment; sensible defaults land in Load().

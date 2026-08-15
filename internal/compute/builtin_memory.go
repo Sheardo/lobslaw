@@ -2,7 +2,6 @@ package compute
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,20 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
-
-// memIDEntropy is the shared ULID entropy source for memory_write.
-// Matches the pattern used in internal/audit — a single monotonic
-// reader keeps IDs sortable within a millisecond; per-call fresh
-// readers reset the counter and break monotonicity.
-var memIDEntropy = ulid.Monotonic(cryptorand.Reader, 0)
 
 // memoryRaftApplier is the subset of *memory.RaftNode the memory
 // write tool needs. Interface so tests can substitute a fake.
@@ -527,7 +520,7 @@ func newMemoryWriteHandler(raft memoryRaftApplier) BuiltinFunc {
 			}
 		}
 
-		id := ulid.MustNew(ulid.Now(), memIDEntropy).String()
+		id := ids.New()
 		rec := &lobslawv1.EpisodicRecord{
 			Id:         id,
 			Event:      event,
@@ -724,7 +717,7 @@ func newMemoryCorrectHandler(raft memoryRaftApplier, forgetter memoryForgetter) 
 
 		// Step 1: write the correction as a new memory with a
 		// "corrects:<old_id>" tag so the audit trail is queryable.
-		newID := ulid.MustNew(ulid.Now(), memIDEntropy).String()
+		newID := ids.New()
 		newRec := &lobslawv1.EpisodicRecord{
 			Id:         newID,
 			Event:      newEvent,

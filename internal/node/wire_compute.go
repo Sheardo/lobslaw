@@ -10,9 +10,6 @@ import (
 	"strings"
 	"time"
 
-	cryptorand "crypto/rand"
-
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -22,13 +19,14 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/hooks"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/pkg/config"
-	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -778,6 +776,7 @@ func (n *Node) wireCompute() error {
 			Skills:           skillDispatcherOrNil(n.skillAdapter),
 			TimezoneResolver: n.resolveUserTimezone,
 			BinariesProvider: binariesProvider,
+			ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),
 			Logger:           n.log,
 		})
 		if err != nil {
@@ -1136,7 +1135,6 @@ func (n *Node) registerAgentTurnHandlers() {
 
 // researchIDEntropy is a process-wide ULID monotonic source for
 // research record IDs. Each adapter call hits this.
-var researchIDEntropy = ulid.Monotonic(cryptorand.Reader, 0)
 
 // registerResearchHandler wires the research:run commitment
 // handler that drives the deep-research pipeline. Only registered
@@ -1220,7 +1218,7 @@ func buildResearchToolList(reg *compute.Registry) []compute.Tool {
 type researchMemoryAdapter struct{ svc *memory.Service }
 
 func (a *researchMemoryAdapter) WriteEpisodic(ctx context.Context, content string, tags []string) (string, error) {
-	id := "research-" + ulid.MustNew(ulid.Now(), researchIDEntropy).String()
+	id := "research-" + ids.New()
 	rec := &lobslawv1.EpisodicRecord{
 		Id:         id,
 		Event:      "research-finding",
@@ -1355,6 +1353,21 @@ func (a *episodicIngesterAdapter) IngestTurn(ctx context.Context, t compute.Epis
 		TurnID:      t.TurnID,
 		CompletedAt: t.CompletedAt,
 	})
+}
+
+// contextBudgetFromConfig maps [compute.context] onto the agent's
+// budget. Each knob is a pointer in config so an omitted key takes
+// the default while an explicit 0 genuinely disables that bound —
+// operators who want the old unbounded replay have to ask for it.
+func contextBudgetFromConfig(cfg config.ContextConfig) compute.ContextBudget {
+	out := compute.DefaultContextBudget()
+	if cfg.TailTokens != nil {
+		out.TailTokens = *cfg.TailTokens
+	}
+	if cfg.HistoryToolResultBytes != nil {
+		out.HistoryToolResultBytes = *cfg.HistoryToolResultBytes
+	}
+	return out
 }
 
 // serverToolsFromConfig converts the TOML-shaped ServerToolSpec

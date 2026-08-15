@@ -2,15 +2,14 @@ package memory
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -47,13 +46,8 @@ type Embedder interface {
 // what makes memory_search's semantic strategy work.
 type EpisodicIngester struct {
 	raft     raftApplier
-	entropy  *ulidEntropy
 	timeout  time.Duration
 	embedder Embedder
-}
-
-type ulidEntropy struct {
-	reader *ulid.MonotonicEntropy
 }
 
 // NewEpisodicIngester wires the ingester. ApplyTimeout zero picks
@@ -69,7 +63,6 @@ func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration, embedder 
 	}
 	return &EpisodicIngester{
 		raft:     raft,
-		entropy:  &ulidEntropy{reader: ulid.Monotonic(cryptorand.Reader, 0)},
 		timeout:  applyTimeout,
 		embedder: embedder,
 	}, nil
@@ -82,7 +75,7 @@ func NewEpisodicIngester(raft raftApplier, applyTimeout time.Duration, embedder 
 // the neutral "keep for a while" default; dream re-scores based on
 // recall frequency.
 func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) error {
-	id := ulid.MustNew(ulid.Now(), i.entropy.reader).String()
+	id := ids.New()
 	tags := []string{}
 	if turn.Channel != "" {
 		tags = append(tags, "channel:"+turn.Channel)
@@ -138,7 +131,7 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 			embedText = rec.Event
 		}
 		if vec, verr := i.embedder.Embed(ctx, embedText); verr == nil {
-			vecID := ulid.MustNew(ulid.Now(), i.entropy.reader).String()
+			vecID := ids.New()
 			vrec := &lobslawv1.VectorRecord{
 				Id:        vecID,
 				Embedding: vec,

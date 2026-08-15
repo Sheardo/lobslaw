@@ -26,13 +26,11 @@ import (
 	"path/filepath"
 	"time"
 
-	cryptorand "crypto/rand"
-
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -105,7 +103,6 @@ func main() {
 		backfilled int
 		failed     int
 	)
-	entropy := ulid.Monotonic(cryptorand.Reader, 0)
 
 	// Collect records needing embedding first, then batch the
 	// HTTP calls. 1 HTTP round-trip per batch instead of N.
@@ -182,7 +179,7 @@ func main() {
 				failed++
 				continue
 			}
-			vecID := ulid.MustNew(ulid.Now(), entropy).String()
+			vecID := ids.New()
 			vrec := &lobslawv1.VectorRecord{
 				Id:        vecID,
 				Embedding: vec,

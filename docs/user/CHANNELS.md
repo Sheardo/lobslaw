@@ -11,6 +11,26 @@ Default. Mounts on the gateway HTTP port (8443 by default) at:
 - `POST /v1/prompts/{id}/{approve|deny}` — answer a confirmation prompt
 - `GET /healthz`, `GET /readyz` — health probes
 
+### Conversations over REST
+
+By default each `POST /v1/messages` is independent — the agent starts from a blank thread every time. That's what you want for scripts and automations firing unrelated one-shot requests.
+
+To hold an actual conversation, pass a `session_id`. Requests sharing one get the prior exchange replayed into the turn, and the transcript is stored in the cluster, so it survives restarts and node failover:
+
+```bash
+curl -X POST https://localhost:8443/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "my name is james", "session_id": "cli-42"}'
+
+curl -X POST https://localhost:8443/v1/messages \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "what is my name?", "session_id": "cli-42"}'
+```
+
+Pick the id yourself — anything stable and unique per conversation, containing no `:` or `/` (both are rejected with a 400). Reusing an id resumes that conversation; a fresh id starts a new one.
+
+Session ids are scoped to the authenticated caller, so two users who both pick `default` get two separate conversations and neither can read the other's. On a node with `require_auth = false` every caller is the same anonymous identity, and so shares one namespace — if REST is reachable by more than one person, authenticate it.
+
 ## Telegram
 
 lobslaw supports two transports for Telegram: **poll** (outbound-only long-polling, right for personal deployments) and **webhook** (inbound HTTPS, right for cloud deployments with a stable public URL).
@@ -91,6 +111,15 @@ If you've already configured the bot with your token but haven't added your user
 ```
 WARN telegram: unknown user, UnknownUserScope empty — dropping user_id=6972251926 username=yourhandle
 ```
+
+### Conversation memory
+
+Each Telegram chat is one durable conversation, automatically — no setup. The transcript is stored in the cluster, so the bot still remembers the thread after a restart, an upgrade, or a failover to another node. Older messages are trimmed once a chat passes `gateway.session_max_messages` (default 200).
+
+Two caveats worth knowing:
+
+- Only the node holding raft leadership can write transcripts. If a message is handled by a follower, the bot stays coherent for that conversation but those turns won't survive a restart. Single-node deployments never hit this.
+- A chat that outgrows the model's context window will still fail; the transcript is kept, but nothing summarises it down yet.
 
 ## What Telegram gives us (and doesn't)
 

@@ -110,6 +110,14 @@ type AgentConfig struct {
 	// DefaultMaxToolLoops.
 	MaxToolLoops int
 
+	// ContextBudget bounds how much prior conversation is replayed
+	// into each turn. Lives on the agent rather than the channel so
+	// every entry point — REST, Telegram, scheduled turns — is
+	// bounded by the same policy. Zero value disables both knobs;
+	// the node wires DefaultContextBudget() when config omits the
+	// section.
+	ContextBudget ContextBudget
+
 	// Skills routes tool-call names that match a registered skill
 	// through the skill invoker instead of the tool Executor. Nil
 	// disables skill dispatch — every tool-call goes through the
@@ -321,6 +329,16 @@ type ProcessMessageResponse struct {
 	// caller persists this to feed subsequent turns.
 	Messages []Message
 
+	// TurnStartIndex is where this turn's own messages begin in
+	// Messages; everything before it is replayed history and the
+	// system prompt. Callers persisting a turn slice from here.
+	//
+	// The agent has to report this rather than let the caller
+	// compute it: ContextBudget may drop history messages before
+	// they reach Messages, so "system + len(history I passed in)"
+	// is not where the turn starts.
+	TurnStartIndex int
+
 	// BudgetState is a snapshot of the TurnBudget at turn end.
 	BudgetState BudgetState
 
@@ -363,7 +381,15 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
 	a.fillDefaults(ctx, &req)
-	return a.runLoop(ctx, req, a.seedMessages(req), &ProcessMessageResponse{})
+	seeded := a.seedMessages(req)
+	// The user message is the last thing seedMessages appends, so
+	// the turn starts there. When the caller sent no text (media
+	// only), the turn starts at whatever the loop appends next.
+	turnStart := len(seeded)
+	if len(seeded) > 0 && seeded[len(seeded)-1].Role == "user" {
+		turnStart = len(seeded) - 1
+	}
+	return a.runLoop(ctx, req, seeded, &ProcessMessageResponse{TurnStartIndex: turnStart})
 }
 
 // fillDefaults populates req.Tools from the agent's Registry and
@@ -490,7 +516,10 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	a.fillDefaults(ctx, &req)
 	msgs := make([]Message, len(priorMessages))
 	copy(msgs, priorMessages)
-	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{})
+	// Everything handed in was already recorded when the turn
+	// stopped for confirmation; only what the resumed leg appends
+	// is new.
+	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{TurnStartIndex: len(msgs)})
 }
 
 func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
@@ -646,11 +675,22 @@ func (a *Agent) forceSummaryReply(
 // a future STT MCP). The decoration is deterministic across turns
 // so prompt caches stay warm.
 func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
-	out := make([]Message, 0, len(req.ConversationHistory)+2)
+	// Budget the replayed history before it reaches the wire. Done
+	// here rather than at the channel so scheduler-originated turns
+	// and every future channel inherit the same policy.
+	history := a.cfg.ContextBudget.Apply(req.ConversationHistory)
+	if dropped := len(req.ConversationHistory) - len(history); dropped > 0 {
+		a.cfg.Logger.Debug("agent: history trimmed to context budget",
+			"turn_id", req.TurnID,
+			"dropped_messages", dropped,
+			"kept_messages", len(history),
+			"budget", a.cfg.ContextBudget.String())
+	}
+	out := make([]Message, 0, len(history)+2)
 	if req.SystemPrompt != "" {
 		out = append(out, Message{Role: "system", Content: req.SystemPrompt})
 	}
-	out = append(out, req.ConversationHistory...)
+	out = append(out, history...)
 	userText := decorateWithAttachments(req.Message, req.Attachments)
 	if userText != "" {
 		out = append(out, Message{Role: "user", Content: userText})

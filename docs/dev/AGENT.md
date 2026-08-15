@@ -139,6 +139,51 @@ sequenceDiagram
   Channel-->>User: reply
 ```
 
+## Context budget
+
+Replayed history is bounded before it reaches the wire, by
+`compute.ContextBudget` in `seedMessages`. It lives on the agent rather than the
+channel so REST, Telegram, and scheduler-originated turns all inherit one policy.
+
+Without it, conversation cost is **quadratic in conversation length** — every
+turn re-sends every previous turn — and a single replayed tool result can be as
+large as `Executor.MaxOutputBytes` (10 MB).
+
+Two knobs, both on by default:
+
+| Knob | Default | Effect |
+|---|---|---|
+| `tail_tokens` | 4000 | Estimated-token cap on replayed history; oldest messages drop first |
+| `history_tool_result_bytes` | 512 | Truncates *replayed* tool results; the turn that produced one always sees it whole |
+
+```toml
+[compute.context]
+tail_tokens               = 4000
+history_tool_result_bytes = 512   # explicit 0 disables either bound
+```
+
+Order matters: elision runs before trimming, because shrinking one 4 KB tool
+result often saves enough that no message has to be dropped at all — keeping the
+shape of the conversation is worth more than the bytes it lost.
+
+Token counts are estimated at 4 bytes/token, no tokenizer. It's a budget, not a
+limit; the provider enforces the real window, and vendoring a tokenizer per model
+family would be false precision.
+
+### Two traps this code exists to avoid
+
+**Orphaned tool results.** Trimming from the oldest end routinely cuts an
+assistant message while keeping the tool results that answered it.
+OpenAI-compatible providers reject a `tool_call_id` no preceding message claims,
+so every later turn in that conversation becomes a 400. `dropOrphanedToolResults`
+sweeps them after trimming.
+
+**The turn boundary.** Once the agent can drop history, a channel can no longer
+compute where a turn starts — "system + the history I passed in" lands past the
+end of the list, and the channel silently persists nothing. The agent reports
+`ProcessMessageResponse.TurnStartIndex`; channels slice from it and never
+recompute it.
+
 ## Design notes
 
 ### Why leaves were built first

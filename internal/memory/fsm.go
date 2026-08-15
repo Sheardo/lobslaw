@@ -161,6 +161,11 @@ func (f *FSM) Apply(l *raft.Log) any {
 }
 
 func (f *FSM) applyPut(entry *lobslawv1.LogEntry) error {
+	// A session append is several writes across two buckets that must
+	// land together — handled before the single-record path below.
+	if p, ok := entry.Payload.(*lobslawv1.LogEntry_SessionAppend); ok {
+		return f.applySessionAppend(p.SessionAppend)
+	}
 	bucket, payload, err := bucketAndPayload(entry)
 	if err != nil {
 		return err
@@ -185,7 +190,74 @@ func (f *FSM) applyDelete(entry *lobslawv1.LogEntry) error {
 	if entry.Id == "" {
 		return fmt.Errorf("DELETE %s: empty id", bucket)
 	}
+	// Deleting a session must also drop its transcript, else the
+	// message records are orphaned in their bucket forever — nothing
+	// else knows the key range. The prefix scan reads only committed
+	// store state, so it replays identically.
+	if bucket == BucketSessions {
+		return f.purgeSession(entry.Id)
+	}
 	return f.store.Delete(bucket, entry.Id)
+}
+
+// applySessionAppend writes one turn atomically-in-effect: evictions
+// first, then message bodies, then the index record last.
+//
+// The index record goes last on purpose. It is the only thing that
+// advertises the retained range, so a crash midway through leaves
+// messages that no reader will look at (harmless, reclaimed by the
+// next trim) rather than an index promising messages that aren't
+// there (a torn read).
+func (f *FSM) applySessionAppend(rec *lobslawv1.SessionAppendRecord) error {
+	if rec == nil || rec.Session == nil {
+		return fmt.Errorf("PUT %s: session append missing index record", BucketSessions)
+	}
+	if rec.Session.Id == "" {
+		return fmt.Errorf("PUT %s: empty session id", BucketSessions)
+	}
+	for _, key := range rec.EvictKeys {
+		if err := f.store.Delete(BucketSessionMessages, key); err != nil {
+			return fmt.Errorf("evict %s/%s: %w", BucketSessionMessages, key, err)
+		}
+	}
+	for _, msg := range rec.Messages {
+		if msg == nil {
+			continue
+		}
+		key := sessionMessageKey(rec.Session.Id, msg.Seq)
+		bytes, err := proto.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("marshal session message %s: %w", key, err)
+		}
+		if err := f.store.Put(BucketSessionMessages, key, bytes); err != nil {
+			return fmt.Errorf("put %s/%s: %w", BucketSessionMessages, key, err)
+		}
+	}
+	bytes, err := proto.Marshal(rec.Session)
+	if err != nil {
+		return fmt.Errorf("marshal session %s: %w", rec.Session.Id, err)
+	}
+	return f.store.Put(BucketSessions, rec.Session.Id, bytes)
+}
+
+// purgeSession drops a session's index record and every message in
+// its key range.
+func (f *FSM) purgeSession(sessionID string) error {
+	var keys []string
+	prefix := sessionMessagePrefix(sessionID)
+	err := f.store.ForEachPrefix(BucketSessionMessages, prefix, func(key string, _ []byte) error {
+		keys = append(keys, key)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scan %s/%s: %w", BucketSessionMessages, prefix, err)
+	}
+	for _, key := range keys {
+		if err := f.store.Delete(BucketSessionMessages, key); err != nil {
+			return fmt.Errorf("delete %s/%s: %w", BucketSessionMessages, key, err)
+		}
+	}
+	return f.store.Delete(BucketSessions, sessionID)
 }
 
 // applyClaim is the CAS primitive: the write goes through only when
@@ -299,6 +371,13 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:
 		return BucketUserPrefs, p.UserPrefs, nil
+	case *lobslawv1.LogEntry_SessionAppend:
+		// Payload spans two buckets; the index bucket is the one
+		// callers key off (change hooks, delete routing). The actual
+		// write is applySessionAppend, not the generic put path.
+		return BucketSessions, p.SessionAppend, nil
+	case *lobslawv1.LogEntry_Session:
+		return BucketSessions, p.Session, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

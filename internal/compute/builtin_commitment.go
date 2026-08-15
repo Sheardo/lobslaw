@@ -2,7 +2,6 @@ package compute
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,16 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oklog/ulid/v2"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
-
-var commitmentIDEntropy = ulid.Monotonic(cryptorand.Reader, 0)
 
 // CommitmentHandlerRef matches node.AgentTurnHandlerRef so
 // commitments created via this builtin dispatch through the same
@@ -119,7 +116,7 @@ func newCommitmentCreateHandler(raft memoryRaftApplier) BuiltinFunc {
 			return nil, 2, fmt.Errorf("commitment_create: due time %s is in the past", formatTimeForUser(dueAt, args))
 		}
 
-		id := ulid.MustNew(ulid.Now(), commitmentIDEntropy).String()
+		id := ids.New()
 		// Auto-capture context from synthetic args injected by
 		// agent.runToolCall. The originating user_id flows into
 		// the commitment params + into the firing turn's prompt
@@ -304,4 +301,3 @@ func parseWhen(when, userTZ string) (time.Time, error) {
 	}
 	return time.Now().UTC().Add(d), nil
 }
-
