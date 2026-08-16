@@ -2649,8 +2649,27 @@ never be dropped becomes a reliability problem on the reply path.
       never blocks — a full buffer drops and counts. A trace with a hole that says "4 dropped" is
       usable; one that silently omits the interesting span is worse than no trace, because it is
       read as evidence of absence.
-- [ ] Tool attribution reflects re-sent context, not just the
-      producing call — verifiable on a scripted multi-tool turn.
+- [x] Tool attribution reflects re-sent context, not just the producing call — verifiable on a
+      scripted multi-tool turn.
+      A `context_carry` span per tool, parented to its `tool_call`, carrying the tokens the result
+      contributed to every LATER prompt and the number of prompts it rode in. Its own kind rather
+      than an attribute on the tool span, because it is a different event at a different time: the
+      tool ran once, and the cost accrued across every prompt afterwards. Folding them together
+      would make a tool look expensive to RUN when what was expensive was carrying its output.
+
+      Flushed from a defer on every exit path — normal, budget-exceeded, confirmation, hard
+      timeout, loop exhausted — because a turn that ended unusually is the one whose cost somebody
+      is asking about. The `tool_call` span itself is emitted immediately rather than buffered, so
+      a turn that dies still has one.
+
+      One part is genuinely an estimate and is labelled as such: providers report usage for the
+      prompt as a whole and never per message, so the share belonging to one tool result is
+      approximated with the same chars/4 heuristic the context budget uses. Being consistently
+      wrong with the budget is worth more than being differently wrong from it.
+
+      `lobslaw trace` states it as a SHARE of the turn rather than adding it: the carried tokens
+      were already billed on the llm_call spans, and summing both would make the one command whose
+      job is "why did this cost what it did" answer it wrongly.
 - [ ] Cached tokens are priced as cached, not fresh.
 - [ ] A span for a non-token-billed call carries its own unit and
       quantity (`video_seconds`, `images`, `credits`…), not a token

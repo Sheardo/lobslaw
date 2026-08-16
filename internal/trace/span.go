@@ -35,6 +35,15 @@ const (
 	KindRetrieval  Kind = "retrieval"
 	KindCompaction Kind = "compaction"
 	KindIngest     Kind = "ingest"
+
+	// KindContextCarry is what a tool result cost by being re-sent.
+	//
+	// Its own kind rather than an attribute on the tool span, because
+	// it is a DIFFERENT event at a different time: the tool ran once,
+	// and the cost accrued across every prompt afterwards. Folding the
+	// two together would make a tool look expensive to run when what
+	// was expensive was carrying its output.
+	KindContextCarry Kind = "context_carry"
 )
 
 // Outcome is how an attempt ended. Named rather than derived from a

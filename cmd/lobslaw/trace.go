@@ -155,18 +155,39 @@ func traceShow(args []string) error {
 // happened"; the total answers "why did that cost what it did", which
 // is the question somebody opened this for.
 func renderTurn(turnID string, spans []trace.Span) {
-	var totalCost float64
+	var totalCost, attributed float64
 	var totalDur time.Duration
 	var prompt, completion, cached int
 	for _, s := range spans {
-		totalCost += s.CostUSD
 		totalDur += s.Duration
+		// A context-carry span ATTRIBUTES cost the LLM spans have
+		// already counted; it does not add any. Summing both would
+		// double the turn's token count and roughly double its cost —
+		// which would make the one command whose job is to answer "why
+		// did this cost what it did" answer it wrongly.
+		if s.Kind == trace.KindContextCarry {
+			attributed += s.CostUSD
+			continue
+		}
+		totalCost += s.CostUSD
 		prompt += s.Usage.PromptTokens
 		completion += s.Usage.CompletionTokens
 		cached += s.Usage.CachedTokens
 	}
 
-	fmt.Printf("turn %s — %d spans, %s, $%.4f\n\n", turnID, len(spans), totalDur.Round(time.Millisecond), totalCost)
+	fmt.Printf("turn %s — %d spans, %s, $%.4f\n", turnID, len(spans),
+		totalDur.Round(time.Millisecond), totalCost)
+	if attributed > 0 {
+		// Stated as a share of the total, not added to it. This is the
+		// number R24 exists for: in an agentic turn it is usually the
+		// dominant cost and is currently attributable to nothing.
+		share := 0.0
+		if totalCost > 0 {
+			share = attributed / totalCost * 100
+		}
+		fmt.Printf("  of which $%.4f (%.0f%%) is re-sent tool output\n", attributed, share)
+	}
+	fmt.Println()
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintln(w, "KIND\tPROVIDER\tNAME\tTRY\tOUTCOME\tDURATION\tTOKENS\tCOST\tDETAIL")
@@ -181,7 +202,16 @@ func renderTurn(turnID string, spans []trace.Span) {
 		if s.Unit != "" {
 			// A non-token-billed call carries its own unit. A token
 			// count of zero on a call that cost money reads as free.
-			tokens = fmt.Sprintf("%g %s", s.Quantity, s.Unit)
+			//
+			// A context carry has both: the tokens it contributed and
+			// the number of prompts it rode in. Showing only one hides
+			// the calculation — "40020 tokens" looks like a big tool,
+			// and "5 resends" looks like nothing at all.
+			if s.Usage.PromptTokens > 0 {
+				tokens = fmt.Sprintf("%d over %g %s", s.Usage.PromptTokens, s.Quantity, s.Unit)
+			} else {
+				tokens = fmt.Sprintf("%g %s", s.Quantity, s.Unit)
+			}
 		}
 		cost := ""
 		if s.CostUSD > 0 {
