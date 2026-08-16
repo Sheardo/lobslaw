@@ -11,6 +11,10 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"log/slog"
+
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 )
 
 // Runtime enumerates the skill handler runtimes. MVP supports
@@ -237,6 +241,17 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 	}
 
 	sum := sha256.Sum256(raw)
+	// The description is prose that reaches the model — it is how a
+	// skill advertises itself — so it is worth the same scan as any
+	// other text bound for a prompt. Warn rather than reject: a
+	// signature already covers provenance, and refusing to load a
+	// skill on a heuristic would break a working install over a
+	// phrase.
+	for _, f := range promptguard.Scan(m.Name + "\n" + m.Description) {
+		slog.Default().Warn("skills: suspicious content in manifest",
+			"skill", m.Name, "dir", dir, "detector", f.Detector, "detail", f.Detail)
+	}
+
 	skill := &Skill{
 		Manifest:    m,
 		ManifestDir: dir,

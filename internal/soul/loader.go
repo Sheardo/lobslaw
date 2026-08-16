@@ -11,6 +11,10 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
+
+	"log/slog"
+
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 )
 
 // Soul is the parsed form of a SOUL.md file: the YAML frontmatter
@@ -44,6 +48,21 @@ func Load(path string) (*Soul, error) {
 	if err != nil {
 		return nil, fmt.Errorf("soul: read %q: %w", abs, err)
 	}
+
+	// Warn, never block. A SOUL is the agent's identity: refusing to
+	// load it on a heuristic would take the assistant down over a
+	// false positive, which is a worse outcome than the thing being
+	// guarded against.
+	//
+	// Worth scanning even though it is operator-authored, because it is
+	// not only operator-written: the soul_* tools let the agent tune
+	// its own identity, so a poisoned memory can drive an edit here.
+	// This is the tripwire for that.
+	for _, f := range promptguard.Scan(string(raw)) {
+		slog.Default().Warn("soul: suspicious content in SOUL file",
+			"path", abs, "detector", f.Detector, "detail", f.Detail)
+	}
+
 	return Parse(raw, abs)
 }
 
