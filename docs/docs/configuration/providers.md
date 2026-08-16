@@ -63,20 +63,75 @@ Conservative discovery: when a model name appears in multiple provider listings,
 
 ## Trust tiers
 
+`trust_tier` declares **how exposed your content is** when a provider handles it. It is not a role,
+and it has nothing to do with which provider runs first — that is `roles.main` and `backup`.
+
 ```toml
 [[compute.providers]]
+label      = "ollama"
+trust_tier = "local"          # 100
+
+[[compute.providers]]
+label      = "anthropic"
+trust_tier = "private"        # 50
+
+[[compute.providers]]
+label      = "my-vps"
+trust_tier = 60               # between private and local
+
+[[compute.providers]]
 label      = "openrouter"
-trust_tier = "primary"        # primary | backup | adversarial
-backup     = "openrouter-fallback"
+trust_tier = "public"         # 1
 ```
 
-| Tier | Used by | Fallback |
-|---|---|---|
-| `primary` | default chat, scheduled tasks, commitments | falls back to `backup` provider on rate-limit / 5xx |
-| `backup` | failover only | usually not called directly |
-| `adversarial` | `council_review(mode="adversarial")` | independent — never falls back |
+**Higher is more trusted.**
 
-The `adversarial` tier is for council reviews — you want a *different* provider's opinion, so a fallback to the primary defeats the purpose.
+| Name | Value | Meaning |
+|---|---|---|
+| `local` | 100 | inference on hardware you control; content never leaves the host |
+| `private` | 50 | a third party under a contract excluding training on submitted data |
+| `public` | 1 | anything else |
+| — | 0 | reserved: *unset*. Never write it |
+
+You can write a name or a number. The names are reserved points on the scale, and numbers exist for
+the cases they do not fit — a model on a VPS you rent is not `local`, because the hardware is
+somebody else's, and it is plainly better than a public API with no contract. `trust_tier = 60` says
+exactly that.
+
+An unrecognised **name** is a config error, not a new tier. A number outside 1–100 is a config error
+too. Both fail at boot with the offending value named.
+
+### The floor
+
+Set a floor in `SOUL.md` and providers below it are never used:
+
+```yaml
+config:
+  min_trust_tier: private     # or 50
+```
+
+Every provider at or above the floor is eligible. Everything below is refused — including as a
+*backup*, which is the case that matters: failover exists to rescue a turn when the primary fails,
+and without the floor it would rescue it onto whatever provider happened to be next.
+
+The floor is enforced on the chat chain, on every modality chain (vision, audio, PDF, speak, image
+— a vision provider is handed your image, and a speak provider the text of the reply), and at boot.
+A provider below the floor stops the node starting, so you find out from a config error rather than
+from a turn.
+
+### If you omit it
+
+An omitted `trust_tier` means *nobody said*, not *public*. That is fine while no floor is set. The
+moment you set `min_trust_tier`, every provider needs an explicit tier or the node refuses to start
+— an undeclared tier is not evidence of a high one.
+
+`min_trust_tier` itself, unset, means no floor at all.
+
+### What it does not do
+
+The floor governs where content goes **among the providers you configured**. It says nothing about
+what a provider does with your content after receiving it, and it cannot: `trust_tier` is your
+assertion about a contract, not something lobslaw can verify.
 
 ## Endpoints
 

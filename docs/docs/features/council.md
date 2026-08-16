@@ -66,18 +66,27 @@ For adversarial reviews you want providers from different families:
 | Different vendors (anthropic + openai + google) | Good — different RLHF, different training data |
 | Mixed open + closed (claude + llama via openrouter) | Excellent for sanity-checking |
 
-## Trust tier interaction
+## Keeping a council provider independent
 
-Providers declared `trust_tier = "adversarial"` are reserved for council use — they don't fall back to the primary on rate-limit / failure. The point of an adversarial review is the *different* opinion, so falling back to the primary defeats the purpose.
+An adversarial council wants a *different* provider's opinion, so a council member falling back to
+your primary defeats the purpose. That is controlled by `backup`, not by the trust tier:
 
 ```toml
 [[compute.providers]]
-label      = "minimax-adversarial"
+label      = "minimax-council"
 endpoint   = "..."
 model      = "MiniMax-M2"
-trust_tier = "adversarial"
-backup     = ""        # explicit none
+trust_tier = "public"
+backup     = ""        # explicit none — never falls back
 ```
+
+`adversarial` is a **council review mode** (`council_review(mode="adversarial")`), not a provider
+setting. Earlier versions of this page described it as a trust tier; it never was one.
+
+`trust_tier` is unrelated to council membership — it declares how exposed your content is at that
+provider. If you have set `min_trust_tier` in `SOUL.md`, council members are subject to it like
+anything else: a council is several providers seeing your question, which is more exposure than a
+normal turn, not less.
 
 ## When to use it
 
