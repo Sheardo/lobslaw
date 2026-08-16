@@ -447,6 +447,9 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		SelfTaughtStaleAfterDays:     cfg.SelfLearning.StaleAfterDays,
 		SelfTaughtArchiveAfterDays:   cfg.SelfLearning.ArchiveAfterDays,
 		SelfTaughtProposalExpiryDays: cfg.SelfLearning.ProposalExpiryDays,
+		NotifyChannels:               cfg.SelfLearning.Notify.Channels,
+		NotifySubjects:               cfg.SelfLearning.Notify.Subjects,
+		NotifyInterval:               cfg.SelfLearning.Notify.Interval,
 
 		SessionGrantTTL:     cfg.Security.SessionGrantTTL,
 		Identity:            cfg.Identity,

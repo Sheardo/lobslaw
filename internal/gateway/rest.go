@@ -27,6 +27,11 @@ import (
 
 // RESTConfig tunes the REST channel.
 type RESTConfig struct {
+	// Notices appends operator notices to outbound replies. Nil
+	// disables them entirely, which is what a deployment that never
+	// opted this channel in gets.
+	Notices *Notices
+
 	// QueueMode and QueueDebounce configure per-session turn
 	// serialisation. Zero value is QueueSerial.
 	QueueMode     QueueMode
@@ -575,7 +580,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := messageResponse{
-		Reply:              resp.Reply,
+		// Appended after the transcript was persisted above, and to
+		// the outbound text only. A notice recorded as an assistant
+		// message is one the model reads next turn and reasons about.
+		Reply: s.cfg.Notices.Append(r.Context(), "rest",
+			sessionRef.ChannelID, noticeSubject(claims), resp.Reply),
 		NeedsConfirmation:  resp.NeedsConfirmation,
 		ConfirmationReason: resp.ConfirmationReason,
 		PromptID:           lastPromptID,

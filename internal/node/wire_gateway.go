@@ -104,6 +104,7 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
+		Notices:         n.notices,
 		QueueMode:       gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
 		QueueDebounce:   n.cfg.Gateway.QueueDebounce,
 		Leaser:          n.newSessionLeaser(),
@@ -189,6 +190,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		channelState = memory.NewChannelStateService(n.raft, n.store)
 	}
 	return gateway.NewTelegramHandler(gateway.TelegramConfig{
+		Notices:          n.notices,
 		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
 		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
 		Approvals:        n.approvals,
