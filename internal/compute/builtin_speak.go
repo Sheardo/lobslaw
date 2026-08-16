@@ -26,6 +26,11 @@ type SpeakConfig struct {
 	// a demotion is shared with every other modality that reaches the
 	// same endpoint. Empty opts out of health tracking.
 	Label string
+
+	// TrustTier is the provider's declared tier, checked against the
+	// soul's min_trust_tier before this provider is used. Empty fails
+	// any set floor: an undeclared tier is not evidence of a high one.
+	TrustTier types.TrustTier
 }
 
 // DefaultSpeakMaxChars is roughly a few minutes of speech — long
@@ -52,9 +57,9 @@ func RegisterSpeakBuiltin(b *Builtins, cfgs ...SpeakConfig) error {
 		if cfg.MaxChars <= 0 {
 			cfg.MaxChars = DefaultSpeakMaxChars
 		}
-		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newSpeakHandler(cfg)})
+		handlers = append(handlers, failoverHandler{label: cfg.Label, tier: cfg.TrustTier, fn: newSpeakHandler(cfg)})
 	}
-	return b.Register("speak", failoverBuiltin("speak", nil, b.Health(), handlers...))
+	return b.Register("speak", failoverBuiltin("speak", nil, b.Health(), b.TrustFloor(), handlers...))
 }
 
 func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {

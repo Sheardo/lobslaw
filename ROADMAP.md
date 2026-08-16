@@ -45,16 +45,16 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ✅ | 🔴 P0 | M | — |
 | **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🟨 | 🔴 P0 | M | — |
 | **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | ✅ | 🔴 P0 | XS | — |
-| **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ⬜ | 🔴 P0 | M | — |
+| **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ✅ | 🔴 P0 | M | — |
 | **R6** | [Retrieval mechanics](#r6--retrieval-mechanics) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | L | — |
 | **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | M | — |
 | **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | S | — |
 | **R7** | [Principal identity](#r7--principal-identity) | 🟨 | 🟠 P1 | M | — |
-| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | ⬜ | 🟠 P1 | M | — |
-| **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ⬜ | 🟠 P1 | S | — |
-| **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ⬜ | 🟡 P2 | M | R11 |
+| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | 🟨 | 🟠 P1 | M | — |
+| **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ✅ | 🟠 P1 | S | — |
+| **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ✅ | 🟡 P2 | M | R11 |
 | **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
-| **R12** | [Memory transparency](#r12--memory-transparency) | ⬜ | 🟡 P2 | M | — |
+| **R12** | [Memory transparency](#r12--memory-transparency) | 🟨 | 🟡 P2 | M | — |
 | **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ✅ | 🟠 P1 | M | R15, R16 |
 | **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟡 | 🟠 P1 | S | — |
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
@@ -1477,7 +1477,19 @@ so the existing resolver/capability/roles tests stay green throughout.
       Per-node, not Raft; no half-open probe state — the chain is the probe.
 - [ ] A chain step falls through without abandoning the chain. *Chat and modality chains both
       fail over; a multi-step chain's individual STEP still resolves to one provider.*
-- [ ] Trust-tier floor is honoured at every candidate, not just the first.
+- [x] Trust-tier floor is honoured at every candidate, not just the first.
+      **It was honoured at NO candidate.** The box as written understated it: the only code that
+      read `min_trust_tier` was `Resolver.buildDecision`, and nothing calls `Resolver.Resolve` —
+      the turn path is the provider *backup chain*, which walked label to label with no notion of
+      a tier. `soul.ValidateProviderTier` had no callers either. So an operator could set
+      `min_trust_tier = "private"`, watch it render into the system prompt, and have a turn
+      silently complete on a public provider the moment the primary returned a 429: the failover
+      machinery that makes the assistant resilient was the same machinery that lowered the floor.
+      Now enforced at every candidate on the chat chain AND on every modality chain — a vision
+      provider is handed the user's image, and a speak provider the text of the reply, so they are
+      not lesser recipients of content. Validated at boot as well: fatal when the *primary* is
+      below the floor (no turn could ever run), warn per below-floor backup (the chain terminates
+      earlier than the operator expects, and the reason is logged).
 - [ ] `hint = "deep"` resolves through a chain an operator can inspect and override.
 - [ ] Per-attempt audit entries (provider, latency, outcome, cost).
 

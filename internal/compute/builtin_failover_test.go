@@ -56,7 +56,7 @@ func TestModalityFailoverPerClass(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			calls := &[]string{}
-			h := failoverBuiltin("read_image", quietLog(), nil,
+			h := failoverBuiltin("read_image", quietLog(), nil, nil,
 				failoverHandler{label: "primary", fn: stubHandler("primary", tc.err, calls)},
 				failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
 			)
@@ -87,7 +87,7 @@ func TestModalityFailoverPerClass(t *testing.T) {
 func TestSingleProviderReportsItsOwnError(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_pdf", quietLog(), nil,
+	h := failoverBuiltin("read_pdf", quietLog(), nil, nil,
 		failoverHandler{label: "only", fn: stubHandler("only", Transient(errors.New("boom")), calls)})
 
 	_, _, err := h(context.Background(), nil)
@@ -109,7 +109,7 @@ func TestSingleProviderReportsItsOwnError(t *testing.T) {
 func TestChainExhaustedReportsAll(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_audio", quietLog(), nil,
+	h := failoverBuiltin("read_audio", quietLog(), nil, nil,
 		failoverHandler{label: "a", fn: stubHandler("a", Transient(errors.New("first")), calls)},
 		failoverHandler{label: "b", fn: stubHandler("b", Transient(errors.New("second")), calls)},
 		failoverHandler{label: "c", fn: stubHandler("c", Transient(errors.New("third")), calls)},
@@ -131,7 +131,7 @@ func TestChainExhaustedReportsAll(t *testing.T) {
 func TestModalityFailoverStopsOnCancellation(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_image", quietLog(), nil,
+	h := failoverBuiltin("read_image", quietLog(), nil, nil,
 		failoverHandler{label: "primary", fn: stubHandler("primary", Transient(errors.New("boom")), calls)},
 		failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
 	)

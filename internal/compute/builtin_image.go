@@ -21,6 +21,11 @@ type ImageConfig struct {
 	// same endpoint. Empty opts out of health tracking.
 	Label string
 
+	// TrustTier is the provider's declared tier, checked against the
+	// soul's min_trust_tier before this provider is used. Empty fails
+	// any set floor: an undeclared tier is not evidence of a high one.
+	TrustTier types.TrustTier
+
 	// MaxPromptChars bounds one prompt. Image APIs reject over-long
 	// prompts with a 400, which costs a round trip to learn something
 	// checkable here. Zero picks DefaultImagePromptChars.
@@ -47,9 +52,9 @@ func RegisterImageBuiltin(b *Builtins, cfgs ...ImageConfig) error {
 		if cfg.MaxPromptChars <= 0 {
 			cfg.MaxPromptChars = DefaultImagePromptChars
 		}
-		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newImageHandler(cfg)})
+		handlers = append(handlers, failoverHandler{label: cfg.Label, tier: cfg.TrustTier, fn: newImageHandler(cfg)})
 	}
-	return b.Register("generate_image", failoverBuiltin("generate_image", nil, b.Health(), handlers...))
+	return b.Register("generate_image", failoverBuiltin("generate_image", nil, b.Health(), b.TrustFloor(), handlers...))
 }
 
 func newImageHandler(cfg ImageConfig) BuiltinFunc {

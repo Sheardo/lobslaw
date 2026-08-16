@@ -121,6 +121,11 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 	// off the registry at Register time, so wiring it after would give
 	// every chain a nil one.
 	builtins.SetHealth(n.providerHealth)
+	// Same reason as the health tracker: failoverBuiltin reads this off
+	// the registry at Register time, so wiring it after the modalities
+	// register would give every chain a nil floor — which permits
+	// everything, and would be the failure mode hardest to notice.
+	builtins.SetTrustFloor(n.trustFloorAccessor())
 	if err := compute.RegisterStdlibBuiltins(builtins); err != nil {
 		return nil, fmt.Errorf("builtins: %w", err)
 	}
@@ -669,11 +674,12 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 	cfgs := make([]compute.VisionConfig, 0, len(eps))
 	for _, ep := range eps {
 		cfgs = append(cfgs, compute.VisionConfig{
-			Label:    ep.label,
-			Endpoint: ep.endpoint,
-			Model:    ep.model,
-			APIKey:   ep.apiKey,
-			Format:   compute.VisionFormat(ep.format),
+			Label:     ep.label,
+			TrustTier: ep.trustTier,
+			Endpoint:  ep.endpoint,
+			Model:     ep.model,
+			APIKey:    ep.apiKey,
+			Format:    compute.VisionFormat(ep.format),
 		})
 	}
 	if err := compute.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
@@ -709,11 +715,12 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 			audioFmt = compute.AudioFormatChatMultimodal
 		}
 		cfgs = append(cfgs, compute.AudioConfig{
-			Label:    ep.label,
-			Endpoint: ep.endpoint,
-			Model:    ep.model,
-			APIKey:   ep.apiKey,
-			Format:   audioFmt,
+			Label:     ep.label,
+			TrustTier: ep.trustTier,
+			Endpoint:  ep.endpoint,
+			Model:     ep.model,
+			APIKey:    ep.apiKey,
+			Format:    audioFmt,
 		})
 	}
 	if err := compute.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
@@ -763,10 +770,11 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 	cfgs := make([]compute.PDFConfig, 0, len(eps))
 	for _, ep := range eps {
 		cfgs = append(cfgs, compute.PDFConfig{
-			Label:    ep.label,
-			Endpoint: ep.endpoint,
-			Model:    ep.model,
-			APIKey:   ep.apiKey,
+			Label:     ep.label,
+			TrustTier: ep.trustTier,
+			Endpoint:  ep.endpoint,
+			Model:     ep.model,
+			APIKey:    ep.apiKey,
 		})
 	}
 	if err := compute.RegisterPDFBuiltin(builtins, cfgs...); err != nil {

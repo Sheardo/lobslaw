@@ -773,3 +773,88 @@ Steps 1–5 add no capability and are the whole point: they are what
 make step 8 a day's work per modality instead of a fresh argument each
 time. Step 3 is the checkpoint — if the abstraction survives contact
 with four existing implementations, it will survive the fifth.
+
+---
+
+## The trust floor
+
+`min_trust_tier` in SOUL.md declares the weakest provider that may see
+this deployment's content:
+
+```yaml
+config:
+  min_trust_tier: private
+```
+
+| Tier | Meaning |
+|---|---|
+| `local` | inference on hardware you control; content never leaves the host |
+| `private` | a third party under a contract excluding training on submitted data |
+| `public` | anything else |
+
+### It was enforced nowhere
+
+Worth recording plainly, because the shape of the bug is instructive.
+The setting was parsed, validated, logged at boot, and rendered into
+the system prompt. The only code that *checked* it was
+`Resolver.buildDecision` — and nothing calls `Resolver.Resolve`. The
+path that serves every turn is the provider **backup chain**, which
+walked from label to label with no notion of a tier at all.
+`soul.ValidateProviderTier` had no callers either.
+
+So: set `min_trust_tier = "private"`, see it in the prompt, and the
+first time the primary provider returns a 429 the turn completes on a
+public backup. **The failover machinery that makes the assistant
+resilient was the same machinery that lowered the floor** — and it did
+it precisely when something had gone wrong, which is when nobody is
+reading logs.
+
+A floor checked at the first candidate and nowhere after is not a
+floor. It is a floor with a hole in it exactly where the interesting
+case lives.
+
+### Where it is enforced now
+
+- **The chat backup chain**, at every candidate, on every turn.
+- **Every modality failover chain** — vision, audio, PDF, speak, image.
+  A modality provider is not a lesser recipient: a vision provider is
+  handed the user's image, and a speak provider the text of the reply.
+- **At boot**, so an operator finds out before a turn fails rather than
+  when one does.
+
+The single-provider modality case used to skip the failover wrapper
+entirely on the grounds that one provider deserves no chain machinery.
+That is exactly the config where an unchecked provider is the *only*
+thing that runs, so the wrapper now always applies — only the error
+message varies, because "all 1 providers in the chain failed" reads as
+an outage across a chain that does not exist.
+
+### Boot behaviour is deliberately asymmetric
+
+| Situation | Behaviour |
+|---|---|
+| primary below the floor | **refuse to start** |
+| a backup below the floor | warn, naming it; skipped at dispatch |
+| `min_trust_tier` is a typo | **refuse to start** |
+
+A backup below the floor is a config that *degrades* — the chain
+terminates earlier than expected and the reason is logged. A primary
+below the floor is a config where no turn can ever run, and booting
+into that wastes the one moment somebody was in a position to fix it.
+
+A typo is refused rather than ignored: the operator asked for a
+restriction and wrote a string nothing recognises, and treating that as
+"no floor" would grant the exact opposite of what they intended. For
+the same reason, a provider with **no** declared `trust_tier` fails any
+set floor — an undeclared tier is not evidence of a high one.
+
+An unset floor permits everything. An operator who has not opted in has
+not asked for a restriction, and inventing one would break every
+existing deployment on upgrade.
+
+### What it is not
+
+The floor governs where content goes among *configured providers*. It
+says nothing about what a provider does with it after receiving it,
+and it cannot: `trust_tier` is an operator's assertion about a
+contract, not something lobslaw can verify.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // failoverBuiltin turns an ordered list of handlers for one modality
@@ -33,26 +35,42 @@ import (
 // modality is the waste this exists to avoid.
 type failoverHandler struct {
 	label string
-	fn    BuiltinFunc
+	// tier is the provider's declared trust tier, checked against the
+	// soul floor before the handler runs. A modality provider is not a
+	// lesser recipient of content — a vision provider is handed the
+	// user's image, and a speak provider the text of the reply.
+	tier types.TrustTier
+	fn   BuiltinFunc
 }
 
-func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, handlers ...failoverHandler) BuiltinFunc {
-	if len(handlers) == 1 {
-		// One provider is the common case and deserves no wrapper: no
-		// extra frame, and nothing in the logs implying a chain exists.
-		return handlers[0].fn
-	}
+func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, floor func() types.TrustTier, handlers ...failoverHandler) BuiltinFunc {
 	if log == nil {
 		log = slog.Default()
 	}
+	// The single-provider case no longer skips the wrapper. It used to,
+	// on the grounds that one provider deserves no chain machinery —
+	// but the floor has to be checked whether or not there is anywhere
+	// to fall through to, and "one provider" is exactly the config
+	// where an unchecked one is the only thing that runs.
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		var (
-			lastOut  []byte
-			lastCode int
-			lastErr  error
-			skipped  int
+			lastOut    []byte
+			lastCode   int
+			lastErr    error
+			skipped    int
+			belowFloor int
+			considered []TrustCandidate
 		)
+		want := trustFloorOf(floor)
 		for i, h := range handlers {
+			considered = append(considered, TrustCandidate{Label: h.label, Tier: h.tier})
+			if !MeetsFloor(want, h.tier) {
+				belowFloor++
+				log.Warn("compute: provider excluded by the trust floor",
+					"modality", modality, "label", h.label,
+					"trust_tier", h.tier, "min_trust_tier", want)
+				continue
+			}
 			if !health.Available(h.label) {
 				skipped++
 				log.Debug("compute: skipping demoted provider",
@@ -79,10 +97,26 @@ func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 				"provider_index", i, "label", h.label)
 			lastOut, lastCode, lastErr = out, code, err
 		}
+		if lastErr == nil && belowFloor > 0 && belowFloor+skipped == len(handlers) {
+			return nil, 1, fmt.Errorf("%s: %w", modality,
+				&ErrBelowTrustFloor{Floor: want, Considered: considered})
+		}
 		if lastErr == nil {
 			return nil, 1, fmt.Errorf(
 				"%s: every provider is in cooldown (%d demoted); "+
 					"check the logs for credential or quota errors", modality, skipped)
+		}
+		// A lone provider's error is its own. "all 1 providers in the
+		// chain failed" reads as an outage across a chain that does not
+		// exist, and sends an operator looking for the other providers.
+		//
+		// This used to be handled by returning the bare handler when
+		// there was only one — which also skipped the trust-floor
+		// check, in exactly the config where the unchecked provider is
+		// the only thing that runs. The wrapper now always applies and
+		// the MESSAGE is what varies.
+		if len(handlers) == 1 {
+			return lastOut, lastCode, fmt.Errorf("%s: %w", modality, lastErr)
 		}
 		// Every provider was tried and every one failed retryably. The
 		// last error is the most recent evidence, and the count tells an
@@ -92,4 +126,15 @@ func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 			"%s: all %d providers in the chain failed; last error: %w",
 			modality, len(handlers), lastErr)
 	}
+}
+
+// trustFloorOf tolerates a nil accessor, which is what a caller that
+// has no soul wired passes — a test, or a node with no SOUL.md. Empty
+// permits everything, because an operator who has not opted in has not
+// asked for a restriction.
+func trustFloorOf(floor func() types.TrustTier) types.TrustTier {
+	if floor == nil {
+		return ""
+	}
+	return floor()
 }

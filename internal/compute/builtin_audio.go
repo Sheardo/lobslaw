@@ -55,6 +55,11 @@ type AudioConfig struct {
 	// a demotion is shared with every other modality that reaches the
 	// same endpoint. Empty opts out of health tracking.
 	Label string
+
+	// TrustTier is the provider's declared tier, checked against the
+	// soul's min_trust_tier before this provider is used. Empty fails
+	// any set floor: an undeclared tier is not evidence of a high one.
+	TrustTier types.TrustTier
 }
 
 // RegisterAudioBuiltin installs read_audio. Required-fields check
@@ -88,9 +93,9 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 		if client == nil {
 			client = &http.Client{Timeout: 120 * time.Second}
 		}
-		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newReadAudioHandler(cfg, client)})
+		handlers = append(handlers, failoverHandler{label: cfg.Label, tier: cfg.TrustTier, fn: newReadAudioHandler(cfg, client)})
 	}
-	return b.Register("read_audio", failoverBuiltin("read_audio", nil, b.Health(), handlers...))
+	return b.Register("read_audio", failoverBuiltin("read_audio", nil, b.Health(), b.TrustFloor(), handlers...))
 }
 
 // AudioToolDef is the ToolDef registered alongside the builtin.

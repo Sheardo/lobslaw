@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
@@ -274,6 +275,12 @@ type HookResponse struct {
 // single Agent instance handles every turn on a node.
 type Agent struct {
 	cfg AgentConfig
+
+	// belowFloorReported dedupes the trust-floor exclusion warning.
+	// The condition holds for as long as the config does, and a line
+	// repeated every turn is one an operator filters out — including
+	// the first time it would have told them something.
+	belowFloorReported sync.Map
 }
 
 // SetReview attaches the post-turn review fork.
@@ -1053,8 +1060,29 @@ func errText(err error) string {
 	return err.Error()
 }
 
+// reportBelowFloor names a provider the floor excluded, once per
+// label per process.
+//
+// Once, because this fires on every turn for as long as the config
+// stays as it is, and a line repeated per turn is one an operator
+// filters out — including the first time it would have told them
+// something. Warn rather than debug: a provider silently dropped from
+// a failover chain is the difference between a resilient deployment
+// and one that looks resilient.
+func (a *Agent) reportBelowFloor(label string, tier, floor types.TrustTier) {
+	if _, seen := a.belowFloorReported.LoadOrStore(label, struct{}{}); seen {
+		return
+	}
+	a.cfg.Logger.Warn("agent: provider excluded by the trust floor",
+		"label", label, "trust_tier", tier, "min_trust_tier", floor)
+}
+
 func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	// Single-provider mode: no registry wired, no chain to walk.
+	// Single-provider mode: no registry wired, no chain to walk. The
+	// floor cannot be enforced here — there is no tier to read, only a
+	// bare LLMProvider — so boot-time validation is what covers this
+	// path, and it refuses to start rather than letting a turn run
+	// unchecked.
 	if a.cfg.Providers == nil || a.cfg.PrimaryLabel == "" {
 		return a.cfg.Provider.Chat(ctx, req)
 	}
@@ -1064,11 +1092,33 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 		return a.cfg.Provider.Chat(ctx, req)
 	}
 
+	// Read once per dispatch rather than once per candidate, so a
+	// soul tuned mid-chain cannot let one turn use two different
+	// floors.
+	floor := FloorOf(a.cfg.Soul)
+
 	var (
-		lastErr error
-		skipped int
+		lastErr    error
+		skipped    int
+		considered []TrustCandidate
+		belowFloor int
 	)
 	for _, entry := range chain {
+		// The floor, at EVERY candidate.
+		//
+		// It was checked nowhere on this path: the only code that read
+		// min_trust_tier was the chain Resolver, which nothing calls.
+		// So an operator could set a floor, watch it render into the
+		// prompt, and have a turn silently complete on a public
+		// provider the moment the primary returned a 429 — the
+		// failover machinery that makes the assistant resilient was
+		// the same machinery that lowered the floor.
+		considered = append(considered, TrustCandidate{Label: entry.Label, Tier: entry.TrustTier})
+		if !MeetsFloor(floor, entry.TrustTier) {
+			belowFloor++
+			a.reportBelowFloor(entry.Label, entry.TrustTier, floor)
+			continue
+		}
 		// A provider that failed recently is skipped rather than
 		// re-tried. Without this the chain pays a round-trip and a
 		// timeout on every turn to rediscover a key that was revoked
@@ -1097,6 +1147,13 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 		a.cfg.Health.RecordFailure(entry.Label, ClassifyFailure(err))
 		logProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
 		lastErr = err
+	}
+	// The floor beat the chain, and that is not an outage. Reported as
+	// its own error because waiting does not fix it and an operator
+	// sent to the logs looking for a provider problem would find a
+	// healthy one.
+	if lastErr == nil && belowFloor > 0 && belowFloor+skipped == len(chain) {
+		return nil, &ErrBelowTrustFloor{Floor: floor, Considered: considered}
 	}
 	if lastErr == nil {
 		// Every provider was skipped as demoted and none was actually
