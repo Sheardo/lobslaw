@@ -189,6 +189,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
 		Approvals:        n.approvals,
 		ApprovalRules:    n.approvalRules,
+		Identity:         n.identityResolver(),
 		Leaser:           n.newSessionLeaser(),
 		ArtifactOpener:   n.artifactOpener(),
 		BotToken:         botToken,
