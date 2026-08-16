@@ -793,6 +793,59 @@ lobslaw learned accept <id> --apply
 lobslaw learned reject <id> --apply
 ```
 
+### Version history
+
+Every superseded version is snapshotted before it is replaced, so a
+refinement that turned out worse can be undone without the original
+being rewritten from memory.
+
+```
+lobslaw learned history <id>
+lobslaw learned rollback <id> <version> --apply
+```
+
+A rollback is itself a **new version**, not a reuse of the old number —
+two different records at one version would stop the history being a
+sequence anybody can reason about — and the version rolled away from is
+snapshotted first, so rolling back to the wrong one has not destroyed
+what you were on.
+
+**`self_learning.history_depth`** (default 10) bounds it. Named for
+what it bounds: `keep_versions` does not say whether the active version
+counts, which is the first thing anybody asks. It counts **prior**
+versions; the active one is always kept and does not count.
+
+Bounded because it is not free — every version lives in the log and in
+every snapshot thereafter, on every node. Unbounded history is a
+store-growth problem that surfaces months later as slow snapshots.
+
+History keys are zero-padded (`skill:tidy@00000007`) so a prefix scan
+is version order. Without the padding v10 sorts between v1 and v2, and
+"the oldest version" becomes whichever one looks smallest as a string.
+
+### Size limits
+
+Every raft apply replicates to every node and lives in snapshots
+thereafter, so one oversized artefact bloats every node permanently.
+
+| Limit | Default | Config |
+|---|---|---|
+| per file | 256 KiB | `self_learning.max_artefact_file_bytes` |
+| per artefact | 1 MiB | `self_learning.max_artefact_total_bytes` |
+
+Exceeding either **fails the write and names the offending path** —
+rather than splitting, truncating, or accepting with a warning. The
+author is the only party positioned to fix it, and "too large" without
+saying which file leaves them guessing at a bundle they may not have
+assembled by hand.
+
+Total is checked separately from per-file, or a bundle of a hundred
+just-under-limit files would pass.
+
+The store holds instructions, not payloads. Anything genuinely large
+belongs in storage, content-addressed, with only its digest travelling
+in the log.
+
 ### Usage counters
 
 A bucket, not a sidecar file, for reasons stronger than tidiness:

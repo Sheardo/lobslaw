@@ -80,6 +80,24 @@ var (
 	// ErrNoPendingRevision is returned when approving or rejecting a
 	// refinement that is not there.
 	ErrNoPendingRevision = errors.New("self-taught: no pending refinement")
+
+	// ErrArtefactTooLarge means a body or a bundled file is past the
+	// size an artefact may reach.
+	//
+	// Refused rather than split or truncated. Every raft apply
+	// replicates to every node and lives in snapshots thereafter, so
+	// one oversized artefact bloats every node permanently — and the
+	// author is the only party positioned to fix it, which is why the
+	// error names the offending path.
+	ErrArtefactTooLarge = errors.New("self-taught: artefact is too large to replicate")
+)
+
+// Size limits. Text-sized on purpose: the store holds instructions,
+// not payloads. Anything genuinely large belongs in storage,
+// content-addressed, with only its digest travelling in the log.
+const (
+	DefaultMaxArtefactFileBytes  = 256 * 1024
+	DefaultMaxArtefactTotalBytes = 1024 * 1024
 )
 
 // SelfTaughtStore holds what the agent wrote for itself.
@@ -87,6 +105,10 @@ type SelfTaughtStore struct {
 	raft  raftApplier
 	store *Store
 	mode  SelfLearningMode
+
+	maxFileBytes  int
+	maxTotalBytes int
+	historyDepth  int
 
 	// embedder powers the semantic half of the near-duplicate search.
 	// Optional: without one the search is lexical, which still catches
@@ -121,11 +143,64 @@ func NewSelfTaughtStore(raft raftApplier, store *Store, mode SelfLearningMode) (
 		return nil, errors.New("self-taught: Raft and Store are both required")
 	}
 	return &SelfTaughtStore{
-		raft:  raft,
-		store: store,
-		mode:  mode,
-		usage: map[string]*pendingUsage{},
+		raft:          raft,
+		store:         store,
+		mode:          mode,
+		usage:         map[string]*pendingUsage{},
+		maxFileBytes:  DefaultMaxArtefactFileBytes,
+		maxTotalBytes: DefaultMaxArtefactTotalBytes,
+		historyDepth:  DefaultHistoryDepth,
 	}, nil
+}
+
+// SetLimits overrides the size and history bounds. Zero on any field
+// keeps the default.
+func (s *SelfTaughtStore) SetLimits(maxFile, maxTotal, historyDepth int) {
+	if s == nil {
+		return
+	}
+	if maxFile > 0 {
+		s.maxFileBytes = maxFile
+	}
+	if maxTotal > 0 {
+		s.maxTotalBytes = maxTotal
+	}
+	if historyDepth > 0 {
+		s.historyDepth = historyDepth
+	}
+}
+
+// checkSize refuses an artefact too large to replicate cheaply.
+//
+// Named paths in the error, because "too large" without saying which
+// file leaves an author guessing at a bundle they may not have
+// assembled by hand.
+func (s *SelfTaughtStore) checkSize(rec *lobslawv1.SelfTaughtRecord) error {
+	total := len(rec.Body)
+	if total > s.maxFileBytes {
+		return fmt.Errorf("%w: body is %d bytes, limit is %d",
+			ErrArtefactTooLarge, total, s.maxFileBytes)
+	}
+	// Sorted, so an artefact with several oversized files names the
+	// same one on every attempt rather than a different one each time.
+	paths := make([]string, 0, len(rec.Files))
+	for path := range rec.Files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		n := len(rec.Files[path])
+		if n > s.maxFileBytes {
+			return fmt.Errorf("%w: %s is %d bytes, limit is %d per file",
+				ErrArtefactTooLarge, path, n, s.maxFileBytes)
+		}
+		total += n
+	}
+	if total > s.maxTotalBytes {
+		return fmt.Errorf("%w: %d bytes in total, limit is %d",
+			ErrArtefactTooLarge, total, s.maxTotalBytes)
+	}
+	return nil
 }
 
 // SetEmbedder wires the semantic half of the near-duplicate search.
@@ -204,6 +279,9 @@ func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaught
 		return s.refine(ctx, rec, intent)
 	}
 
+	if err := s.checkSize(out); err != nil {
+		return nil, err
+	}
 	if err := s.guardAgainstDuplicates(ctx, out, intent); err != nil {
 		return nil, err
 	}
@@ -285,6 +363,9 @@ func (s *SelfTaughtStore) refine(ctx context.Context, rec *lobslawv1.SelfTaughtR
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkSize(rec); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(intent.Rationale) == "" {
 		return nil, errors.New(
 			"self-taught: a refinement needs a rationale; a diff with no reasoning is one nobody can approve")
@@ -294,6 +375,12 @@ func (s *SelfTaughtStore) refine(ctx context.Context, rec *lobslawv1.SelfTaughtR
 	updated.UpdatedAt = timestamppb.Now()
 
 	if s.mode == SelfLearningAuto {
+		// Snapshot before the body is replaced. A refinement that
+		// turned out worse must be undoable without the original
+		// having to be rewritten from memory.
+		if err := s.recordHistory(target); err != nil {
+			return nil, err
+		}
 		updated.Body = rec.Body
 		updated.Files = rec.Files
 		updated.Description = rec.Description
@@ -330,6 +417,9 @@ func (s *SelfTaughtStore) ApprovePending(ctx context.Context, id, by string) (*l
 	}
 	if current.Pending == nil {
 		return nil, fmt.Errorf("%w: %s", ErrNoPendingRevision, id)
+	}
+	if err := s.recordHistory(current); err != nil {
+		return nil, err
 	}
 	updated := proto.Clone(current).(*lobslawv1.SelfTaughtRecord)
 	updated.Body = current.Pending.Body

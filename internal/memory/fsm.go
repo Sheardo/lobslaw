@@ -560,6 +560,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSelfTaught, p.SelfTaught, nil
 	case *lobslawv1.LogEntry_SelfTaughtUsage:
 		return BucketSelfTaughtUsage, p.SelfTaughtUsage, nil
+	case *lobslawv1.LogEntry_SelfTaughtHistory:
+		return BucketSelfTaughtHistory, p.SelfTaughtHistory, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

@@ -1178,6 +1178,9 @@ message LogEntry {
     PinnedMemory pinned = 28;
     SelfTaughtRecord self_taught = 29;
     SelfTaughtUsage self_taught_usage = 30;
+    // A history entry is the same message in a different bucket: a
+    // prior version is a record, not a different kind of thing.
+    SelfTaughtRecord self_taught_history = 31;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

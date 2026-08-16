@@ -83,6 +83,13 @@ const (
 	BucketSelfTaught        = "self_taught"
 	BucketSelfTaughtUsage   = "self_taught_usage"
 	BucketSelfTaughtArchive = "self_taught_archive"
+
+	// BucketSelfTaughtHistory holds prior versions, keyed
+	// "<id>@<zero-padded version>" so a prefix scan is version order.
+	// Bounded by history_depth: every version lives in every snapshot
+	// on every node, so unbounded history is a store-growth problem
+	// that only shows up months later as slow snapshots.
+	BucketSelfTaughtHistory = "self_taught_history"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -111,4 +118,5 @@ var allBuckets = []string{
 	BucketSelfTaught,
 	BucketSelfTaughtUsage,
 	BucketSelfTaughtArchive,
+	BucketSelfTaughtHistory,
 }

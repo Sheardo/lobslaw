@@ -2174,16 +2174,24 @@ and never replicated, and is logged loudly at boot so it can't be a surprise in 
 **R0 becomes a hard dependency** — `skills install` is a Raft write, so a non-leader gateway or CLI
 node needs forwarding.
 
-### Open questions
+### Open questions — DECIDED 2026-08-16
 
-Not decided here; they need a call before implementation:
+1. **Blob threshold: fail at import, naming the path.** 256 KiB per file and 1 MiB per skill,
+   configurable. An oversized reference is rejected outright rather than split or accepted, because
+   every Raft apply replicates to every node and lives in snapshots thereafter — one careless skill
+   would bloat every node permanently, and the author is the only person positioned to fix it.
 
-1. **Blob threshold**, and whether reference files above it are permitted at all or must move to
-   storage.
-2. **Is a live-watched operator directory legal in production**, or is dev-mode strictly
-   development-only?
-3. **Version history is unbounded**, and it inflates every Raft snapshot forever. Needs a
-   `keep_versions = N` policy plus GC, or "versioned skills" quietly becomes a store-growth problem.
+2. **A dev directory is development-only; a node refuses to start otherwise.** The marker is an
+   environment variable (`LOBSLAW_DEV=1`) rather than a config field, deliberately: config files get
+   committed and deployed, environment variables are per-machine. A dev directory declared in config
+   on a machine with no marker is a boot failure naming both, not a warning somebody scrolls past.
+   The point of the store being authoritative is that production runs what the cluster believes is
+   installed, and a live-watched directory that always wins locally is precisely the thing that
+   makes that untrue.
+
+3. **`history_depth`, default 10, configurable, with GC.** Named for what it bounds rather than
+   `keep_versions`, which does not say whether the active version counts. It counts *prior*
+   versions; the active one is always kept and does not count toward the limit.
 
 ### Acceptance
 

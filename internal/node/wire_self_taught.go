@@ -31,6 +31,8 @@ func (n *Node) wireSelfTaught() error {
 	if err != nil {
 		return fmt.Errorf("self-taught store: %w", err)
 	}
+	store.SetLimits(n.cfg.SelfTaughtMaxFileBytes, n.cfg.SelfTaughtMaxTotalBytes,
+		n.cfg.SelfTaughtHistoryDepth)
 	n.selfTaught = store
 	n.log.Info("self-learning: enabled", "mode", string(mode),
 		"artefacts_active_immediately", mode == memory.SelfLearningAuto)
