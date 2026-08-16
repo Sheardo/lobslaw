@@ -114,6 +114,13 @@ type Config struct {
 	// the default of 30; negative disables it.
 	SelfTaughtProposalExpiryDays int
 
+	// NotifyChannels / NotifySubjects / NotifyInterval are the
+	// in-channel review-queue nudge. Both allowlists must be populated
+	// or nothing is sent.
+	NotifyChannels []string
+	NotifySubjects []string
+	NotifyInterval time.Duration
+
 	// SessionGrantTTL bounds a conversation-scoped approval. Zero
 	// takes the default of 24h.
 	//
@@ -319,9 +326,13 @@ type Node struct {
 	// rest of this conversation". Nil on a node with no local raft,
 	// where approvals stay process-local exactly as they were.
 	sessionGrants *memory.SessionGrantStore
-	agent         *compute.Agent
-	embedder      compute.EmbeddingProvider
-	roleMap       *compute.RoleMap
+
+	// notices appends the review-queue nudge to outbound replies. Nil
+	// when self-learning is off or nobody opted in.
+	notices  *gateway.Notices
+	agent    *compute.Agent
+	embedder compute.EmbeddingProvider
+	roleMap  *compute.RoleMap
 
 	// reviewFork decides whether a finished turn taught anything.
 	// Nil when self-learning is off — there is no fork to disable

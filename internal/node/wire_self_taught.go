@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -47,6 +48,27 @@ func (n *Node) wireSelfTaught() error {
 	if n.server != nil {
 		lobslawv1.RegisterSelfLearningServiceServer(n.server,
 			&selfLearningService{store: store})
+	}
+
+	// The in-channel nudge. Built here rather than in the gateway
+	// stage because it needs the store, and left nil when nobody opted
+	// in — a channel that was never named cannot carry a notice,
+	// which is absence rather than a runtime check somebody has to
+	// have remembered.
+	n.notices = gateway.NewNotices(pendingReviewSource{store: store}, gateway.NoticeConfig{
+		Channels: n.cfg.NotifyChannels,
+		Subjects: n.cfg.NotifySubjects,
+		Interval: n.cfg.NotifyInterval,
+	})
+	if len(n.cfg.NotifyChannels) > 0 && len(n.cfg.NotifySubjects) > 0 {
+		n.log.Info("self-learning: review notices enabled",
+			"channels", n.cfg.NotifyChannels, "subjects", len(n.cfg.NotifySubjects))
+	} else {
+		// Said out loud, because "I never got told about the queue" is
+		// otherwise indistinguishable from "the queue was empty" —
+		// and with proposal expiry running, the difference matters.
+		n.log.Info("self-learning: review notices are off",
+			"reason", "self_learning.notify needs both channels and subjects")
 	}
 	return nil
 }

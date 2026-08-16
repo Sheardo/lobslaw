@@ -548,3 +548,73 @@ conversation, expired ones included. A cleared conversation must not
 keep privileges the user believes they revoked — and "forget" should
 be a statement about what is *stored*, not about what is currently
 enforceable.
+
+---
+
+## Review notices
+
+`propose` mode fills a queue nobody is told about. The CLI can show it,
+but only to somebody who already suspects it exists — and a queue you
+have to remember to check is one you check once. Meanwhile the curator
+expires unreviewed proposals, which turns *"nobody was told"* into *"a
+decision was made by timeout"*.
+
+So the notice **rides out on a turn the user is already having**:
+
+```
+…the answer to whatever they asked…
+
+———
+2 skills waiting for approval, 1 refinement waiting for review — `lobslaw learned pending --all`
+```
+
+That is the whole design. No push mechanism, no per-channel addressing,
+no delivery guarantees to get wrong. **Any channel that can send a
+reply can carry it**, which is what makes adding a channel later
+configuration rather than code — there is a test that a channel the
+code has never heard of works the moment it is named.
+
+### Opting in
+
+```toml
+[self_learning.notify]
+channels = ["telegram"]
+subjects = ["user:tg-@john"]
+interval = "24h"      # default
+```
+
+**Both allowlists must match.** Not a boolean, and not either-or:
+
+- `channels` decides **where**. Adding Slack later is a string.
+- `subjects` decides **who**, and that cannot be inferred — the person a
+  notice concerns is the one who can act on it, and nothing in the
+  conversation says who that is.
+
+A channel allowlist on its own would tell a group chat what the
+operator has pending. Empty means none, in both directions: silence is
+the safe default for a feature that reports a review queue.
+
+The source is owner-scoped too, so being permitted to receive notices
+does not make somebody able to learn what a *different* principal has
+pending.
+
+### Three details
+
+**Appended to the outbound text only — never to the transcript.** A
+notice recorded as an assistant message is one the model reads next
+turn and reasons about, at which point the agent is discussing its own
+pending proposals with the user. And it is in the summary forever.
+
+**One per conversation per interval, default 24h.** A nudge appended to
+every turn stops being information within an hour, after which it is
+read past — worse than never having sent it. The interval is marked on
+the **send**, not on the attempt: marking on the attempt would let an
+empty queue today silence a full one tomorrow.
+
+**It never fails a reply.** A notice is a courtesy riding on somebody
+else's turn; failing a reply the user is waiting for because the
+courtesy could not be assembled is the wrong trade in every case.
+
+The rate-limit state is per-process, deliberately — unlike session
+grants. The consequence of getting it wrong is one extra line on one
+reply, which does not earn a raft round trip on the reply path.

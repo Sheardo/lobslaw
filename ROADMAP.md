@@ -2091,11 +2091,20 @@ than deferred it. So `proposal_expiry_days` defaults to 30, negative disables it
 record carries `archived_reason = "unreviewed"` — distinct from anything somebody declined, because
 an operator reading the archive needs to tell those two apart.
 
-Two things made that tolerable rather than merely necessary: approval no longer requires stopping
+Three things made that tolerable rather than merely necessary: approval no longer requires stopping
 the cluster (`lobslaw learned approve` over mTLS, live by default with `--offline` as the opt-out),
-and nothing is deleted. Still open: the in-channel notification that tells the operator a queue
-exists at all. That belongs on the durable confirmation records, and it should be per-channel
-opt-in so adding a channel later is configuration rather than code.
+nothing is deleted, and the operator is now *told* the queue exists.
+
+The notice rides out on a turn the user is already having — no push mechanism, no per-channel
+addressing, no delivery guarantees to get wrong, and any channel that can send a reply can carry
+it. `[self_learning.notify]` takes two allowlists, `channels` and `subjects`, and **both** must
+match: channels decides where (adding Slack later is a string), subjects decides who, and that
+cannot be inferred because nothing in a conversation says which participant can act on the queue. A
+channel allowlist on its own would tell a group chat what the operator has pending.
+
+Appended to the outbound text only, never to the transcript: a notice recorded as an assistant
+message is one the model reads next turn and reasons about, at which point the agent is discussing
+its own pending proposals with the user — and it is in the summary forever.
 
 Leader-gated via `singleton.Run`, the opposite of the materialiser: a cache is per-node and a
 lifecycle is not.

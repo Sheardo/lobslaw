@@ -42,6 +42,11 @@ type TelegramConfig struct {
 	// config.toml via env:TELEGRAM_BOT_TOKEN or similar.
 	BotToken string
 
+	// Notices appends operator notices to outbound replies. Nil
+	// disables them entirely, which is what a deployment that never
+	// opted this channel in gets.
+	Notices *Notices
+
 	// QueueMode and QueueDebounce configure per-conversation turn
 	// serialisation. Zero value is QueueSerial, which is both the
 	// safe default and the one that drops nothing.
@@ -549,7 +554,13 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
 	default:
-		h.sendText(msg.Chat.ID, resp.Reply)
+		// Appended AFTER the transcript was persisted above, and to
+		// the outbound text only. A notice recorded as an assistant
+		// message is one the model reads next turn and reasons about —
+		// at which point the agent is discussing its own pending
+		// proposals with the user, and it is in the summary forever.
+		h.sendText(msg.Chat.ID, h.cfg.Notices.Append(ctx,
+			"telegram", sessionRef.ChannelID, grantSubject(claims), resp.Reply))
 	}
 	// After the text: a file the turn produced is context for the
 	// reply, not a replacement for it.

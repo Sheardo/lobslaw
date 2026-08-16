@@ -147,6 +147,45 @@ type SelfLearningConfig struct {
 	// the review fork is writing into something that functions as
 	// /dev/null.
 	ProposalExpiryDays int `koanf:"proposal_expiry_days"`
+
+	// Notify controls the in-channel nudge that says a review queue
+	// exists. Off unless both allowlists are populated.
+	Notify NotifyConfig `koanf:"notify"`
+}
+
+// NotifyConfig is the operator's opt-in to being told, in-channel,
+// that something is waiting for them.
+//
+// The nudge rides out on a turn the user is already having — no push
+// mechanism, no per-channel addressing, no delivery guarantees to get
+// wrong. Any channel that can send a reply can carry it, which is what
+// makes adding a channel later configuration rather than code.
+//
+// Two allowlists rather than a boolean, and BOTH must match. Channels
+// decides where; subjects decides who, and that cannot be inferred —
+// the person a notice concerns is the one who can act on it, and
+// nothing in the conversation says who that is. A channel allowlist on
+// its own would tell a group chat what the operator has pending.
+//
+// Example:
+//
+//	[self_learning.notify]
+//	channels = ["telegram"]
+//	subjects = ["user:tg-@john"]
+//	interval = "24h"
+type NotifyConfig struct {
+	// Channels that may carry notices, by gateway kind ("telegram",
+	// "rest"). Empty means none: silence is the safe default.
+	Channels []string `koanf:"channels,omitempty"`
+
+	// Subjects that may receive them, as principals. Empty means none.
+	Subjects []string `koanf:"subjects,omitempty"`
+
+	// Interval is the minimum gap between notices in one conversation.
+	// Zero takes the default of 24h — a nudge appended to every turn
+	// stops being information within an hour, after which it is read
+	// past, which is worse than never having sent it.
+	Interval time.Duration `koanf:"interval,omitempty"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto
