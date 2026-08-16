@@ -107,6 +107,9 @@ type Config struct {
 	SelfTaughtHistoryDepth  int
 	SelfTaughtMaxFileBytes  int
 	SelfTaughtMaxTotalBytes int
+	// Curation thresholds in days of disuse. Zero takes the defaults.
+	SelfTaughtStaleAfterDays   int
+	SelfTaughtArchiveAfterDays int
 
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
@@ -600,6 +603,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// otherwise the winner would depend on scan order for the first
 	// few seconds of uptime, which is exactly the kind of
 	// nondeterminism tier-first precedence exists to remove.
+	// The lifecycle pass, leader-gated — the opposite of the
+	// materialiser below, which every node must run because a cache is
+	// per-node and a lifecycle is not.
+	n.startCurator(ctx)
+
 	if err := n.startMaterialiser(ctx); err != nil {
 		n.log.Error("skills: materialiser failed to start", "err", err)
 	}

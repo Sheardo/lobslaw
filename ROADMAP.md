@@ -55,12 +55,12 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ⬜ | 🟡 P2 | M | R11 |
 | **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
 | **R12** | [Memory transparency](#r12--memory-transparency) | ⬜ | 🟡 P2 | M | — |
-| **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ⬜ | 🟠 P1 | M | R15, R16 |
-| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | ⬜ | 🟠 P1 | S | — |
-| **R15** | [Self-taught store](#r15--self-taught-store) | ⬜ | 🟠 P1 | M | R16, R17 |
-| **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ⬜ | 🟡 P2 | M | R17 |
-| **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ⬜ | 🟡 P2 | M | — |
-| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ⬜ | 🟠 P1 | L | R15, R17 |
+| **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ✅ | 🟠 P1 | M | R15, R16 |
+| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟡 | 🟠 P1 | S | — |
+| **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
+| **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ✅ | 🟡 P2 | M | R17 |
+| **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟡 | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
@@ -100,7 +100,13 @@ table wins — and the section says so at its head.
 | R5 | **Partial.** The trust-contract half is done: `ContextEngine` returns `promptgen.ContextBlock`s rather than a rendered string, recall goes through `WrapContext` so `BuildSafety` covers it, and it is delivered as a user-role message immediately before the user's own — out of the system prompt, and positioned so the cached prefix survives. Ingest-time scanning landed too: `internal/promptguard` scans on episodic ingest and quarantines rather than drops, and recall skips quarantined records. Deviation: the marker is a `promptguard:<detector>` tag rather than `metadata["promptguard"]`, because `EpisodicRecord` carries no metadata map and a tag needs no schema change. `memory_write` is scanned too, and tool output and errors are routed through `promptguard.Redact` before the model sees them. SOUL load and skill-manifest load are scanned too, but they WARN rather than quarantine — a SOUL is the agent's identity and refusing it on a heuristic would take the assistant down over a false positive. `NeutraliseCloseTags` has no caller left now that recall is out of the system prompt, so it is wanted only if something system-bound reappears. R5 is otherwise complete |
 | R20 | **20a/20b/20c done** (#21) plus the decrypt work the measurement turned up (#25). Latency −73% and allocation −99% geomean versus the starting point; allocation no longer scales with corpus size. **20d (the band prefilter) is open**, and its case is weaker than written — decrypt fell from ~71% to ~32% of a query, so the cosine arithmetic is now the largest share. The minimum score floor is also still open |
 | R21 | **Not started, deferred with R6 (2026-08-16).** Embedding failures at ingest are still skipped silently, and the backfill `builtin_memory.go` reasons about still does not exist. Worth flagging that this half is a live correctness bug rather than a performance item: a record whose embedding failed is stored and never becomes semantically searchable, with no signal to anyone. Small and independent of the index when it is picked up |
-| R8–R18 | Not started, except R19. R13–R18 (skills + self-learning) are untouched; R18 is a prerequisite for R15, and both are now documented as aide decisions (`lobslaw-skill-storage-model`, `lobslaw-skill-approval-lifecycle`) |
+| R13 | **Done.** Level-0 skill index (`internal/node/skill_index.go`), complete rather than ranked, filtered only to what this node can run; `MaxDescriptionChars` enforced at parse |
+| R14 | **Mostly done.** Pinned blocks, caps, the failure budget and the terminal non-error give-up all shipped. Open: the Dream-acts-on-threshold half — `NeedsConsolidation` exists and nothing calls it |
+| R15 | **Done.** `internal/memory/self_taught.go` + the similarity guard, pending refinements, bounded history with rollback, size limits, and the agent-tier capability floor |
+| R16 | **Done.** `internal/compute/review.go`, with `ArtefactStore` as the fork's entire write surface — enforced structurally rather than as a policy scope |
+| R17 | **Done.** `internal/memory/self_taught_curator.go`, leader-gated. See the section for the three things building it changed |
+| R18 | **Half done.** The self-taught materialiser, the `prose` runtime, and `ScanAgent` shipped; tier-first precedence shipped ahead of the rest. Open: `BucketSkills` / `BucketSkillBlobs`, the importer/exporter, and verbatim manifest bytes so a detached signature survives a round trip |
+| R8–R12 | Not started, except R19. R13–R18 (skills + self-learning) are untouched; R18 is a prerequisite for R15, and both are now documented as aide decisions (`lobslaw-skill-storage-model`, `lobslaw-skill-approval-lifecycle`) |
 
 R5 is P0 on security grounds and independent of everything else. With R0 landed,
 R2 and R3 are unblocked and are the remaining P0s.
@@ -2019,10 +2025,36 @@ Lifecycle over self-taught artefacts, driven by the usage telemetry in `BucketSe
 
 ### Acceptance
 
-- [ ] A skill unused past the threshold transitions to stale, then archives, and stays recoverable.
-- [ ] A pinned artefact never transitions.
-- [ ] Nothing outside the self-taught store is ever touched — asserted, not assumed.
-- [ ] Staleness is computed from cluster-wide usage.
+- [x] A skill unused past the threshold transitions to stale, then archives, and stays recoverable.
+- [x] A pinned artefact never transitions.
+- [x] Nothing outside the self-taught store is ever touched — asserted, not assumed.
+- [x] Staleness is computed from cluster-wide usage.
+
+### What building it changed
+
+**STALE had to keep loading, and `Active()` had to widen to say so.** Marking an artefact as a
+candidate for archiving and simultaneously taking it out of service makes the transition to
+ARCHIVED a ratchet with no possible reprieve — the 60 days between the two thresholds would be a
+window in which nothing could happen. STALE now loads, and a use inside the window returns it to
+ACTIVE. Without that, "seasonal" is indistinguishable from "dead": a skill for the quarterly report
+is idle for eleven weeks by nature.
+
+**A lifecycle transition must not count as an edit.** `lastActivity` reads `updated_at`, so a stale
+mark that touched it would reset the very clock deciding whether the artefact archives — nothing
+would ever leave the live set. `setState` leaves `updated_at` alone, and there is a test whose
+failure message says exactly this.
+
+**Staleness is measured from approval, not creation.** The clock on "has anybody used this" cannot
+start before it was possible to. A skill that sat three months in the proposal queue and was
+approved yesterday is one day old.
+
+**PROPOSED is deliberately not curated,** and this is an open question rather than a settled one.
+Archiving a proposal nobody has looked at converts "not reviewed yet" into "declined", and the
+pending queue is the operator's inbox. But an unbounded proposal queue in `propose` mode is a real
+problem, and something should eventually bound it — probably a notification rather than an archive.
+
+Leader-gated via `singleton.Run`, the opposite of the materialiser: a cache is per-node and a
+lifecycle is not.
 
 ---
 
