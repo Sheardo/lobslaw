@@ -56,9 +56,9 @@ func TestModalityFailoverPerClass(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			calls := &[]string{}
-			h := failoverBuiltin("read_image", quietLog(),
-				stubHandler("primary", tc.err, calls),
-				stubHandler("backup", nil, calls),
+			h := failoverBuiltin("read_image", quietLog(), nil,
+				failoverHandler{label: "primary", fn: stubHandler("primary", tc.err, calls)},
+				failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
 			)
 
 			out, _, err := h(context.Background(), map[string]string{"path": "/x"})
@@ -87,8 +87,8 @@ func TestModalityFailoverPerClass(t *testing.T) {
 func TestSingleProviderReportsItsOwnError(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_pdf", quietLog(),
-		stubHandler("only", Transient(errors.New("boom")), calls))
+	h := failoverBuiltin("read_pdf", quietLog(), nil,
+		failoverHandler{label: "only", fn: stubHandler("only", Transient(errors.New("boom")), calls)})
 
 	_, _, err := h(context.Background(), nil)
 	if err == nil {
@@ -109,10 +109,10 @@ func TestSingleProviderReportsItsOwnError(t *testing.T) {
 func TestChainExhaustedReportsAll(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_audio", quietLog(),
-		stubHandler("a", Transient(errors.New("first")), calls),
-		stubHandler("b", Transient(errors.New("second")), calls),
-		stubHandler("c", Transient(errors.New("third")), calls),
+	h := failoverBuiltin("read_audio", quietLog(), nil,
+		failoverHandler{label: "a", fn: stubHandler("a", Transient(errors.New("first")), calls)},
+		failoverHandler{label: "b", fn: stubHandler("b", Transient(errors.New("second")), calls)},
+		failoverHandler{label: "c", fn: stubHandler("c", Transient(errors.New("third")), calls)},
 	)
 	_, _, err := h(context.Background(), nil)
 	if err == nil {
@@ -131,9 +131,9 @@ func TestChainExhaustedReportsAll(t *testing.T) {
 func TestModalityFailoverStopsOnCancellation(t *testing.T) {
 	t.Parallel()
 	calls := &[]string{}
-	h := failoverBuiltin("read_image", quietLog(),
-		stubHandler("primary", Transient(errors.New("boom")), calls),
-		stubHandler("backup", nil, calls),
+	h := failoverBuiltin("read_image", quietLog(), nil,
+		failoverHandler{label: "primary", fn: stubHandler("primary", Transient(errors.New("boom")), calls)},
+		failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

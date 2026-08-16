@@ -55,6 +55,12 @@ type AgentConfig struct {
 	// ErrNoLLMProvider at Run time.
 	Provider LLMProvider
 
+	// Health remembers which providers recently failed, so a chain
+	// skips one that is in cooldown instead of paying a round-trip to
+	// rediscover it every turn. Nil reports everything healthy, which
+	// is exactly the behaviour before it existed.
+	Health *ProviderHealth
+
 	// Executor runs tool invocations. Required for any turn that
 	// involves tool calls (i.e. most of them).
 	Executor *Executor
@@ -912,6 +918,16 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 // Soft errors (context cancellation, 4xx other than 429) bubble
 // immediately; they're not indicators of provider failure and
 // retrying wouldn't help.
+// errText renders an error for a log attribute without panicking on
+// nil — the backup-succeeded line fires when the only prior events
+// were skips.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	// Single-provider mode: no registry wired, no chain to walk.
 	if a.cfg.Providers == nil || a.cfg.PrimaryLabel == "" {
@@ -923,23 +939,48 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 		return a.cfg.Provider.Chat(ctx, req)
 	}
 
-	var lastErr error
+	var (
+		lastErr error
+		skipped int
+	)
 	for _, entry := range chain {
+		// A provider that failed recently is skipped rather than
+		// re-tried. Without this the chain pays a round-trip and a
+		// timeout on every turn to rediscover a key that was revoked
+		// this morning.
+		if !a.cfg.Health.Available(entry.Label) {
+			skipped++
+			a.cfg.Logger.Debug("agent: skipping demoted provider",
+				"label", entry.Label,
+				"cooldown_remaining", a.cfg.Health.CooldownRemaining(entry.Label))
+			continue
+		}
 		resp, err := entry.Client.Chat(ctx, req)
 		if err == nil {
-			if lastErr != nil {
+			a.cfg.Health.RecordSuccess(entry.Label)
+			if lastErr != nil || skipped > 0 {
 				a.cfg.Logger.Info("agent: provider backup succeeded",
 					"used_label", entry.Label,
-					"prior_error", lastErr.Error())
+					"skipped_demoted", skipped,
+					"prior_error", errText(lastErr))
 			}
 			return resp, nil
 		}
 		if !isRetryableProviderError(ctx, err) {
 			return nil, err
 		}
-		a.cfg.Logger.Warn("agent: provider failed; walking backup chain",
-			"failed_label", entry.Label, "err", err)
+		a.cfg.Health.RecordFailure(entry.Label, ClassifyFailure(err))
+		logProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
 		lastErr = err
+	}
+	if lastErr == nil {
+		// Every provider was skipped as demoted and none was actually
+		// tried. Reported distinctly: "all providers failed" with no
+		// error to show would read as a bug in the chain rather than
+		// as the chain protecting itself.
+		return nil, fmt.Errorf(
+			"agent: every provider in the chain is in cooldown (%d demoted); "+
+				"check the logs for credential or quota errors", skipped)
 	}
 	return nil, fmt.Errorf("agent: all providers in chain failed; last error: %w", lastErr)
 }
@@ -975,6 +1016,12 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 			// This provider is spent; the next one has its own budget.
 			// Treating a spent plan as permanent turns "one provider ran
 			// out of credit" into "the assistant is down".
+			return true
+		case FailureCredential:
+			// The next provider authenticates with its own key. Treating
+			// a rejected credential as permanent turns "one key expired"
+			// into "the assistant is down" — with two working providers
+			// configured and idle.
 			return true
 		default: // FailurePermanent
 			// Fails identically on the backup, so walking the chain

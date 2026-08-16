@@ -29,6 +29,11 @@ type PDFConfig struct {
 	APIKey      string
 	AllowedRoot string
 	HTTPClient  *http.Client
+
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with every other modality that reaches the
+	// same endpoint. Empty opts out of health tracking.
+	Label string
 }
 
 // RegisterPDFBuiltin installs read_pdf.
@@ -38,7 +43,7 @@ func RegisterPDFBuiltin(b *Builtins, cfgs ...PDFConfig) error {
 	if len(cfgs) == 0 {
 		return errors.New("read_pdf: at least one provider config required")
 	}
-	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	handlers := make([]failoverHandler, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		if cfg.Endpoint == "" || cfg.APIKey == "" {
 			return errors.New("read_pdf: Endpoint and APIKey both required")
@@ -53,9 +58,9 @@ func RegisterPDFBuiltin(b *Builtins, cfgs ...PDFConfig) error {
 		if client == nil {
 			client = &http.Client{Timeout: 120 * time.Second}
 		}
-		handlers = append(handlers, newReadPDFHandler(cfg, client))
+		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newReadPDFHandler(cfg, client)})
 	}
-	return b.Register("read_pdf", failoverBuiltin("read_pdf", nil, handlers...))
+	return b.Register("read_pdf", failoverBuiltin("read_pdf", nil, b.Health(), handlers...))
 }
 
 func PDFToolDef() *types.ToolDef {

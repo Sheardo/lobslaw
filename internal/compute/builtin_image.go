@@ -16,6 +16,11 @@ type ImageConfig struct {
 	Driver   ImageDriver
 	Resolver *ArtifactResolver
 
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with every other modality that reaches the
+	// same endpoint. Empty opts out of health tracking.
+	Label string
+
 	// MaxPromptChars bounds one prompt. Image APIs reject over-long
 	// prompts with a 400, which costs a round trip to learn something
 	// checkable here. Zero picks DefaultImagePromptChars.
@@ -31,7 +36,7 @@ func RegisterImageBuiltin(b *Builtins, cfgs ...ImageConfig) error {
 	if len(cfgs) == 0 {
 		return errors.New("generate_image: at least one provider config required")
 	}
-	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	handlers := make([]failoverHandler, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		if cfg.Driver == nil {
 			return errors.New("generate_image: Driver required")
@@ -42,9 +47,9 @@ func RegisterImageBuiltin(b *Builtins, cfgs ...ImageConfig) error {
 		if cfg.MaxPromptChars <= 0 {
 			cfg.MaxPromptChars = DefaultImagePromptChars
 		}
-		handlers = append(handlers, newImageHandler(cfg))
+		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newImageHandler(cfg)})
 	}
-	return b.Register("generate_image", failoverBuiltin("generate_image", nil, handlers...))
+	return b.Register("generate_image", failoverBuiltin("generate_image", nil, b.Health(), handlers...))
 }
 
 func newImageHandler(cfg ImageConfig) BuiltinFunc {

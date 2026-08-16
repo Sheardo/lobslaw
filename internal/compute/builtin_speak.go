@@ -21,6 +21,11 @@ type SpeakConfig struct {
 	// model that decides to narrate a whole file would be expensive
 	// and useless in equal measure. Zero picks DefaultSpeakMaxChars.
 	MaxChars int
+
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with every other modality that reaches the
+	// same endpoint. Empty opts out of health tracking.
+	Label string
 }
 
 // DefaultSpeakMaxChars is roughly a few minutes of speech — long
@@ -36,7 +41,7 @@ func RegisterSpeakBuiltin(b *Builtins, cfgs ...SpeakConfig) error {
 	if len(cfgs) == 0 {
 		return errors.New("speak: at least one provider config required")
 	}
-	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	handlers := make([]failoverHandler, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		if cfg.Driver == nil {
 			return errors.New("speak: Driver required")
@@ -47,9 +52,9 @@ func RegisterSpeakBuiltin(b *Builtins, cfgs ...SpeakConfig) error {
 		if cfg.MaxChars <= 0 {
 			cfg.MaxChars = DefaultSpeakMaxChars
 		}
-		handlers = append(handlers, newSpeakHandler(cfg))
+		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newSpeakHandler(cfg)})
 	}
-	return b.Register("speak", failoverBuiltin("speak", nil, handlers...))
+	return b.Register("speak", failoverBuiltin("speak", nil, b.Health(), handlers...))
 }
 
 func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {

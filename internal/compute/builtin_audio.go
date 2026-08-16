@@ -50,6 +50,11 @@ type AudioConfig struct {
 	Format      AudioFormat
 	AllowedRoot string
 	HTTPClient  *http.Client
+
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with every other modality that reaches the
+	// same endpoint. Empty opts out of health tracking.
+	Label string
 }
 
 // RegisterAudioBuiltin installs read_audio. Required-fields check
@@ -60,7 +65,7 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 	if len(cfgs) == 0 {
 		return errors.New("read_audio: at least one provider config required")
 	}
-	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	handlers := make([]failoverHandler, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		if cfg.Endpoint == "" || cfg.APIKey == "" {
 			return errors.New("read_audio: Endpoint and APIKey both required")
@@ -83,9 +88,9 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 		if client == nil {
 			client = &http.Client{Timeout: 120 * time.Second}
 		}
-		handlers = append(handlers, newReadAudioHandler(cfg, client))
+		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newReadAudioHandler(cfg, client)})
 	}
-	return b.Register("read_audio", failoverBuiltin("read_audio", nil, handlers...))
+	return b.Register("read_audio", failoverBuiltin("read_audio", nil, b.Health(), handlers...))
 }
 
 // AudioToolDef is the ToolDef registered alongside the builtin.

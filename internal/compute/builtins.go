@@ -31,11 +31,38 @@ type BuiltinFunc func(ctx context.Context, args map[string]string) (stdout []byt
 type Builtins struct {
 	mu       sync.RWMutex
 	handlers map[string]BuiltinFunc
+
+	// health is shared by every modality failover chain registered
+	// here. It lives on the registry rather than being threaded
+	// through five Register signatures because it is per-node state
+	// with exactly the same lifetime, and because a demotion is only
+	// useful if the chains share one — a provider that failed for
+	// read_image is the same endpoint speak would reach.
+	health *ProviderHealth
 }
 
 // NewBuiltins returns an empty registry.
 func NewBuiltins() *Builtins {
 	return &Builtins{handlers: make(map[string]BuiltinFunc)}
+}
+
+// SetHealth wires the shared provider-health tracker. Nil (the
+// default) reports everything healthy, so a registry without one
+// behaves exactly as it did before health tracking existed.
+func (b *Builtins) SetHealth(h *ProviderHealth) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.health = h
+}
+
+// Health returns the tracker, or nil.
+func (b *Builtins) Health() *ProviderHealth {
+	if b == nil {
+		return nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.health
 }
 
 // Register errors on empty name, nil handler, or duplicate —

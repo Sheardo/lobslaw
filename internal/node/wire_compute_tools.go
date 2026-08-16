@@ -117,6 +117,10 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 // bugs, not runtime — bubble up.
 func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 	builtins := compute.NewBuiltins()
+	// Before any modality registers: failoverBuiltin reads the tracker
+	// off the registry at Register time, so wiring it after would give
+	// every chain a nil one.
+	builtins.SetHealth(n.providerHealth)
 	if err := compute.RegisterStdlibBuiltins(builtins); err != nil {
 		return nil, fmt.Errorf("builtins: %w", err)
 	}
@@ -650,6 +654,7 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 	cfgs := make([]compute.VisionConfig, 0, len(eps))
 	for _, ep := range eps {
 		cfgs = append(cfgs, compute.VisionConfig{
+			Label:    ep.label,
 			Endpoint: ep.endpoint,
 			Model:    ep.model,
 			APIKey:   ep.apiKey,
@@ -689,6 +694,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 			audioFmt = compute.AudioFormatChatMultimodal
 		}
 		cfgs = append(cfgs, compute.AudioConfig{
+			Label:    ep.label,
 			Endpoint: ep.endpoint,
 			Model:    ep.model,
 			APIKey:   ep.apiKey,
@@ -742,6 +748,7 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 	cfgs := make([]compute.PDFConfig, 0, len(eps))
 	for _, ep := range eps {
 		cfgs = append(cfgs, compute.PDFConfig{
+			Label:    ep.label,
 			Endpoint: ep.endpoint,
 			Model:    ep.model,
 			APIKey:   ep.apiKey,

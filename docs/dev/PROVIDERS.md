@@ -553,6 +553,69 @@ and which the generalisation must not lose:
   see that they are silently running on the backup — otherwise a
   primary that has been dead for a week looks like everything is fine.
 
+### Failure classes
+
+What the chain does with an error comes from what the error is, not
+from a retry count:
+
+| Class | Chain | Cooldown | Log level |
+|---|---|---|---|
+| `transient` | advance | 30s, exponential to 5m | warn |
+| `quota-exhausted` | advance | 10m | **error** |
+| `credential-rejected` | advance | 15m | **error** |
+| `permanent` | **abort** | none | — |
+
+`credential-rejected` (401/403) used to classify permanent, on the
+reasoning that a bad key is an operator problem and failing over spends
+the backup's quota to paper over it. The concern was right and the
+conclusion was not: permanent means one rotated key takes the assistant
+down while two working providers sit idle, and a user's experience of a
+config fault should not be "it stopped replying".
+
+What makes advancing safe is that the fault is now loud. A credential
+rejection and a spent quota both log at **error**, saying plainly that
+the chain is covering for it — so the operator finds out *and* the
+assistant keeps working, instead of trading one for the other.
+
+`permanent` still aborts. A 400 fails identically everywhere, so
+walking the chain would multiply one clear error into one per provider
+and report the last.
+
+### Health tracking
+
+Trying every provider on every turn is right the first time and
+wasteful the hundredth: a key revoked at 09:00 is still first in the
+chain at 17:00, and every turn between pays a round-trip and a timeout
+to rediscover it.
+
+`ProviderHealth` (`internal/compute/health.go`) remembers recent
+failures per provider label and the chain skips one in cooldown. One
+tracker per node, shared by the chat chain and every modality chain —
+a provider that just rejected the credential for `read_image` is the
+same endpoint `speak` would reach.
+
+Deliberately **not** in Raft: one node behind a broken egress proxy
+must not convince the cluster that a provider is down. Each node's view
+of what it can reach is legitimately its own.
+
+Deliberately **not** a full circuit breaker either. There is no
+half-open probe state, because the chain is the probe: when the
+cooldown lapses the provider is tried again in its normal position, and
+one success clears it. A separate prober would be a second thing that
+can be wrong about a provider's health.
+
+Two guards against over-correcting:
+
+- A `permanent` failure never demotes. A 400 is a property of the
+  request; demoting on one would let a single malformed turn take a
+  healthy provider out of the chain for everybody else.
+- Transient backoff is capped at 5 minutes. A chain that has written
+  off every provider replies to nobody.
+
+When every provider in a chain is in cooldown, the error says so —
+"all providers failed" with no error to show reads as a bug in the
+chain rather than the chain protecting itself.
+
 ---
 
 ## External drivers

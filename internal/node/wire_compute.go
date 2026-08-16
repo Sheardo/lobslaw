@@ -55,6 +55,13 @@ func (n *Node) wireCompute() error {
 		n.policyEngine = policy.NewEngine(n.store, n.log)
 	}
 
+	// One health tracker per node, shared by the chat backup chain and
+	// every modality chain. Shared on purpose: a provider that just
+	// rejected the credential for read_image is the same endpoint
+	// speak would reach, and rediscovering that per modality is the
+	// waste this exists to remove.
+	n.providerHealth = compute.NewProviderHealth()
+
 	n.toolRegistry = compute.NewRegistry()
 	n.executor = compute.NewExecutor(n.toolRegistry, n.policyEngine, n.hooksDisp, compute.ExecutorConfig{}, n.log)
 	// One store, shared: the channel records "approve for this chat"
@@ -286,6 +293,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Provider:     n.llmProvider,
 		PrimaryLabel: primaryLabel,
 		Providers:    n.providerRegistry,
+		Health:       n.providerHealth,
 		Executor:     n.executor,
 		Registry:     n.toolRegistry,
 		Soul: func() *types.SoulConfig {
@@ -382,11 +390,15 @@ func (n *Node) registerDreamHandler() {
 // (e.g. "audio-transcription" vs "audio-multimodal"); modality
 // dispatch can switch on it to pick the right wire shape.
 type llmEndpoint struct {
-	endpoint   string
-	model      string
-	apiKey     string
-	format     string
-	via        string // "override:<label>", "capability:<label>"
+	endpoint string
+	model    string
+	apiKey   string
+	format   string
+	via      string // "override:<label>", "capability:<label>"
+	// label is the provider's [[compute.providers]] label, used as the
+	// health-tracking key. Parsed out of `via` would work and would
+	// break the first time the via format changed.
+	label      string
 	matchedCap string // empty if override; else the capability that matched
 	// driver is the provider's declared wire protocol. Empty means the
 	// modality's default, which is the OpenAI-compatible shape
@@ -437,6 +449,7 @@ func (n *Node) resolveModalityEndpoints(modality, overrideLabel string, anyOf ..
 		if ep == nil {
 			return nil
 		}
+		ep.label = overrideLabel
 		return []*llmEndpoint{ep}
 	}
 	var out []*llmEndpoint
@@ -453,6 +466,7 @@ func (n *Node) resolveModalityEndpoints(modality, overrideLabel string, anyOf ..
 				continue // key unresolvable; already warned
 			}
 			seen[p.Label] = true
+			ep.label = p.Label
 			ep.matchedCap = want
 			out = append(out, ep)
 		}
