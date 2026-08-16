@@ -618,11 +618,28 @@ func (s *SelfTaughtStore) List(q SelfTaughtQuery) ([]*lobslawv1.SelfTaughtRecord
 
 // Active lists what is currently in force — the set a loader should
 // materialise.
+//
+// STALE is included, and that is not an oversight. STALE means
+// "unused and aging, a candidate for archiving", not "withdrawn": an
+// artefact that stopped loading the moment it went stale could never
+// be used again, so the curator's transition to ARCHIVED would be a
+// ratchet with no possible reprieve. Leaving it in service is what
+// makes the window between the two thresholds a real second chance —
+// and the curator returns anything used inside it to ACTIVE.
 func (s *SelfTaughtStore) Active(kind lobslawv1.SelfTaughtKind) ([]*lobslawv1.SelfTaughtRecord, error) {
-	return s.List(SelfTaughtQuery{
-		Kind:  kind,
-		State: lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE,
-	})
+	live, err := s.List(SelfTaughtQuery{Kind: kind})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*lobslawv1.SelfTaughtRecord, 0, len(live))
+	for _, rec := range live {
+		switch rec.State {
+		case lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE,
+			lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_STALE:
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 
 // DiscardAll archives everything live. The "forget everything you

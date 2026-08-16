@@ -119,6 +119,21 @@ type SelfLearningConfig struct {
 	// Zero takes the defaults (256 KiB per file, 1 MiB per artefact).
 	MaxArtefactFileBytes  int `koanf:"max_artefact_file_bytes"`
 	MaxArtefactTotalBytes int `koanf:"max_artefact_total_bytes"`
+
+	// Curation thresholds, in days of disuse. Zero takes the defaults
+	// (30 and 90).
+	//
+	// StaleAfterDays marks an artefact as a candidate for archiving.
+	// It keeps loading — an artefact that went out of service the
+	// moment it went stale could never be used again, so archiving
+	// would be a ratchet with no reprieve. Anything used inside the
+	// window returns to active.
+	//
+	// ArchiveAfterDays is measured from last use, not from the stale
+	// mark, so the two are answers to the same question rather than a
+	// sum. Archiving is never deletion: everything stays restorable.
+	StaleAfterDays   int `koanf:"stale_after_days"`
+	ArchiveAfterDays int `koanf:"archive_after_days"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

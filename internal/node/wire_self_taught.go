@@ -1,10 +1,12 @@
 package node
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/singleton"
 )
 
 // wireSelfTaught constructs the store the agent writes its own
@@ -37,6 +39,36 @@ func (n *Node) wireSelfTaught() error {
 	n.log.Info("self-learning: enabled", "mode", string(mode),
 		"artefacts_active_immediately", mode == memory.SelfLearningAuto)
 	return nil
+}
+
+// curatorName is the singleton key for the self-taught lifecycle pass.
+const curatorName = "self-taught-curator"
+
+// startCurator ages unused artefacts out of the live set on whichever
+// node holds leadership.
+//
+// Leader-pinned rather than per-node. Every node running it would be
+// correct — the transitions go through raft and are idempotent — but
+// it would burn a round trip per node per transition to reach the same
+// answer. That is the opposite of the materialiser, which every node
+// must run because a cache is per-node and a lifecycle is not.
+func (n *Node) startCurator(ctx context.Context) {
+	if n.selfTaught == nil || n.leaderGate == nil {
+		return
+	}
+	cfg := memory.CuratorConfig{
+		StaleAfterDays:   n.cfg.SelfTaughtStaleAfterDays,
+		ArchiveAfterDays: n.cfg.SelfTaughtArchiveAfterDays,
+	}
+	go func() {
+		err := singleton.Run(ctx, n.leaderGate, curatorName, n.log,
+			func(ctx context.Context) error {
+				return n.selfTaught.CurateLoop(ctx, cfg, n.log)
+			})
+		if err != nil && ctx.Err() == nil {
+			n.log.Warn("self-taught curator stopped", "err", err)
+		}
+	}()
 }
 
 // wireReviewFork builds the post-turn review.
