@@ -55,6 +55,17 @@ type AgentConfig struct {
 	// ErrNoLLMProvider at Run time.
 	Provider LLMProvider
 
+	// SummaryTimeout bounds the graceful reply produced after a hard
+	// timeout. That reply needs a context the expired one cannot
+	// cancel, which means a provider that has stopped responding is
+	// re-entered with a fresh one — so it must be bounded, or the
+	// timeout is defeated by the code meant to report it.
+	//
+	// Zero takes defaultSummaryReplyTimeout. Worth lowering alongside
+	// a short gateway HardTimeout: a 15s tail on a 30s cap is most of
+	// the budget again.
+	SummaryTimeout time.Duration
+
 	// Health remembers which providers recently failed, so a chain
 	// skips one that is in cooldown instead of paying a round-trip to
 	// rediscover it every turn. Nil reports everything healthy, which
@@ -604,10 +615,22 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		chatResp, err := a.callLLM(ctx, req, messages)
 		if err != nil {
 			// Context deadline / cancellation (e.g. gateway
-			// hard-timeout) → produce a graceful user-visible
-			// reply via a FRESH context rather than a silent error.
+			// hard-timeout) → produce a graceful user-visible reply
+			// rather than a silent error. It needs a FRESH context,
+			// because the one that just expired would cancel the
+			// summary call before it started.
+			//
+			// Fresh but BOUNDED. context.Background() here meant a
+			// provider that had stopped responding — the usual reason
+			// a turn hits its hard timeout — was re-entered with a
+			// context that could never cancel, so the timeout the
+			// gateway set was defeated by the code meant to report it
+			// gracefully and the request hung until the client gave up.
 			if ctx.Err() != nil {
-				return a.forceSummaryReply(context.Background(), req, messages, resp, "hard_timeout")
+				summaryCtx, cancel := context.WithTimeout(
+					context.WithoutCancel(ctx), a.summaryReplyTimeout())
+				defer cancel()
+				return a.forceSummaryReply(summaryCtx, req, messages, resp, "hard_timeout")
 			}
 			return nil, fmt.Errorf("LLM call: %w", err)
 		}
@@ -686,6 +709,31 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 // would otherwise return an error without a user-visible reply
 // (loop exhausted, hard timeout, etc.). Returns the reply in the
 // same shape as a successful turn.
+// defaultSummaryReplyTimeout bounds the graceful "I ran out of time"
+// reply when nothing else says. Short on purpose: the user has already
+// waited out the whole turn budget, and a summary that takes as long
+// again is worse than a blunter error arriving now.
+const defaultSummaryReplyTimeout = 15 * time.Second
+
+// summaryReplyTimeout resolves the configured bound.
+func (a *Agent) summaryReplyTimeout() time.Duration {
+	if a.cfg.SummaryTimeout > 0 {
+		return a.cfg.SummaryTimeout
+	}
+	return defaultSummaryReplyTimeout
+}
+
+// staticFallbackReply is what the user sees when even the graceful
+// summary call fails — the provider is not answering at all.
+func staticFallbackReply(reason string) string {
+	switch reason {
+	case "hard_timeout":
+		return "This took too long and I had to stop. Nothing I did is lost — ask again and I'll pick it up."
+	default:
+		return "I hit my tool-call limit for this turn and couldn't complete the task. Try rephrasing or narrowing the request."
+	}
+}
+
 func (a *Agent) forceSummaryReply(
 	ctx context.Context,
 	req ProcessMessageRequest,
@@ -723,7 +771,10 @@ func (a *Agent) forceSummaryReply(
 		// apology so the user sees SOMETHING rather than silence.
 		a.cfg.Logger.Warn("agent: forced-summary LLM call failed; returning static fallback",
 			"turn_id", req.TurnID, "reason", reason, "err", err)
-		resp.Reply = "I hit my tool-call limit for this turn and couldn't complete the task. Try rephrasing or narrowing the request."
+		// Wording follows the reason. Telling somebody whose turn ran
+		// out of time that it hit a tool-call limit sends them off to
+		// narrow a request that was never too broad.
+		resp.Reply = staticFallbackReply(reason)
 		resp.Messages = messages
 		if req.Budget != nil {
 			resp.BudgetState = req.Budget.State()

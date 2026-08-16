@@ -36,6 +36,19 @@ type RESTConfig struct {
 	// queue. Nil is correct for a single node.
 	Leaser SessionLeaser
 
+	// Responsiveness timers, shared with Telegram. HardTimeout is the
+	// one that matters even for a client that cannot stream: REST had
+	// no cap at all, so a stalled provider hung the request until the
+	// client gave up. Zero on any field takes the default; negative
+	// disables that timer.
+	TypingInterval time.Duration
+	InterimTimeout time.Duration
+	HardTimeout    time.Duration
+
+	// Soul gates interim progress on the personality's directness, as
+	// on Telegram. Nil emits them for any client that asked to stream.
+	Soul func() *types.SoulConfig
+
 	// Addr is the host:port to bind. Empty → ":8443" by default.
 	Addr string
 
@@ -456,10 +469,30 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		ChannelID:           sessionRef.ChannelID,
 	}
 
-	resp, err := s.agent.RunToolCallLoop(r.Context(), agentReq)
+	// Responsiveness, shared with Telegram. The visible half needs an
+	// SSE client; the hard timeout applies either way, and REST had
+	// none — a stalled provider hung the request until the client gave
+	// up.
+	//
+	// turnCtx, not r.Context(), for the rest of this handler: the
+	// confirmation resume loop below re-enters the agent, and a turn
+	// that stalls after approval should hit the same cap as one that
+	// stalls before it.
+	responder := newRESTResponder(w, r)
+	turnCtx, stopGuards := startResponsiveness(r.Context(), responder, ResponsivenessConfig{
+		TypingInterval: s.cfg.TypingInterval,
+		InterimTimeout: s.cfg.InterimTimeout,
+		HardTimeout:    s.cfg.HardTimeout,
+		Soul:           s.cfg.Soul,
+	})
+	defer stopGuards()
+
+	resp, err := s.agent.RunToolCallLoop(turnCtx, agentReq)
 	if err != nil {
 		s.log.Error("agent error", "turn_id", req.TurnID, "err", err)
-		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		stopGuards()
+		responder.Close()
+		s.restError(w, responder, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -502,7 +535,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		lastPromptID = p.ID
 
-		decision, werr := s.cfg.Prompts.Wait(r.Context(), p.ID)
+		decision, werr := s.cfg.Prompts.Wait(turnCtx, p.ID)
 		if werr != nil {
 			s.log.Warn("rest: prompt wait aborted",
 				"prompt_id", p.ID, "turn_id", req.TurnID, "err", werr)
@@ -519,11 +552,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// Approved: lift caps and re-enter. resp.Messages carries the
 		// conversation at the moment the original turn stopped.
 		agentReq.Budget.Relax()
-		resumed, rerr := s.agent.ResumeFromConfirmation(r.Context(), agentReq, resp.Messages)
+		resumed, rerr := s.agent.ResumeFromConfirmation(turnCtx, agentReq, resp.Messages)
 		if rerr != nil {
 			s.log.Error("rest: resume after approval failed",
 				"turn_id", req.TurnID, "err", rerr)
-			s.jsonErr(w, http.StatusInternalServerError, rerr.Error())
+			stopGuards()
+			responder.Close()
+			s.restError(w, responder, http.StatusInternalServerError, rerr.Error())
 			return
 		}
 		// Preserve prior tool calls in the cumulative response.
@@ -561,8 +596,30 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Timers off and the responder closed BEFORE the body is written,
+	// so a typing tick that fires at exactly the wrong moment cannot
+	// interleave itself into the response.
+	stopGuards()
+	responder.Close()
+
+	if responder.Streaming() {
+		_ = responder.sendFinal(out)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// restError writes an error in whichever shape the client is reading:
+// an SSE event mid-stream, or an ordinary JSON body. Once headers are
+// out for a stream, jsonErr's WriteHeader is a no-op and the client
+// would be left waiting on a connection that never says why.
+func (s *Server) restError(w http.ResponseWriter, responder *restResponder, code int, msg string) {
+	if responder.Streaming() {
+		_ = responder.sendError(msg)
+		return
+	}
+	s.jsonErr(w, code, msg)
 }
 
 // handleHealthz returns 200 as long as the server is running.

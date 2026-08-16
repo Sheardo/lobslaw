@@ -350,6 +350,86 @@ reports the conflict and leaves both in place for you to reconcile by hand.
 matters if the deployment is young — memory they cared about can be re-stated, and grants re-given
 the next time each one is asked for. This is the simpler path and it is a legitimate choice.
 
+## Responsiveness
+
+A turn takes seconds. What the user sees during those seconds used to
+be a Telegram-only concern, written against `*TelegramHandler`; REST
+got none of it and every future channel would have reimplemented it or,
+more likely, not.
+
+The timers now run against a `Responder` (`internal/gateway/responder.go`):
+
+```go
+type Responder interface {
+    Typing(ctx context.Context) error
+    Interim(ctx context.Context, text string) error
+    Final(ctx context.Context, text string) error
+}
+```
+
+| Timer | Default | What it does |
+|---|---|---|
+| `TypingInterval` | 4s | Re-signals presence. Under Telegram's ~5s clear window so the indicator reads as continuous. Fires immediately, not after one interval — that first interval is exactly when a user decides nothing is happening. |
+| `InterimTimeout` | 30s | One progress message. Single-shot; repeating it doesn't make the turn faster and reads as a stuck loop. |
+| `HardTimeout` | 90s | Caps the turn. Applies to every channel, including ones with nobody watching. |
+
+Zero on any field takes the default; **negative disables** that timer,
+which is how a channel with no live viewer opts out of typing without
+opting out of the hard timeout.
+
+Interim messages are gated on the SOUL's `EmotiveStyle.Directness`
+(≥7 skips them): a terse personality emitting "still working on this…"
+reads as a different assistant than the one the operator configured.
+No SOUL wired means they are emitted — the absence of a personality is
+not a terse one.
+
+The timers are tested once, against a fake `Responder`. Adding a
+channel should not mean adding timer tests.
+
+### Per channel
+
+| Channel | Typing | Interim | Final |
+|---|---|---|---|
+| Telegram | `sendChatAction` | `sendMessage` | `sendMessage` |
+| REST (SSE) | `event: typing` | `event: interim` | `event: final` |
+| REST (JSON) | no-op | no-op | handler writes the body |
+
+A REST client opts into streaming with `Accept: text/event-stream`.
+Both the header **and** a flushable `ResponseWriter` are required —
+buffering an SSE stream delivers every "progress" event at once, after
+the turn it was narrating has finished. A client that does not ask is
+byte-for-byte unchanged.
+
+The **hard timeout applies either way**, and that is the part that
+matters most: REST had no cap at all, so a stalled provider hung the
+request until the client gave up.
+
+### Why the hard timeout used to not work
+
+Worth recording, because the failure was in the code meant to handle it
+gracefully. On timeout the agent produces a "this took too long" reply
+rather than a bare error, and that call needs a *fresh* context — the
+expired one would cancel it before it started.
+
+It used `context.Background()`. So a provider that had stopped
+responding — the usual reason a turn hits its cap — was re-entered with
+a context that could never cancel, and the request hung anyway.
+
+The summary call is now bounded by `AgentConfig.SummaryTimeout`
+(default 15s), built with `context.WithoutCancel` so it survives the
+expiry without inheriting immortality. Worth lowering alongside a short
+`HardTimeout`: a 15s tail on a 30s cap is most of the budget again.
+
+### What is deliberately not shared
+
+Confirmation rendering. R10 proposed a `Prompt` method on `Responder`,
+and the two channels differ genuinely: Telegram sends an inline
+keyboard and waits for a callback, REST returns a prompt id and
+long-polls. Both work. An interface over two things that differ that
+much, for a third channel that does not exist, would be a guess rather
+than a generalisation — it can be added when a channel arrives that
+makes the right shape obvious.
+
 ## Conversation history
 
 Both channels get prior context from `conversationLog` (`internal/gateway/conversation.go`), a two-tier store:

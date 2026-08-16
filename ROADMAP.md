@@ -1523,9 +1523,24 @@ channel instead of one bespoke flow per channel.
 
 ### Acceptance
 
-- [ ] A slow REST turn streams interim progress where the client supports it.
-- [ ] Responsiveness timers are tested once, against a fake `Responder`.
-- [ ] Adding a channel requires no new timer code.
+- [x] A slow REST turn streams interim progress where the client supports it
+      (`Accept: text/event-stream`; a client that does not ask is byte-for-byte unchanged).
+- [x] Responsiveness timers are tested once, against a fake `Responder`.
+- [x] Adding a channel requires no new timer code.
+- [x] **The hard timeout now reaches REST, which had no cap at all.**
+
+**Found while doing this:** the hard timeout did not work anywhere. On expiry the agent produces a
+graceful "this took too long" reply, and that call needs a fresh context — it used
+`context.Background()`, so a provider that had stopped responding (the usual reason a turn hits its
+cap) was re-entered with a context that could never cancel. Telegram's 90s cap was defeated the
+same way. Now bounded by `AgentConfig.SummaryTimeout`, built with `context.WithoutCancel`.
+
+The static fallback also told a timed-out user they had "hit my tool-call limit", sending them off
+to narrow a request that was never too broad. The wording follows the reason now.
+
+`Prompt` on the Responder is deliberately **not** built — see `docs/dev/GATEWAY.md`. Telegram and
+REST render confirmations genuinely differently and both work; an interface over that, for a
+channel that does not exist, would be a guess.
 
 ---
 
