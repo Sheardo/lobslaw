@@ -535,6 +535,14 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		}
 	}
 
+	// After the seeds, so config-supplied rules are audited too, and
+	// after every RegisterCondition — a rule naming a condition this
+	// build cannot evaluate does not do what it says, and warn level
+	// is where that used to hide.
+	if n.policyEngine != nil {
+		n.policyEngine.LogUnevaluableRules()
+	}
+
 	// Skill registry watcher: fsnotify on the skills storage
 	// mount so drop-in manifests are auto-discovered. Gated on
 	// both the registry and a configured storage label —
