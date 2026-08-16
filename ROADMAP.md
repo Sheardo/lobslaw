@@ -2274,8 +2274,30 @@ Two things the design did not anticipate:
 - **A record name becomes a directory name.** Traversal is refused before any path is built from
   it, not validated afterwards by the parse that reads the result back.
 
-Still open for the operator/signed half: `BucketSkills`, `BucketSkillBlobs`, the importer/exporter,
-and storing manifest bytes verbatim so a detached signature survives the round trip.
+**The operator/signed half is now built too.** `BucketSkills` holds one record per
+`<name>@<version>`; `BucketSkillBlobs` holds content-addressed payloads, so two versions sharing a
+reference document store it once and re-importing an unchanged bundle replicates nothing.
+
+The manifest bytes are stored **verbatim**, and the test that matters signs a manifest with a
+comment, an unusual key order and trailing whitespace — everything a parse-and-re-encode would
+quietly tidy away — then imports, exports, and verifies the signature against the exported file.
+Mutating the store to normalise the manifest fails it with exactly that message. A manifest that
+happened to be already-normalised would have let the test pass while the property it exists for was
+broken.
+
+Three decisions worth recording:
+
+- **Every file is stored, not a recognised subset.** A skill's behaviour can depend on any file it
+  ships — a prompt template, a rules document — and an importer keeping only what it understood
+  would materialise something different from the skill somebody tested.
+- **Blobs are verified on read.** A payload whose bytes no longer hash to its key is corruption, and
+  returning it would hand a modified handler to the interpreter with the digest still looking right.
+- **Export re-checks its paths.** A record is replicated state that a compromised or buggy importer
+  on another node could have written, so trusting its paths on the way out would turn a bad record
+  into arbitrary file writes.
+
+Still open: wiring the materialiser and registry to read from the store rather than a mount, and the
+`lobslaw skills import/export` CLI.
 
 ### Store-to-cache contract
 

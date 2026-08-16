@@ -1262,6 +1262,8 @@ message LogEntry {
     // prior version is a record, not a different kind of thing.
     SelfTaughtRecord self_taught_history = 31;
     SessionGrant session_grant = 32;
+    SkillRecord skill = 33;
+    SkillBlob skill_blob = 34;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -1304,6 +1306,76 @@ enum PromptScope {
   // Mints a policy rule, so it is visible and revocable rather than
   // an invisible forever-grant.
   PROMPT_SCOPE_ALWAYS = 3;
+}
+
+// SkillTier is where a skill came from. Ordered: a higher tier wins a
+// contested name.
+enum SkillTier {
+  SKILL_TIER_UNSPECIFIED = 0;
+  SKILL_TIER_AGENT = 1;
+  SKILL_TIER_OPERATOR = 2;
+  SKILL_TIER_SIGNED = 3;
+}
+
+// SkillRecord is one installed skill, in the cluster store.
+//
+// Authority moves here from the filesystem. A skill exists because the
+// log says so, not because a mount happens to be materialised on the
+// node you asked — which is what made "is this skill installed?" a
+// question with a per-node answer.
+message SkillRecord {
+  string name = 1;
+  string version = 2;
+  SkillTier tier = 3;
+
+  // manifest_yaml is the manifest file's bytes, VERBATIM.
+  //
+  // Not a parsed struct, and this is the single most important
+  // decision in the message. The signature is a detached ed25519
+  // signature over the exact file: parsing into a proto and
+  // re-serialising on export changes the bytes and breaks
+  // verification permanently, so a skill that genuinely was signed
+  // would be rejected by every SigningRequire deployment after one
+  // round trip through the store.
+  //
+  // Round-tripping the bytes untouched is what keeps signing working
+  // across the move.
+  bytes manifest_yaml = 4;
+  // manifest_sig is the detached signature, if the skill shipped one.
+  bytes manifest_sig = 5;
+
+  // files maps a relative path to the DIGEST of its content, with the
+  // bytes in BucketSkillBlobs. Indirected rather than inlined so two
+  // versions of a skill that share a reference store it once, and so
+  // a record stays small enough to read without pulling every payload
+  // it mentions.
+  map<string, string> files = 6;
+
+  // source records where it came from — a clawhub URL, an import
+  // path. Provenance an operator can audit later, when the question
+  // is "why is this here".
+  string source = 7;
+  string imported_by = 8;
+  google.protobuf.Timestamp imported_at = 9;
+
+  // active marks the version in force. One per (name, tier): a store
+  // that held two active versions of one skill would make the
+  // registry's winner depend on iteration order.
+  bool active = 10;
+
+  uint64 revision = 11;
+  string claimed_by = 12;
+}
+
+// SkillBlob is one content-addressed payload — a handler, a reference
+// document. Keyed by digest, so identical content across skills and
+// versions is stored once.
+message SkillBlob {
+  // digest is "sha256:<hex>", which is also the bucket key.
+  string digest = 1;
+  bytes content = 2;
+  uint64 revision = 3;
+  string claimed_by = 4;
 }
 
 // SessionGrant is an "approved for the rest of this conversation"
