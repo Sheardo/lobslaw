@@ -52,6 +52,12 @@ const (
 	// would make every lease write contend with the append made by
 	// the turn holding it.
 	BucketSessionLeases = "session_leases"
+
+	// BucketPrompts holds pending confirmations. Raft-backed rather
+	// than per-process so an approval tapped on one node resolves a
+	// prompt issued by another, and so a restart does not lose the
+	// turn the user was answering. See R2.
+	BucketPrompts = "prompts"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -74,4 +80,5 @@ var allBuckets = []string{
 	BucketSessions,
 	BucketSessionMessages,
 	BucketSessionLeases,
+	BucketPrompts,
 }

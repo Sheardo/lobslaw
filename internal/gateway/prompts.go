@@ -43,6 +43,18 @@ func (d PromptDecision) String() string {
 	}
 }
 
+// Prompts is the confirmation registry the channels talk to. Two
+// implementations exist: the in-memory PromptRegistry below, and a
+// raft-backed one for nodes that host cluster state. The interface is
+// what lets a gateway on a compute-only node keep working — it has no
+// local raft, so there is nothing durable for it to write to.
+type Prompts interface {
+	Create(turnID, reason, channel string, ttl time.Duration) (*Prompt, error)
+	Get(id string) (*Prompt, error)
+	Resolve(id string, decision PromptDecision) error
+	Wait(ctx context.Context, id string) (PromptDecision, error)
+}
+
 // Prompt is one pending confirmation. Created by the channel when
 // an agent turn returns NeedsConfirmation; resolved when the user
 // answers (via long-poll POST for REST, callback_query for

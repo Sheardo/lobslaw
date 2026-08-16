@@ -18,7 +18,9 @@ func (n *Node) wireGateway() error {
 		return fmt.Errorf("gateway requires compute function (no agent wired on this node)")
 	}
 
-	n.promptRegistry = gateway.NewPromptRegistry()
+	if err := n.wirePrompts(); err != nil {
+		return err
+	}
 
 	var tg *gateway.TelegramHandler
 	var webhooks []*gateway.WebhookHandler
