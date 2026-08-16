@@ -111,7 +111,7 @@ driver             = "openai"         # openai (default) | anthropic | mock
 endpoint           = "https://openrouter.ai/api/v1/chat/completions"
 api_key_ref        = "env:OPENROUTER_API_KEY"
 model              = "anthropic/claude-sonnet-4"
-trust_tier         = "primary"        # primary | backup | adversarial
+trust_tier         = "public"         # public | private | local, or 1-100 (higher = more trusted)
 capabilities       = ["chat"]
 auto_capabilities  = true             # opt-in to models.dev capability discovery
 backup             = "openrouter-fallback"
@@ -129,7 +129,7 @@ label       = "claude-direct"
 driver      = "anthropic"
 model       = "claude-sonnet-4-6"
 api_key_ref = "env:ANTHROPIC_API_KEY"
-trust_tier  = "primary"
+trust_tier  = "private"
 capabilities = ["chat"]
 
 # `driver = "mock"` answers without touching the network. For a node
