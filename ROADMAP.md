@@ -450,22 +450,31 @@ id = "alice"
 channels = [{ type = "telegram", address = "123456789" }]
 ```
 
-**Still open — needs an operator decision.** Existing state (memory ownership, policy rules,
-approval-minted grants, prefs) is keyed on whatever `claims.UserID` was at write time, so binding a
-person for the first time re-points them at a new canonical id and their prior state is left behind
-under the old one. Nothing is deleted, but nothing follows them either.
+**Migration shipped, both paths.** Binding a person for the first time re-points them at a new
+canonical id, and state written under the old one does not follow. An operator can either carry it
+over or start clean:
 
-The options are a migration command that rewrites owners for a named pair, or telling operators
-plainly to re-grant. Which is right depends on whether a live deployment has state worth carrying —
-so it is a question for the operator, not a default to pick.
+```
+lobslaw identity rebind tg-@alice alice          # dry run
+lobslaw identity rebind tg-@alice alice --apply
+```
+
+Rewrites owners on vector and episodic records, commitments, scheduled tasks, prompts, session
+`user_id`s, and policy rules subjected to that person — including approval-minted ones. Leaves
+`role:` / `scope:` subjects alone (they name a group, not a person) and refuses to merge two
+`user_prefs` records, reporting the conflict instead: prefs are keyed by the id itself, and
+silently picking a winner between two timezones is worse than saying so.
+
+Starting clean — bind, and let the person re-approve what comes up — is documented as the
+legitimate simpler option in `docs/dev/GATEWAY.md`.
 
 ### Acceptance
 
 - [x] A user who renames keeps their identity — once bound by numeric id.
 - [x] Someone claiming a freed handle inherits nothing.
 - [x] A deployment that binds nothing is byte-for-byte unchanged.
-- [ ] Existing `tg-@name`-keyed state is migrated, or the operator is told plainly what to redo.
-      **Blocked on the operator decision above.**
+- [x] Existing `tg-@name`-keyed state is migrated (`lobslaw identity rebind`), and the re-grant
+      path is documented for operators who would rather start clean.
 
 ---
 
