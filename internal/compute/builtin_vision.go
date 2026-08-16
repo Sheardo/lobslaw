@@ -47,6 +47,11 @@ type VisionConfig struct {
 	// a demotion is shared with every other modality that reaches the
 	// same endpoint. Empty opts out of health tracking.
 	Label string
+
+	// TrustTier is the provider's declared tier, checked against the
+	// soul's min_trust_tier before this provider is used. Empty fails
+	// any set floor: an undeclared tier is not evidence of a high one.
+	TrustTier types.TrustTier
 }
 
 // RegisterVisionBuiltin installs the read_image builtin. Returns
@@ -84,9 +89,9 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 		if client == nil {
 			client = &http.Client{Timeout: 60 * time.Second}
 		}
-		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newReadImageHandler(cfg, client)})
+		handlers = append(handlers, failoverHandler{label: cfg.Label, tier: cfg.TrustTier, fn: newReadImageHandler(cfg, client)})
 	}
-	return b.Register("read_image", failoverBuiltin("read_image", nil, b.Health(), handlers...))
+	return b.Register("read_image", failoverBuiltin("read_image", nil, b.Health(), b.TrustFloor(), handlers...))
 }
 
 // VisionToolDef is the ToolDef registered alongside the builtin.

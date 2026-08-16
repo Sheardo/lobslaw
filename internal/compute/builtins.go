@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // BuiltinScheme prefixes a ToolDef.Path when the tool is dispatched
@@ -39,6 +41,13 @@ type Builtins struct {
 	// useful if the chains share one — a provider that failed for
 	// read_image is the same endpoint speak would reach.
 	health *ProviderHealth
+
+	// trustFloor reads the soul's min_trust_tier. A function rather
+	// than a value because the soul is tunable at runtime: reading it
+	// once at registration would pin the floor to boot, and an
+	// operator raising it would find the change took effect in the
+	// prompt and not in the routing.
+	trustFloor func() types.TrustTier
 }
 
 // NewBuiltins returns an empty registry.
@@ -114,4 +123,20 @@ func isBuiltinPath(path string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimPrefix(path, BuiltinScheme), true
+}
+
+// SetTrustFloor wires the soul's min_trust_tier accessor. Nil (the
+// default) means no floor, which is what a node with no SOUL.md gets
+// and what every deployment had before the floor was enforced.
+func (b *Builtins) SetTrustFloor(f func() types.TrustTier) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.trustFloor = f
+}
+
+// TrustFloor returns the accessor, or nil.
+func (b *Builtins) TrustFloor() func() types.TrustTier {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.trustFloor
 }

@@ -157,6 +157,12 @@ func (n *Node) wireResolver() error {
 	if len(n.cfg.Compute.Providers) == 0 {
 		return nil
 	}
+	// Before anything is constructed. A floor that cannot be satisfied
+	// is a configuration error, and boot is the last moment somebody
+	// is looking at the configuration rather than waiting for a reply.
+	if err := n.validateTrustFloor(); err != nil {
+		return err
+	}
 	r, err := compute.NewResolver(&n.cfg.Compute)
 	if err != nil {
 		return fmt.Errorf("resolver: %w", err)
@@ -282,13 +288,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		}
 		episodicIngester = &episodicIngesterAdapter{inner: ingester}
 	}
-	primaryLabel := ""
-	if len(n.cfg.Compute.Providers) > 0 {
-		primaryLabel = n.cfg.Compute.Providers[0].Label
-		if n.cfg.Compute.Roles.Main != "" {
-			primaryLabel = n.cfg.Compute.Roles.Main
-		}
-	}
+	primaryLabel := n.primaryProviderLabel()
 	a, err := compute.NewAgent(compute.AgentConfig{
 		Provider:     n.llmProvider,
 		PrimaryLabel: primaryLabel,
@@ -403,7 +403,13 @@ type llmEndpoint struct {
 	// label is the provider's [[compute.providers]] label, used as the
 	// health-tracking key. Parsed out of `via` would work and would
 	// break the first time the via format changed.
-	label      string
+	label string
+	// trustTier is the provider's declared tier, carried through so
+	// the modality failover chain can honour the soul floor. Read off
+	// the provider config here rather than looked up again at
+	// registration, because the two lookups could disagree and the
+	// disagreement would be silent.
+	trustTier  types.TrustTier
 	matchedCap string // empty if override; else the capability that matched
 	// driver is the provider's declared wire protocol. Empty means the
 	// modality's default, which is the OpenAI-compatible shape
@@ -497,6 +503,12 @@ func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, vi
 		format:   format,
 		via:      via,
 		driver:   p.Driver,
+		// Both read off the same provider config, in one place. The
+		// label was set by two callers before; a tier set separately
+		// could end up describing a different provider than the label
+		// it travels with, and nothing would catch it.
+		label:     p.Label,
+		trustTier: p.TrustTier,
 	}
 }
 
