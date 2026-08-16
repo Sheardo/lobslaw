@@ -444,8 +444,9 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		SelfTaughtMaxFileBytes:    cfg.SelfLearning.MaxArtefactFileBytes,
 		SelfTaughtMaxTotalBytes:   cfg.SelfLearning.MaxArtefactTotalBytes,
 
-		SelfTaughtStaleAfterDays:   cfg.SelfLearning.StaleAfterDays,
-		SelfTaughtArchiveAfterDays: cfg.SelfLearning.ArchiveAfterDays,
+		SelfTaughtStaleAfterDays:     cfg.SelfLearning.StaleAfterDays,
+		SelfTaughtArchiveAfterDays:   cfg.SelfLearning.ArchiveAfterDays,
+		SelfTaughtProposalExpiryDays: cfg.SelfLearning.ProposalExpiryDays,
 
 		SessionGrantTTL:     cfg.Security.SessionGrantTTL,
 		Identity:            cfg.Identity,

@@ -383,6 +383,302 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	SelfLearningService_ListArtefacts_FullMethodName   = "/lobslaw.v1.SelfLearningService/ListArtefacts"
+	SelfLearningService_ApproveArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/ApproveArtefact"
+	SelfLearningService_DecideRevision_FullMethodName  = "/lobslaw.v1.SelfLearningService/DecideRevision"
+	SelfLearningService_ArchiveArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/ArchiveArtefact"
+	SelfLearningService_RestoreArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/RestoreArtefact"
+)
+
+// SelfLearningServiceClient is the client API for SelfLearningService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// -----------------------------------------------------------------------------
+// SelfLearningService — inspect and decide on what the agent taught itself
+// -----------------------------------------------------------------------------
+//
+// The offline `lobslaw learned` CLI opens state.db directly, which
+// means bbolt's exclusive lock, which means the node must be stopped.
+// That is a fine shape for forensics and a terrible one for approval:
+// approving a proposal is a routine act, and requiring a service
+// outage to perform it guarantees that nobody does it — after which
+// propose mode is a queue that only fills.
+//
+// So the same operations are reachable on a RUNNING cluster. Writes
+// forward to the leader like every other write; the offline CLI stays
+// for the case where the node will not start.
+//
+// Deliberately NOT reachable from a conversation. Approval is the act
+// that decides whether the agent's own suggestion becomes something it
+// follows, and routing it through the channel the agent writes in puts
+// the request and the approval on the same wire. The in-channel path
+// is a later, separate decision, and it will sit on the durable
+// confirmation records rather than on this service.
+type SelfLearningServiceClient interface {
+	ListArtefacts(ctx context.Context, in *ListArtefactsRequest, opts ...grpc.CallOption) (*ListArtefactsResponse, error)
+	ApproveArtefact(ctx context.Context, in *ApproveArtefactRequest, opts ...grpc.CallOption) (*ApproveArtefactResponse, error)
+	DecideRevision(ctx context.Context, in *DecideRevisionRequest, opts ...grpc.CallOption) (*DecideRevisionResponse, error)
+	ArchiveArtefact(ctx context.Context, in *ArchiveArtefactRequest, opts ...grpc.CallOption) (*ArchiveArtefactResponse, error)
+	RestoreArtefact(ctx context.Context, in *RestoreArtefactRequest, opts ...grpc.CallOption) (*RestoreArtefactResponse, error)
+}
+
+type selfLearningServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSelfLearningServiceClient(cc grpc.ClientConnInterface) SelfLearningServiceClient {
+	return &selfLearningServiceClient{cc}
+}
+
+func (c *selfLearningServiceClient) ListArtefacts(ctx context.Context, in *ListArtefactsRequest, opts ...grpc.CallOption) (*ListArtefactsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListArtefactsResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_ListArtefacts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *selfLearningServiceClient) ApproveArtefact(ctx context.Context, in *ApproveArtefactRequest, opts ...grpc.CallOption) (*ApproveArtefactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApproveArtefactResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_ApproveArtefact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *selfLearningServiceClient) DecideRevision(ctx context.Context, in *DecideRevisionRequest, opts ...grpc.CallOption) (*DecideRevisionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecideRevisionResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_DecideRevision_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *selfLearningServiceClient) ArchiveArtefact(ctx context.Context, in *ArchiveArtefactRequest, opts ...grpc.CallOption) (*ArchiveArtefactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ArchiveArtefactResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_ArchiveArtefact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *selfLearningServiceClient) RestoreArtefact(ctx context.Context, in *RestoreArtefactRequest, opts ...grpc.CallOption) (*RestoreArtefactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreArtefactResponse)
+	err := c.cc.Invoke(ctx, SelfLearningService_RestoreArtefact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SelfLearningServiceServer is the server API for SelfLearningService service.
+// All implementations should embed UnimplementedSelfLearningServiceServer
+// for forward compatibility.
+//
+// -----------------------------------------------------------------------------
+// SelfLearningService — inspect and decide on what the agent taught itself
+// -----------------------------------------------------------------------------
+//
+// The offline `lobslaw learned` CLI opens state.db directly, which
+// means bbolt's exclusive lock, which means the node must be stopped.
+// That is a fine shape for forensics and a terrible one for approval:
+// approving a proposal is a routine act, and requiring a service
+// outage to perform it guarantees that nobody does it — after which
+// propose mode is a queue that only fills.
+//
+// So the same operations are reachable on a RUNNING cluster. Writes
+// forward to the leader like every other write; the offline CLI stays
+// for the case where the node will not start.
+//
+// Deliberately NOT reachable from a conversation. Approval is the act
+// that decides whether the agent's own suggestion becomes something it
+// follows, and routing it through the channel the agent writes in puts
+// the request and the approval on the same wire. The in-channel path
+// is a later, separate decision, and it will sit on the durable
+// confirmation records rather than on this service.
+type SelfLearningServiceServer interface {
+	ListArtefacts(context.Context, *ListArtefactsRequest) (*ListArtefactsResponse, error)
+	ApproveArtefact(context.Context, *ApproveArtefactRequest) (*ApproveArtefactResponse, error)
+	DecideRevision(context.Context, *DecideRevisionRequest) (*DecideRevisionResponse, error)
+	ArchiveArtefact(context.Context, *ArchiveArtefactRequest) (*ArchiveArtefactResponse, error)
+	RestoreArtefact(context.Context, *RestoreArtefactRequest) (*RestoreArtefactResponse, error)
+}
+
+// UnimplementedSelfLearningServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSelfLearningServiceServer struct{}
+
+func (UnimplementedSelfLearningServiceServer) ListArtefacts(context.Context, *ListArtefactsRequest) (*ListArtefactsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListArtefacts not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) ApproveArtefact(context.Context, *ApproveArtefactRequest) (*ApproveArtefactResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ApproveArtefact not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) DecideRevision(context.Context, *DecideRevisionRequest) (*DecideRevisionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DecideRevision not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) ArchiveArtefact(context.Context, *ArchiveArtefactRequest) (*ArchiveArtefactResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ArchiveArtefact not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) RestoreArtefact(context.Context, *RestoreArtefactRequest) (*RestoreArtefactResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestoreArtefact not implemented")
+}
+func (UnimplementedSelfLearningServiceServer) testEmbeddedByValue() {}
+
+// UnsafeSelfLearningServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SelfLearningServiceServer will
+// result in compilation errors.
+type UnsafeSelfLearningServiceServer interface {
+	mustEmbedUnimplementedSelfLearningServiceServer()
+}
+
+func RegisterSelfLearningServiceServer(s grpc.ServiceRegistrar, srv SelfLearningServiceServer) {
+	// If the following call pancis, it indicates UnimplementedSelfLearningServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SelfLearningService_ServiceDesc, srv)
+}
+
+func _SelfLearningService_ListArtefacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListArtefactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).ListArtefacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_ListArtefacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).ListArtefacts(ctx, req.(*ListArtefactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SelfLearningService_ApproveArtefact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApproveArtefactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).ApproveArtefact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_ApproveArtefact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).ApproveArtefact(ctx, req.(*ApproveArtefactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SelfLearningService_DecideRevision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecideRevisionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).DecideRevision(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_DecideRevision_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).DecideRevision(ctx, req.(*DecideRevisionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SelfLearningService_ArchiveArtefact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ArchiveArtefactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).ArchiveArtefact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_ArchiveArtefact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).ArchiveArtefact(ctx, req.(*ArchiveArtefactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SelfLearningService_RestoreArtefact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreArtefactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SelfLearningServiceServer).RestoreArtefact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SelfLearningService_RestoreArtefact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SelfLearningServiceServer).RestoreArtefact(ctx, req.(*RestoreArtefactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SelfLearningService_ServiceDesc is the grpc.ServiceDesc for SelfLearningService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SelfLearningService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.SelfLearningService",
+	HandlerType: (*SelfLearningServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListArtefacts",
+			Handler:    _SelfLearningService_ListArtefacts_Handler,
+		},
+		{
+			MethodName: "ApproveArtefact",
+			Handler:    _SelfLearningService_ApproveArtefact_Handler,
+		},
+		{
+			MethodName: "DecideRevision",
+			Handler:    _SelfLearningService_DecideRevision_Handler,
+		},
+		{
+			MethodName: "ArchiveArtefact",
+			Handler:    _SelfLearningService_ArchiveArtefact_Handler,
+		},
+		{
+			MethodName: "RestoreArtefact",
+			Handler:    _SelfLearningService_RestoreArtefact_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
 	MemoryService_Store_FullMethodName        = "/lobslaw.v1.MemoryService/Store"
 	MemoryService_Recall_FullMethodName       = "/lobslaw.v1.MemoryService/Recall"
 	MemoryService_Search_FullMethodName       = "/lobslaw.v1.MemoryService/Search"

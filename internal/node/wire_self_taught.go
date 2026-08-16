@@ -7,6 +7,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
+	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
 // wireSelfTaught constructs the store the agent writes its own
@@ -38,6 +39,15 @@ func (n *Node) wireSelfTaught() error {
 	n.selfTaught = store
 	n.log.Info("self-learning: enabled", "mode", string(mode),
 		"artefacts_active_immediately", mode == memory.SelfLearningAuto)
+
+	// Registered here rather than unconditionally in the subsystem
+	// stage, so a cluster with self-learning off does not expose an
+	// RPC surface for a store that does not exist. Absence, not a
+	// guarded call — the same property the store itself has.
+	if n.server != nil {
+		lobslawv1.RegisterSelfLearningServiceServer(n.server,
+			&selfLearningService{store: store})
+	}
 	return nil
 }
 
@@ -57,8 +67,9 @@ func (n *Node) startCurator(ctx context.Context) {
 		return
 	}
 	cfg := memory.CuratorConfig{
-		StaleAfterDays:   n.cfg.SelfTaughtStaleAfterDays,
-		ArchiveAfterDays: n.cfg.SelfTaughtArchiveAfterDays,
+		StaleAfterDays:     n.cfg.SelfTaughtStaleAfterDays,
+		ArchiveAfterDays:   n.cfg.SelfTaughtArchiveAfterDays,
+		ProposalExpiryDays: n.cfg.SelfTaughtProposalExpiryDays,
 	}
 	go func() {
 		err := singleton.Run(ctx, n.leaderGate, curatorName, n.log,

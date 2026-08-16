@@ -134,6 +134,19 @@ type SelfLearningConfig struct {
 	// sum. Archiving is never deletion: everything stays restorable.
 	StaleAfterDays   int `koanf:"stale_after_days"`
 	ArchiveAfterDays int `koanf:"archive_after_days"`
+
+	// ProposalExpiryDays bounds the review queue: a proposal nobody
+	// has looked at is archived, with reason "unreviewed" so the
+	// archive can tell it apart from something somebody declined.
+	// Zero takes the default of 30; NEGATIVE disables it.
+	//
+	// An uncomfortable setting, deliberately configurable. Expiring a
+	// proposal converts "not reviewed yet" into a decision nobody
+	// made — but an unbounded inbox is not an inbox, and a queue of
+	// two hundred is one nobody will ever work through, at which point
+	// the review fork is writing into something that functions as
+	// /dev/null.
+	ProposalExpiryDays int `koanf:"proposal_expiry_days"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

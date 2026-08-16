@@ -110,6 +110,9 @@ type Config struct {
 	// Curation thresholds in days of disuse. Zero takes the defaults.
 	SelfTaughtStaleAfterDays   int
 	SelfTaughtArchiveAfterDays int
+	// SelfTaughtProposalExpiryDays bounds the review queue. Zero takes
+	// the default of 30; negative disables it.
+	SelfTaughtProposalExpiryDays int
 
 	// SessionGrantTTL bounds a conversation-scoped approval. Zero
 	// takes the default of 24h.
