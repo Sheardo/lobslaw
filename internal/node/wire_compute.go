@@ -157,12 +157,6 @@ func (n *Node) wireResolver() error {
 	if len(n.cfg.Compute.Providers) == 0 {
 		return nil
 	}
-	// Before anything is constructed. A floor that cannot be satisfied
-	// is a configuration error, and boot is the last moment somebody
-	// is looking at the configuration rather than waiting for a reply.
-	if err := n.validateTrustFloor(); err != nil {
-		return err
-	}
 	r, err := compute.NewResolver(&n.cfg.Compute)
 	if err != nil {
 		return fmt.Errorf("resolver: %w", err)

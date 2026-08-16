@@ -111,11 +111,44 @@ func (c *Config) Validate() error {
 	if err := validateProviderBackups(c.Compute.Providers); err != nil {
 		return err
 	}
+	if err := validateTrustTiers(c.Compute.Providers); err != nil {
+		return err
+	}
 	if err := validateContextConfig(c.Compute.Context); err != nil {
 		return err
 	}
 	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateTrustTiers rejects an out-of-range numeric trust_tier.
+//
+// Needed because a BARE TOML integer never reaches the type's own
+// UnmarshalText: mapstructure converts int to int directly, so only
+// the quoted and named forms get validated on the way in. An operator
+// writing `trust_tier = 500` would otherwise load a value that fails
+// every comparison, and find out later through an error about
+// something else.
+//
+// Zero is refused with its own message. It is the value an omitted
+// field takes, so somebody who wrote it explicitly meant a tier and
+// got "unset" — and "0 is not a tier" is a far better thing to read
+// than silence.
+func validateTrustTiers(providers []ProviderConfig) error {
+	for _, p := range providers {
+		if p.TrustTier == types.TrustUnset {
+			// Genuinely absent is fine: it only has to be declared once
+			// a floor exists, and that is soul's check to make.
+			continue
+		}
+		if !p.TrustTier.IsValid() {
+			return fmt.Errorf(
+				"%w: provider %q has trust_tier %d, which is out of range; use 1..%d "+
+					"or a name (public, private, local), where higher is more trusted",
+				types.ErrInvalidConfig, p.Label, int(p.TrustTier), int(types.MaxTrustTier))
+		}
 	}
 	return nil
 }

@@ -1478,18 +1478,24 @@ so the existing resolver/capability/roles tests stay green throughout.
 - [ ] A chain step falls through without abandoning the chain. *Chat and modality chains both
       fail over; a multi-step chain's individual STEP still resolves to one provider.*
 - [x] Trust-tier floor is honoured at every candidate, not just the first.
-      **It was honoured at NO candidate.** The box as written understated it: the only code that
-      read `min_trust_tier` was `Resolver.buildDecision`, and nothing calls `Resolver.Resolve` —
-      the turn path is the provider *backup chain*, which walked label to label with no notion of
-      a tier. `soul.ValidateProviderTier` had no callers either. So an operator could set
-      `min_trust_tier = "private"`, watch it render into the system prompt, and have a turn
-      silently complete on a public provider the moment the primary returned a 429: the failover
-      machinery that makes the assistant resilient was the same machinery that lowered the floor.
-      Now enforced at every candidate on the chat chain AND on every modality chain — a vision
-      provider is handed the user's image, and a speak provider the text of the reply, so they are
-      not lesser recipients of content. Validated at boot as well: fatal when the *primary* is
-      below the floor (no turn could ever run), warn per below-floor backup (the chain terminates
-      earlier than the operator expects, and the reason is logged).
+      Enforced on the chat backup chain and on every modality chain — a vision provider is handed
+      the user's image and a speak provider the text of the reply, so they are not lesser
+      recipients of content.
+
+      **Correction to the first version of this entry**, which claimed the floor was enforced
+      nowhere and that `soul.ValidateProviderTier` had no callers. It had one:
+      `wireLLMProviders` has validated every configured provider against the floor, fatally, since
+      long before the runtime check. So the config-time hole described there did not exist — you
+      could never boot with a below-floor provider configured. The claim came from a truncated
+      grep read as a complete one.
+
+      The real gap is narrower and still worth closing: **the soul is tunable at runtime.** An
+      operator raising `min_trust_tier` after boot had already passed the boot check, so the change
+      took effect in the system prompt and nowhere else — providers already in the registry carried
+      on serving turns at the tier they were admitted at. The runtime check closes that, and is
+      defence in depth otherwise. The duplicate boot check added alongside it has been removed:
+      it warned for backups, implying a leniency the real check does not offer.
+
 - [ ] `hint = "deep"` resolves through a chain an operator can inspect and override.
 - [ ] Per-attempt audit entries (provider, latency, outcome, cost).
 

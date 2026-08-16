@@ -134,7 +134,7 @@ func failoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 // asked for a restriction.
 func trustFloorOf(floor func() types.TrustTier) types.TrustTier {
 	if floor == nil {
-		return ""
+		return TrustUnsetFloor
 	}
 	return floor()
 }

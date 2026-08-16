@@ -105,7 +105,7 @@ func BuildIdentity(soul *types.SoulConfig) Section {
 		fmt.Fprintf(&b, "- %s: %s\n", kv[0], kv[1])
 		hasAny = true
 	}
-	if soul.MinTrustTier != "" {
+	if soul.MinTrustTier != types.TrustUnset {
 		fmt.Fprintf(&b, "- min_trust_tier: %s\n", soul.MinTrustTier)
 		hasAny = true
 	}

@@ -25,7 +25,7 @@ func ValidateProviderTier(s *Soul, provider ProviderTrustTier) error {
 		return nil
 	}
 	floor := s.Config.MinTrustTier
-	if floor == "" {
+	if floor == types.TrustUnset {
 		return nil
 	}
 	if !floor.IsValid() {
