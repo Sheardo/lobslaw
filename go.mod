@@ -22,11 +22,11 @@ require (
 	github.com/sirupsen/logrus v1.7.0
 	github.com/stripe/smokescreen v0.0.4
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/crypto v0.47.0
-	golang.org/x/mod v0.35.0
-	golang.org/x/sys v0.43.0
-	golang.org/x/term v0.42.0
-	google.golang.org/grpc v1.80.0
+	golang.org/x/crypto v0.54.0
+	golang.org/x/mod v0.37.0
+	golang.org/x/sys v0.47.0
+	golang.org/x/term v0.45.0
+	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -40,6 +40,7 @@ require (
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-metrics v0.5.4 // indirect
@@ -56,10 +57,12 @@ require (
 	github.com/rs/xid v1.2.1 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/stripe/goproxy v0.0.0-20220308202309-3f1dfba6d1a4 // indirect
+	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20221106115401-f9659909a136 // indirect
-	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260120221211-b8f7ae30c516 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260810153831-ec0a7760b754 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260807164820-c8921c73eeea // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )

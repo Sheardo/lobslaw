@@ -225,10 +225,10 @@ harness already knows.
 
 ## What has landed
 
-The span model, the recorder, the local file sink, `lobslaw trace`, and
-provider-attempt instrumentation. OTLP, the webhook sink, and the
-non-LLM spans (retrieval, compaction, ingest) are not built yet, nor is
-tool context attribution.
+The span model, the recorder, the local file sink, OTLP export,
+`lobslaw trace`, and provider-attempt instrumentation. The webhook
+sink and the non-LLM spans (retrieval, compaction, ingest) are not
+built yet, nor is tool context attribution.
 
 ### Stored locally, contrary to the design above
 
@@ -300,3 +300,77 @@ pricing, and the cost is attributed to the provider that actually
 served the turn rather than to the one that was asked. On a failover
 those differ, and attributing to the requested model would misprice
 exactly the turns worth auditing.
+
+---
+
+## OTLP export
+
+```toml
+[trace]
+enabled       = true
+otlp_endpoint = "localhost:4317"
+otlp_insecure = true          # named for what it does
+service_name  = "lobslaw"
+```
+
+**In addition to the file, not instead of it.** The file is the
+record; the collector is where you look. A collector going down must
+not lose the trace of the turn that was failing while it was down —
+which is exactly the trace anybody would want afterwards.
+
+### Written against the wire format, not the SDK
+
+The OpenTelemetry Go SDK brings a tracer provider, a span processor, a
+batcher and a context-propagation layer. This package already has its
+own version of every one of them. Adopting the SDK would mean
+converting our spans into its spans so that its batcher could hand
+them to its exporter — a lot of machinery to serialise a struct we
+already own.
+
+So the exporter is a `Sink` like any other. The recorder's
+non-blocking dispatch and drop accounting apply unchanged, which is
+the property that matters.
+
+Cost: `go.opentelemetry.io/proto/otlp`, which drags in
+`grpc-gateway/v2` because the generated REST-gateway file lives in the
+same package as the request message. That is the standard cost of
+OTLP/gRPC in Go — the official exporter takes it too.
+
+### Ids are hashed, not generated
+
+OTLP wants 16 bytes of trace id and 8 of span id; ours are ULIDs.
+Hashing is deterministic, so the same turn produces the same trace id
+on every node and in every export — which is what makes a re-export
+idempotent and a turn's spans group into one trace rather than
+scattering across three.
+
+Trace and span ids use **different hash prefixes**, so a turn id and a
+span id that happened to be equal cannot produce the same bytes. That
+would make a span its own parent, and it is the kind of thing that
+surfaces as one inexplicable trace six months later.
+
+### Three failure modes, each handled
+
+**A collector that hangs.** Every export carries a deadline. Without
+one the exporter blocks forever, the recorder's single background
+goroutine never returns, and every span is dropped for the life of the
+process — *including the ones destined for the local file*, which has
+nothing wrong with it.
+
+**A collector that refuses.** The batch is dropped, not requeued. A
+collector that is down stays down for minutes, and a queue that grows
+for the duration is how a telemetry outage becomes a memory incident.
+The recorder counts the failure.
+
+**A collector that is down at boot.** gRPC dialling is lazy, so the
+node starts and the collector picks up when it returns. A failure
+constructing the exporter is logged and tracing degrades to local-only
+rather than refusing to boot — taking the assistant down to protect
+telemetry is the wrong trade.
+
+### Status codes
+
+A failed attempt is `ERROR` so a collector's own filters find it. A
+**skipped** candidate is `UNSET`: it did not fail, it was never tried,
+and colouring a protective decision red is how a working trust floor
+gets reported as an outage.

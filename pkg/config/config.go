@@ -183,6 +183,27 @@ type TraceConfig struct {
 	// Bounded because an unbounded telemetry file on a long-running
 	// node is a disk-full incident waiting for a quiet week.
 	MaxBytes int64 `koanf:"max_bytes,omitempty"`
+
+	// OTLPEndpoint exports to an OpenTelemetry collector, in addition
+	// to the local file rather than instead of it.
+	//
+	// In addition, deliberately. The file is the record; the collector
+	// is where you look. A collector going down must not lose the
+	// trace of the turn that was failing while it was down, which is
+	// exactly the trace anybody would want afterwards.
+	//
+	// Empty disables it. host:port, gRPC.
+	OTLPEndpoint string `koanf:"otlp_endpoint,omitempty"`
+
+	// OTLPInsecure disables TLS to the collector. Named for what it
+	// does rather than "secure = false", so the config reads as an
+	// admission. Spans carry no content, but they do carry provider
+	// names, timings and costs.
+	OTLPInsecure bool `koanf:"otlp_insecure,omitempty"`
+
+	// ServiceName identifies this deployment in the collector. Empty
+	// takes "lobslaw".
+	ServiceName string `koanf:"service_name,omitempty"`
 }
 
 // NotifyConfig is the operator's opt-in to being told, in-channel,
