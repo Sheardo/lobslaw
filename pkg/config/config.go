@@ -79,6 +79,26 @@ type MemoryConfig struct {
 	// operator can reason about. Zero takes the defaults.
 	PinnedProfileChars int `koanf:"pinned_profile_chars"`
 	PinnedNotesChars   int `koanf:"pinned_notes_chars"`
+
+	// WriteApproval stages agent-initiated memory writes for approval
+	// instead of letting them land. Off by default.
+	//
+	// hermes's key name, deliberately: the concept is theirs and an
+	// operator moving between the two should not have to learn a
+	// second word for it.
+	//
+	// Everything the agent writes is gated, not a guessed-at subset.
+	// A boundary drawn around "facts about the user" has to be
+	// inferred, and inference gets it wrong in both directions —
+	// missing the thing you cared about, and asking about a working
+	// note you did not.
+	//
+	// Implemented as a low-priority POLICY rule rather than a branch
+	// in the tool, which is what makes the answer reusable: "for this
+	// conversation" becomes a session grant, "always" mints a visible
+	// and revocable rule, and an operator wanting something narrower
+	// writes an ordinary rule that outranks the default.
+	WriteApproval bool `koanf:"write_approval,omitempty"`
 }
 
 // SelfLearningConfig governs whether the agent may write instructions

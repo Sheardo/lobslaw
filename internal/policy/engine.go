@@ -44,6 +44,20 @@ type Engine struct {
 	// any goroutine that processes a tool invocation.
 	evalMu     sync.RWMutex
 	evaluators map[string]ConditionEvaluator
+
+	// defaults are config-derived rules held in memory, evaluated
+	// AFTER everything in the store.
+	//
+	// Not written to the rule bucket, deliberately. That bucket is
+	// raft-replicated operator intent; a rule derived from one node's
+	// config file is neither, and every node writing its own copy at
+	// boot would turn a local setting into contested cluster state.
+	//
+	// Last, so anything an operator wrote — and anything an earlier
+	// approval minted — outranks them. A default that could not be
+	// overridden would not be a default.
+	defaultMu sync.RWMutex
+	defaults  []types.PolicyRule
 }
 
 // NewEngine wraps store with an Engine. The store must be the same
@@ -152,10 +166,21 @@ func (e *Engine) Evaluate(ctx context.Context, claims *types.Claims, action, res
 	}, nil
 }
 
+// SetDefaults installs config-derived fallback rules.
+//
+// Replaces rather than appends, so a reload cannot accumulate
+// duplicates of the same setting.
+func (e *Engine) SetDefaults(rules []types.PolicyRule) {
+	e.defaultMu.Lock()
+	defer e.defaultMu.Unlock()
+	e.defaults = append([]types.PolicyRule(nil), rules...)
+}
+
 // loadRules reads all PolicyRule records from the store and sorts
 // them by priority descending. Fresh read on each Evaluate call —
 // rules change rarely and this keeps the path simple. A cache layer
 // with FSM-driven invalidation can land later if measurement warrants.
+
 func (e *Engine) loadRules() ([]types.PolicyRule, error) {
 	var rules []types.PolicyRule
 	err := e.store.ForEach(memory.BucketPolicyRules, func(_ string, raw []byte) error {
@@ -176,6 +201,15 @@ func (e *Engine) loadRules() ([]types.PolicyRule, error) {
 		}
 		return rules[i].ID < rules[j].ID
 	})
+
+	// Appended after the sort rather than sorted in with everything
+	// else. Sorting them together would let a default with an
+	// unluckily high priority beat an operator rule, and the whole
+	// point of a default is that it is what applies when nobody said
+	// otherwise.
+	e.defaultMu.RLock()
+	rules = append(rules, e.defaults...)
+	e.defaultMu.RUnlock()
 	return rules, nil
 }
 
