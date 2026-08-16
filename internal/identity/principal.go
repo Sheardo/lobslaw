@@ -16,6 +16,7 @@
 package identity
 
 import (
+	"context"
 	"sort"
 	"strings"
 )
@@ -67,6 +68,21 @@ func Chat(channel, channelID string) Principal {
 // String renders the principal for storage and logs.
 func (p Principal) String() string { return string(p) }
 
+// ID returns the identifier without its kind prefix — "alice" from
+// "user:alice".
+//
+// For the places that need a bare id rather than a principal
+// reference: types.Claims.UserID is one, because policy subjects are
+// written "user:alice" and the engine adds the kind itself. Passing a
+// principal there would produce "user:user:alice" and match nothing.
+func (p Principal) ID() string {
+	s := string(p)
+	if _, rest, ok := strings.Cut(s, ":"); ok {
+		return rest
+	}
+	return s
+}
+
 // IsZero reports the absence of an identity — an anonymous turn, or a
 // record written before ownership existed.
 func (p Principal) IsZero() bool { return p == "" }
@@ -82,6 +98,42 @@ func (p Principal) IsZero() bool { return p == "" }
 // talk to the bot until an operator edits a file.
 type Resolver struct {
 	aliases map[string]Principal
+	// bindings resolves a channel ADDRESS to a canonical principal.
+	//
+	// The alias map above keys on the id a channel already derived —
+	// for Telegram that is the @username when the user has one, which
+	// is reassignable, so a rename orphans every binding and whoever
+	// claims the freed handle inherits them. Resolving from the raw
+	// address instead lets an operator bind the numeric id, which
+	// never changes.
+	//
+	// Optional: a deployment that configures no bindings keeps
+	// today's behaviour exactly.
+	bindings ChannelBindings
+}
+
+// ChannelBindings is the state-backed half of resolution: the
+// operator's declared "this address is this person".
+//
+// An interface so this package does not depend on the memory store —
+// identity is consulted from the gateway edge, and a cycle there would
+// be a real problem rather than a stylistic one.
+type ChannelBindings interface {
+	// PrincipalFor returns the canonical user id bound to a channel
+	// address, or "" when nothing is bound. An error means the lookup
+	// itself failed, which is different from "not bound" and must not
+	// be treated as one.
+	PrincipalFor(ctx context.Context, channel, address string) (string, error)
+}
+
+// WithBindings attaches a state-backed lookup. Returns the resolver so
+// it can be chained onto NewResolver at a wiring site.
+func (r *Resolver) WithBindings(b ChannelBindings) *Resolver {
+	if r == nil {
+		return nil
+	}
+	r.bindings = b
+	return r
 }
 
 // NewResolver builds a resolver from an operator's alias map: channel
@@ -127,6 +179,33 @@ func (r *Resolver) Resolve(userID string) Principal {
 		}
 	}
 	return User(userID)
+}
+
+// ResolveChannel returns the canonical principal for a channel
+// address, falling back to the alias map and finally to fallbackID —
+// the id the channel would have used on its own.
+//
+// This is the entry point a gateway should use, because it is the only
+// one that sees the raw address. Resolving later from an already-derived
+// id can only work with what that derivation kept, and for Telegram
+// that is a handle the user can change.
+//
+// Fails OPEN to fallbackID, deliberately. An unbound address becoming
+// its own principal is today's behaviour and lets a new person talk to
+// the bot without an operator editing a file first; a lookup error is
+// logged by the caller and must not lock somebody out of their own
+// history.
+func (r *Resolver) ResolveChannel(ctx context.Context, channel, address, fallbackID string) (Principal, error) {
+	if r != nil && r.bindings != nil && channel != "" && address != "" {
+		userID, err := r.bindings.PrincipalFor(ctx, channel, address)
+		if err != nil {
+			return r.Resolve(fallbackID), err
+		}
+		if userID != "" {
+			return User(userID), nil
+		}
+	}
+	return r.Resolve(fallbackID), nil
 }
 
 // Aliases returns the configured mappings, sorted, for logging at boot.

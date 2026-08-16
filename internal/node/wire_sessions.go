@@ -406,12 +406,25 @@ func translateSessionErr(err error) error {
 	return err
 }
 
-// identityResolver builds the principal resolver from [identity.aliases].
-// Rebuilt per call rather than cached: it is constructed at wiring time,
-// the map is a handful of entries, and a cached copy would silently
-// outlive a config reload.
+// identityResolver builds the principal resolver from
+// [identity.aliases], backed by the channel bindings an operator
+// declared under [[user]].
+//
+// Rebuilt per call rather than cached: it is constructed at wiring
+// time, the map is a handful of entries, and a cached copy would
+// silently outlive a config reload.
+//
+// The bindings half is what lets an operator bind a channel's stable
+// address — a Telegram numeric id rather than its renameable @handle —
+// so identity survives a rename and does not transfer with the handle.
+// Nil on a node without user prefs, which keeps the alias-map-only
+// behaviour.
 func (n *Node) identityResolver() *identity.Resolver {
-	return identity.NewResolver(n.cfg.Identity.Aliases)
+	r := identity.NewResolver(n.cfg.Identity.Aliases)
+	if n.userPrefsSvc != nil {
+		r = r.WithBindings(n.userPrefsSvc)
+	}
+	return r
 }
 
 // sessionLeaserAdapter adapts memory.LeaseService to

@@ -432,18 +432,40 @@ person) but does not introduce it.
 
 ### Proposal
 
-Make the numeric id the identity and the handle a display name:
+This turned out to be R7 gaps 1–2 rather than a Telegram change: if the gateway resolves to a
+canonical principal, the handle stops being an identity at all.
 
-- `claims.UserID` becomes `tg-<numeric id>`, always.
-- The handle rides alongside for rendering and log lines only.
-- A migration for existing rules and prefs keyed on `tg-@name`, or a documented one-time
-  re-grant — deleting people's rules silently is worse than asking them to re-approve.
+**Shipped.** `identity.Resolver.ResolveChannel(ctx, channel, address, fallback)` resolves the raw
+channel address — for Telegram the numeric id, which never changes — against the bindings an
+operator declared under `[[user]].channels`. Telegram calls it at the edge, the only place that
+still has the numeric id. Falls back to today's derived id when nothing is bound, so a deployment
+that declares no bindings is unchanged and a new person can still talk to the bot without a config
+edit.
+
+An operator closes the hazard for a given person by declaring:
+
+```toml
+[[user]]
+id = "alice"
+channels = [{ type = "telegram", address = "123456789" }]
+```
+
+**Still open — needs an operator decision.** Existing state (memory ownership, policy rules,
+approval-minted grants, prefs) is keyed on whatever `claims.UserID` was at write time, so binding a
+person for the first time re-points them at a new canonical id and their prior state is left behind
+under the old one. Nothing is deleted, but nothing follows them either.
+
+The options are a migration command that rewrites owners for a named pair, or telling operators
+plainly to re-grant. Which is right depends on whether a live deployment has state worth carrying —
+so it is a question for the operator, not a default to pick.
 
 ### Acceptance
 
-- [ ] A user who renames keeps their roles, rules, and approvals.
-- [ ] Someone claiming a freed handle inherits nothing.
-- [ ] Existing `tg-@name`-keyed state is migrated or the operator is told plainly what to redo.
+- [x] A user who renames keeps their identity — once bound by numeric id.
+- [x] Someone claiming a freed handle inherits nothing.
+- [x] A deployment that binds nothing is byte-for-byte unchanged.
+- [ ] Existing `tg-@name`-keyed state is migrated, or the operator is told plainly what to redo.
+      **Blocked on the operator decision above.**
 
 ---
 

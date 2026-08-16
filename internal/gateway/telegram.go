@@ -16,6 +16,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -80,6 +81,11 @@ type TelegramConfig struct {
 	// subject = "role:…" can ever match it. Nil → no roles, which is
 	// the correct reading of a deployment that declared none.
 	Roles func(userID string) []string
+
+	// Identity resolves a Telegram numeric id to the canonical
+	// principal an operator bound it to. Nil keeps the channel's own
+	// derived id, which is today's behaviour.
+	Identity *identity.Resolver
 
 	// UnknownUserScope is the scope assigned to unmapped user IDs.
 	// Empty → reject unknown users with 403. Useful defaults:
@@ -413,7 +419,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 	}
 
 	claims := &types.Claims{
-		UserID: tgUserIdentity(msg.From),
+		UserID: h.principalFor(ctx, msg.From),
 		Scope:  scope,
 	}
 	claims.Roles = h.rolesFor(claims.UserID)
@@ -930,6 +936,39 @@ func constantTimeEq(a, b string) bool {
 }
 
 // Helpers for nil-safe user extraction.
+// principalFor resolves who this message is from, preferring the
+// operator's binding for the sender's numeric id over the id Telegram
+// hands us.
+//
+// This is the only place with the raw numeric id, which is why it
+// resolves here rather than downstream. tgUserIdentity prefers the
+// @username, and a username is reassignable: bound to it, a rename
+// orphans somebody's history and grants, and whoever claims the freed
+// handle inherits them.
+//
+// Falls back to tgUserIdentity when nothing is bound, so a deployment
+// that declares no [[user]] channels behaves exactly as before and a
+// new person can still talk to the bot without an operator editing a
+// file first.
+func (h *TelegramHandler) principalFor(ctx context.Context, u *tgUser) string {
+	fallback := tgUserIdentity(u)
+	if h.cfg.Identity == nil || u == nil || u.ID == 0 {
+		return fallback
+	}
+	principal, err := h.cfg.Identity.ResolveChannel(ctx, "telegram",
+		strconv.FormatInt(u.ID, 10), fallback)
+	if err != nil {
+		// Logged, never fatal. A lookup outage must not reassign
+		// somebody's identity or lock them out of their own history.
+		h.log.Warn("telegram: identity lookup failed; using the channel id",
+			"telegram_user_id", u.ID, "err", err)
+	}
+	if principal.IsZero() {
+		return fallback
+	}
+	return principal.ID()
+}
+
 func tgUserIdentity(u *tgUser) string {
 	if u == nil {
 		return "tg-unknown"

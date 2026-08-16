@@ -302,6 +302,33 @@ Two deliberate omissions:
 - **Tools.** Node state, rebuilt from the resuming node's own registry. A serialised tool definition would outlive the redeploy that changed it.
 - **Budget caps.** Read from the resuming node's current config, so an operator lowering a limit is not overridden by a turn that started before the change. Only the *counters* are restored, and only ever forward — otherwise a confirmation would be a way to reset the allowance.
 
+## Who a message is from
+
+`tgUserIdentity` derives `tg-@<username>` when the sender has one, falling back to the numeric id.
+That is fine for a log line and wrong as an identity: Telegram usernames are changeable, and a
+freed handle can be claimed by somebody else. Bound to the handle, a rename orphans a person's
+history and grants, and the next holder of the handle inherits them.
+
+So the handler resolves at the edge — the only place that still has the numeric id — through
+`identity.Resolver.ResolveChannel("telegram", <numeric id>, <derived id>)`. An operator binds the
+stable address once:
+
+```toml
+[[user]]
+id = "alice"
+channels = [{ type = "telegram", address = "123456789" }]
+```
+
+and `claims.UserID` becomes `alice` regardless of what handle they are using.
+
+Unbound senders fall back to the derived id, so a deployment that declares no bindings behaves
+exactly as before and a new person can talk to the bot without a config edit first. A lookup
+failure logs and falls back too — an outage must not reassign somebody's identity or lock them out
+of their own history.
+
+**Binding somebody for the first time re-points them at a new canonical id.** Prior state written
+under the old id is not deleted and does not follow; see R2b in the roadmap.
+
 ## Conversation history
 
 Both channels get prior context from `conversationLog` (`internal/gateway/conversation.go`), a two-tier store:
