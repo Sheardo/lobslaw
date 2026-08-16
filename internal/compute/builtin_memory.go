@@ -15,6 +15,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -546,6 +547,13 @@ func newMemoryWriteHandler(raft memoryRaftApplier) BuiltinFunc {
 			if err := json.Unmarshal([]byte(raw), &tags); err != nil {
 				return nil, 2, fmt.Errorf("tags must be a JSON array of strings: %w", err)
 			}
+		}
+
+		// The model writes here, and what it writes often came from a
+		// tool result or a fetched page. Same quarantine rule as
+		// ingest: keep the record, keep it out of recall.
+		if f, ok := promptguard.Suspicious(event + "\n" + ctxField); ok {
+			tags = append(tags, promptguard.Tag(f))
 		}
 
 		id := ids.New()
