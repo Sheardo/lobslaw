@@ -1722,10 +1722,19 @@ provenance of the *content*.
 
 ### Acceptance
 
-- [ ] Prompt prefix is byte-identical across turns within a session (cache-hit assertion).
-- [ ] A write past the cap errors with current usage and leaves the store unchanged.
-- [ ] Dream proposes a consolidation at the configured threshold without blocking a turn.
-- [ ] N consecutive consolidation failures yield a terminal result; the user still gets a reply.
+- [x] Prompt prefix is byte-identical across turns within a session — a mid-session write is
+      durable immediately and invisible to that session's prompt.
+- [x] A write past the cap errors with current usage and leaves the store unchanged.
+- [x] The consolidation threshold fires at 80%, before a write can fail.
+- [x] N consecutive failures yield a terminal **non-error** result — an error invites another
+      attempt — and stop touching the store; the user still gets a reply.
+- [x] promptguard on write: these land in system position, and provenance of the store is not
+      provenance of the content.
+- [ ] Dream acting on the threshold. `NeedsConsolidation` is the signal; wiring Dream to propose a
+      merge from it is the remaining half, and belongs with the Dream phase rather than here.
+
+Editing is by unique substring rather than by id, and an ambiguous fragment is refused rather than
+guessed at — editing the wrong memory is worse than being told to be more specific.
 
 ---
 

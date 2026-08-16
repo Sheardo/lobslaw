@@ -131,6 +131,21 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 			return nil, fmt.Errorf("register stdlib tool %q: %w", t.Name, err)
 		}
 	}
+
+	// Pinned memory only exists where raft does. A node without it
+	// omits the tools rather than registering ones that fail — an
+	// advertised tool that always errors teaches the model it has a
+	// capability it does not.
+	if n.pinnedStore != nil {
+		if err := compute.RegisterPinnedBuiltins(builtins, pinnedStoreAdapter{inner: n.pinnedStore}); err != nil {
+			return nil, fmt.Errorf("pinned builtins: %w", err)
+		}
+		for _, t := range compute.PinnedToolDefs() {
+			if err := n.toolRegistry.Register(t); err != nil {
+				return nil, fmt.Errorf("register pinned tool %q: %w", t.Name, err)
+			}
+		}
+	}
 	return builtins, nil
 }
 

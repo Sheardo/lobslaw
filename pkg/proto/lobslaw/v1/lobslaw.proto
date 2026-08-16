@@ -835,6 +835,38 @@ message UserPreferences {
   google.protobuf.Timestamp updated_at = 7;
 }
 
+// PinnedMemory is the always-on block: facts that must never be
+// missed, injected in the system prompt every turn rather than
+// retrieved.
+//
+// The archive plus per-turn recall means a vector miss on "prefers
+// terse replies" makes the turn behave as though it were never said.
+// Some things cannot be subject to a retrieval hit.
+//
+// Two kinds, kept in separate records rather than one blob: the user
+// profile is about a person and the agent notes are about an
+// environment, they are edited by different parties for different
+// reasons, and one overflowing should not squeeze the other.
+message PinnedMemory {
+  // id is "profile:<user_id>" or "notes:<user_id>". The kind is in
+  // the key so a listing is self-describing and a bad key cannot
+  // silently become the other kind.
+  string id = 1;
+  string user_id = 2;
+  // kind is "profile" | "notes".
+  string kind = 3;
+  // entries are delimiter-separated and multiline, edited by unique
+  // substring match rather than by id. An id-addressed store would
+  // mean the model has to read an index before it can edit anything,
+  // which costs a round trip to change one line.
+  repeated string entries = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // revision supports CAS, so two turns editing at once cannot
+  // silently drop one another's writes.
+  uint64 revision = 6;
+  string claimed_by = 7;
+}
+
 // UserChannelAddress is one channel binding for a user. type is the
 // gateway channel kind ("telegram", "rest", "slack" — matches the
 // Sink registration); address is channel-specific (Telegram chat_id
@@ -1016,6 +1048,7 @@ message LogEntry {
     SessionLease session_lease = 25;
     PromptRecord prompt = 26;
     ConsolidationRecord consolidation = 27;
+    PinnedMemory pinned = 28;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

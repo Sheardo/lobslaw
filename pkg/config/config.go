@@ -62,6 +62,17 @@ type MemoryConfig struct {
 	Snapshot   SnapshotConfig   `koanf:"snapshot"`
 	Dream      DreamConfig      `koanf:"dream"`
 	Session    SessionConfig    `koanf:"session"`
+
+	// Pinned memory character caps. These blocks are rendered into
+	// every system prompt, so they are a fixed tax on every request —
+	// the cap is what forces them to stay curated rather than becoming
+	// a second archive.
+	//
+	// Characters, not tokens: a character count is model-independent,
+	// and a limit that moves when the tokeniser changes is not one an
+	// operator can reason about. Zero takes the defaults.
+	PinnedProfileChars int `koanf:"pinned_profile_chars"`
+	PinnedNotesChars   int `koanf:"pinned_notes_chars"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

@@ -88,6 +88,11 @@ type Config struct {
 	// the auto-seeded session retention pruner.
 	MemorySession config.SessionConfig
 
+	// MemoryPinnedProfileChars / MemoryPinnedNotesChars cap the
+	// always-on blocks. Zero takes the defaults.
+	MemoryPinnedProfileChars int
+	MemoryPinnedNotesChars   int
+
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
 	Policy config.PolicyConfig
@@ -248,6 +253,12 @@ type Node struct {
 	// approvals is shared between the executor (which spends session
 	// approvals) and the channels (which record them).
 	approvals *compute.SessionApprovals
+
+	// pinnedStore holds the always-on memory blocks rendered into
+	// every system prompt. Nil on a node without raft — there is
+	// nowhere to keep them, and a prompt without them is the
+	// behaviour that existed before.
+	pinnedStore *memory.PinnedStore
 
 	// providerHealth remembers which providers recently failed, so a
 	// failover chain skips one in cooldown rather than paying a

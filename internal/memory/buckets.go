@@ -65,6 +65,11 @@ const (
 	// so a long-lived cluster does not accumulate a record per cluster
 	// per night forever.
 	BucketConsolidations = "consolidations"
+
+	// BucketPinned holds the always-on memory blocks rendered into
+	// every system prompt: the user profile and the agent's notes.
+	// Small and capped by design — it is a fixed tax on every request.
+	BucketPinned = "pinned"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -89,4 +94,5 @@ var allBuckets = []string{
 	BucketSessionLeases,
 	BucketPrompts,
 	BucketConsolidations,
+	BucketPinned,
 }

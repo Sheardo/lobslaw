@@ -134,6 +134,10 @@ func nodeWireStages() []WireStage {
 		{Name: "policy-svc", Gate: gateRaft, Wire: (*Node).wirePolicyService},
 		{Name: "memory-svc", Gate: gateRaft, Wire: (*Node).wireMemoryService},
 		{Name: "user-prefs", Gate: gateRaft, Wire: (*Node).wireUserPrefs},
+		// Before compute: the compute stage registers the tools that
+		// write to it, and a store constructed later would leave them
+		// silently unregistered.
+		{Name: "pinned-memory", Gate: gateRaft, Wire: (*Node).wirePinnedMemory},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},

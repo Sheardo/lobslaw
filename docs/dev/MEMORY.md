@@ -562,3 +562,88 @@ message cap is the only storage bound today.
 No active Go proposals that would simplify this architecture today. HNSW-backed vector search (post-MVP upgrade path for FindClusters + Search over larger stores) is tracked in DEFERRED.md.
 
 Phase 5 (Agent Core) is the next phase that materially changes memory use — it lands the first real Adjudicator (LLM-backed) and the Reranker interface for hot-path recall. Memory-service primitives defined here should not change shape.
+
+---
+
+## Pinned memory
+
+The archive plus per-turn recall means a vector miss on "prefers terse
+replies" makes the turn behave as though it were never said. Some facts
+cannot be subject to a retrieval hit, so they go in the system prompt
+every turn instead.
+
+Two blocks, kept as separate records — a profile is about a person and
+notes are about an environment, they are edited for different reasons,
+and one overflowing must not squeeze the other:
+
+| Block | Contents | Default cap |
+|---|---|---|
+| `profile` | who the user is | 1375 chars |
+| `notes` | conventions, quirks, environment facts | 2200 chars |
+
+Configurable as `memory.pinned_profile_chars` / `memory.pinned_notes_chars`.
+**Characters, not tokens**: a character count is model-independent, and
+a limit that moves when the tokeniser changes is not one an operator
+can reason about.
+
+### The cap is the feature
+
+A write past it **errors** rather than truncating. Silently dropping
+the tail would remove the pressure that forces curation *and* lose the
+content. The error reports current usage so the model can decide what
+to consolidate rather than guessing.
+
+At 80% Dream is asked to propose a tidy-up asynchronously. The cap
+creates the pressure; Dream does the work — which is where this
+improves on hermes, who have no background consolidator and so force
+the model to consolidate in the same turn.
+
+### Frozen per session
+
+The blocks sit in the part of the prompt a provider caches. Reading
+them fresh each turn would mean every write invalidated the prefix for
+the turn after it — always-on *and* never cached, the worst of both.
+
+So writes are durable immediately and the **rendered snapshot** is
+frozen for the session. That is hermes's trick, stated in their
+`memory_tool.py`:
+
+> Mid-session writes update files on disk immediately (durable) but do
+> NOT change the system prompt — this preserves the prefix cache for
+> the entire session.
+
+A session boundary is not observable here (a Telegram conversation has
+no end), so it is approximated by a 30-minute window. Snapshots are
+keyed on conversation **and** user: in a group chat the prefix flips as
+speakers alternate, which costs cache hits. The alternative would be
+showing one participant's profile to everybody.
+
+### Editing
+
+By unique substring, not by id. An id-addressed store means the model
+must read an index before it can change one line — a round trip to edit
+a sentence. An ambiguous fragment is **refused rather than guessed at**:
+editing the wrong memory is worse than being told to be more specific.
+
+### Two guards worth knowing about
+
+**promptguard on write.** These blocks are agent-written and land in
+the most privileged position in the request. That the *store* is
+trusted says nothing about the *content* — a fact learned from a
+fetched page can carry an instruction, and pinning it would put that
+instruction in system position on every future turn.
+
+**A per-turn failure cap.** A hard cap plus "consolidate now" is a
+livelock waiting to happen. hermes added
+`_MAX_CONSOLIDATION_FAILURES_PER_TURN = 3` after a fragile replace/add
+loop *"suppressed the user's reply"*. After three failures the tools
+return a terminal **non-error** telling the model to stop and answer —
+non-error because an error invites another attempt — and stop touching
+the store entirely. A memory side effect must never cost somebody their
+reply.
+
+The user is taken from the turn identity, never from a parameter: a
+user id the model can supply is one a prompt injection can supply, and
+writing into somebody else's always-on block would put attacker text in
+their system prompt forever.
+

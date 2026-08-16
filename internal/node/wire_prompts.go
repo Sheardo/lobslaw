@@ -70,3 +70,21 @@ func (n *Node) startPromptSweeper(ctx context.Context) {
 		}
 	}()
 }
+
+// wirePinnedMemory constructs the always-on memory store.
+//
+// Its own raft-gated stage rather than part of the gateway wiring,
+// because the compute stage registers the tools that use it and
+// compute runs first — constructing it later would leave the tools
+// silently absent on every node.
+func (n *Node) wirePinnedMemory() error {
+	pinned, err := memory.NewPinnedStore(n.raft, n.store, memory.PinnedConfig{
+		ProfileCap: n.cfg.MemoryPinnedProfileChars,
+		NotesCap:   n.cfg.MemoryPinnedNotesChars,
+	})
+	if err != nil {
+		return fmt.Errorf("pinned memory: %w", err)
+	}
+	n.pinnedStore = pinned
+	return nil
+}
