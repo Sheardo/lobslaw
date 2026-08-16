@@ -332,6 +332,11 @@ type SkillInfo struct {
 	Name        string
 	Description string
 	Location    string // filesystem path or registry URI
+
+	// References are the documents bundled with the skill. Named, not
+	// included: the point of an index is that it costs O(names) and
+	// stays that way as bodies grow.
+	References []string
 }
 
 // BuildSkills renders the installed skills list. Skills are
@@ -345,12 +350,19 @@ func BuildSkills(skills []SkillInfo) Section {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
 	var b strings.Builder
-	b.WriteString("Installed skills — higher-level capabilities available for this turn:\n\n")
+	b.WriteString("Installed skills — higher-level capabilities available for this turn.\n")
+	b.WriteString("This list is complete: every skill installed on this node is here. " +
+		"If something is not listed, it is not available — do not assume otherwise.\n\n")
 	for _, s := range sorted {
 		if s.Location != "" {
 			fmt.Fprintf(&b, "- **%s** (`%s`): %s\n", s.Name, s.Location, s.Description)
 		} else {
 			fmt.Fprintf(&b, "- **%s**: %s\n", s.Name, s.Description)
+		}
+		// Named only. Listing what a skill carries lets the model ask
+		// for the right thing without the index paying for any of it.
+		if len(s.References) > 0 {
+			fmt.Fprintf(&b, "  - bundled references: %s\n", strings.Join(s.References, ", "))
 		}
 	}
 	return Section{Title: "Installed Skills", Priority: PriorityPrimary, Body: b.String()}
