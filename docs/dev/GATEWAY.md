@@ -326,8 +326,29 @@ exactly as before and a new person can talk to the bot without a config edit fir
 failure logs and falls back too — an outage must not reassign somebody's identity or lock them out
 of their own history.
 
-**Binding somebody for the first time re-points them at a new canonical id.** Prior state written
-under the old id is not deleted and does not follow; see R2b in the roadmap.
+### Binding somebody who already has history
+
+Binding re-points that person at a new canonical id. Everything they own was written under the old
+one, so it stays there — not deleted, not theirs any more, and invisible to them.
+
+Two ways to handle it:
+
+**Carry it over.** Stop the node and rebind:
+
+```
+lobslaw identity rebind tg-@alice alice          # dry run, shows what would move
+lobslaw identity rebind tg-@alice alice --apply
+```
+
+It rewrites owners on vector and episodic records, commitments, scheduled tasks, prompts, session
+`user_id`s, and policy rules whose subject is that person — including the ones an "always" approval
+minted. It does **not** touch `role:` or `scope:` subjects, which name a group rather than a
+person, and it will not merge two `user_prefs` records: prefs are keyed by the id itself, so it
+reports the conflict and leaves both in place for you to reconcile by hand.
+
+**Or start clean.** Bind the person and let them re-approve what comes up. Nothing is lost that
+matters if the deployment is young — memory they cared about can be re-stated, and grants re-given
+the next time each one is asked for. This is the simpler path and it is a legitimate choice.
 
 ## Conversation history
 

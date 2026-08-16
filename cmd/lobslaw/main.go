@@ -206,6 +206,9 @@ func main() {
 	if dispatchAudit(os.Args[1:]) {
 		return
 	}
+	if dispatchIdentity(os.Args[1:]) {
+		return
+	}
 	if dispatchPolicy(os.Args[1:]) {
 		return
 	}
