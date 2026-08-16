@@ -572,3 +572,128 @@ Enforced at `ParseAgentSkill` **and** at `Registry.Put`. A rule applied
 by one entry point is a rule a second entry point silently does not
 apply.
 
+---
+
+## The prose runtime
+
+Every manifest used to have to name a handler, which encoded an
+assumption that turns out to be wrong: that a skill is a program.
+
+Most of what the agent teaches itself is procedure in prose — how to
+approach a class of task, what this user wants, what to check before
+answering. There is nothing to execute. Inventing a no-op handler so
+the type-check passes would be a lie the invoker would then try to run.
+
+```yaml
+name: how-to-review
+version: 0.0.3
+runtime: prose
+description: how this user likes code reviewed
+references:
+  - SKILL.md
+```
+
+A prose skill is delivered the way every skill's references already
+are: the index advertises it, the model reads the file. That path
+exists and works; the prose runtime only stops the manifest insisting
+on a handler that was never going to be called.
+
+The two halves cannot disagree. A prose manifest naming a handler is
+refused, and so is one pinning `handler_sha256` — a digest pinning a
+file that does not exist reads, to anybody auditing, as a skill whose
+code is pinned. Every other runtime still requires a handler exactly as
+before. `HandlerPath` on a parsed prose skill is empty rather than the
+manifest directory: an empty string is a value nothing can mistake for
+a script.
+
+Asking the invoker to run one returns `ErrNotExecutable` from the top
+of `Invoke`, not "unsupported runtime" from the interpreter lookup —
+that error reads as a misconfiguration, and this is not one.
+
+## Materialising the self-taught store
+
+The store is the authority for what the agent has taught itself; the
+filesystem is where a skill can actually be read. The materialiser is
+the **one-way** bridge between them.
+
+```
+<data-dir>/skills-cache/<name>/<version>/
+    manifest.yaml    generated: runtime prose, references listed
+    SKILL.md         the record body
+    references/…     the record's bundled files
+```
+
+Written by the materialiser and by nothing else. An artefact edited on
+disk is not an edit — it is drift the next pass reverts. **`rm -rf` the
+cache and restart is complete recovery**, and that is the test of
+whether the store is really the authority. If it ever stops being true,
+something on disk has quietly become one.
+
+**Convergent, not incremental.** Each pass writes what should be there
+and removes what should not, from the full ACTIVE set. A cache that
+drifted — a half-written directory from a crash, a stale version from a
+rollback — is corrected rather than accumulated. Nothing has to tell it
+what changed, which matters because the only thing that could is the
+store, and the store does not know what any particular node has on
+disk.
+
+Removal is what makes the authority run in both directions: without it,
+archiving an artefact would leave it loaded on every node that ever saw
+it ACTIVE, and *"forget what you taught yourself"* would be true of the
+store and false of the prompt.
+
+**Not leader-gated.** Every node serves turns, so every node needs the
+cache. A leader-only materialiser would make the assistant differently
+capable depending on which node answered. It is safe everywhere because
+the cache is derived state: two nodes materialising the same set
+produce byte-identical directories.
+
+**Reconciled on boot and then once a minute.** A poll, not a watch: the
+store has no change feed, and a skill approved a minute ago becoming
+available a minute later is not a problem anybody has. The boot pass is
+the one that matters and it is not on a timer.
+
+**A pending refinement is never materialised.** It is a proposal, and
+writing it to the cache would put it in the prompt — precisely what
+proposing instead of applying exists to prevent.
+
+### Refusals
+
+Checked *before* any path is built from a name, because a name
+containing a separator **is** a traversal the moment it reaches
+`filepath.Join`:
+
+| Refused | Why |
+|---|---|
+| a name with `/` or `\`, `.`, `..`, a leading dot | it would escape the cache, or the scan would skip it |
+| a bundled path outside the directory, or named `SKILL.md` / `manifest.yaml` | it would escape, or overwrite a file the materialiser owns |
+| an empty body | there is nothing to teach |
+
+One refused artefact is recorded and skipped; the rest still
+materialise. A library that will not load because one entry is
+malformed is a worse outcome than a library missing one entry.
+
+An over-long or multi-line description is **truncated and flattened**,
+not refused — the cap exists because the description is in the system
+prompt on every turn, and a skill with a clipped summary is far more
+useful than a skill that is not there. The store is where an over-long
+description should be rejected, at the moment its author could fix it.
+
+### Loading
+
+`Registry.ScanAgent` reads the cache. Separate from `Scan` rather than
+a flag on it, and that is not a convenience: everything it finds is
+tagged `TierAgent` and passed through the [capability
+floor](#what-an-agent-authored-skill-may-not-do). A shared scan with a
+tier parameter would put that decision in the caller, where getting it
+wrong is a one-word mistake that grants an agent-authored skill
+operator authority.
+
+`policy.d/` is ignored on this path. The floor refuses the capabilities
+a tool policy would grant, so honouring the directory would be a second
+door to the same place.
+
+An agent-authored skill that loses its name to an operator's is logged
+once per node. Tier-first precedence already decides it correctly and
+*silently* — and silently is the problem: the artefact is ACTIVE in the
+store, listed by `lobslaw learned`, and never once reaches the prompt.

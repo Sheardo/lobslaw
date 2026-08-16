@@ -24,14 +24,38 @@ type Runtime string
 const (
 	RuntimePython Runtime = "python"
 	RuntimeBash   Runtime = "bash"
+
+	// RuntimeProse is a skill with no code: the body IS the skill.
+	//
+	// Every manifest before this one had to name a handler, which
+	// encoded an assumption that turns out to be wrong — that a skill
+	// is a program. Most of what the agent teaches itself is procedure
+	// in prose: how to approach a class of task, what this user wants,
+	// what to check before answering. There is nothing to execute, and
+	// inventing a no-op handler so the type-check passes would be a lie
+	// that the invoker would then try to run.
+	//
+	// A prose skill is delivered the way every skill's REFERENCES
+	// already are: the index advertises it, the model reads the file.
+	// That path exists and works; this only stops the manifest
+	// insisting on a handler that was never going to be called.
+	RuntimeProse Runtime = "prose"
 )
 
 // IsValid reports whether the runtime has a registered executor.
 // Operator-facing manifests with unknown runtimes fail Parse so
 // typos surface at load time rather than on first invocation.
 func (r Runtime) IsValid() bool {
-	return r == RuntimePython || r == RuntimeBash
+	return r == RuntimePython || r == RuntimeBash || r == RuntimeProse
 }
+
+// Executable reports whether the runtime has anything to run.
+//
+// Asked as a question about the runtime rather than as "is Handler
+// empty", so the two can never disagree: validateManifest refuses a
+// prose manifest that names a handler and refuses any other manifest
+// that omits one.
+func (r Runtime) Executable() bool { return r != RuntimeProse }
 
 // StorageMode is read vs. read-write access to a mount.
 type StorageMode string
@@ -70,7 +94,7 @@ type Manifest struct {
 	Version     string  `yaml:"version"`
 	Description string  `yaml:"description,omitempty"`
 	Runtime     Runtime `yaml:"runtime"`
-	Handler     string  `yaml:"handler"` // relative to manifest dir
+	Handler     string  `yaml:"handler,omitempty"` // relative to manifest dir
 	// HandlerSHA256 is the hex SHA-256 of the handler file, and is
 	// what makes a manifest signature worth anything. The signature
 	// covers these bytes, so declaring the digest here transitively
@@ -355,9 +379,16 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 		return nil, fmt.Errorf("skills: %q: %w", manifestPath, err)
 	}
 
-	handler := filepath.Join(dir, m.Handler)
-	if _, err := os.Stat(handler); err != nil {
-		return nil, fmt.Errorf("skills: handler %q: %w", handler, err)
+	// A prose skill has no handler to resolve, so HandlerPath stays
+	// empty rather than pointing at the manifest directory. An empty
+	// string is a value the invoker cannot mistake for a script;
+	// dir-as-handler is one it could try to exec.
+	var handler string
+	if m.Runtime.Executable() {
+		handler = filepath.Join(dir, m.Handler)
+		if _, err := os.Stat(handler); err != nil {
+			return nil, fmt.Errorf("skills: handler %q: %w", handler, err)
+		}
 	}
 
 	sum := sha256.Sum256(raw)
@@ -517,6 +548,45 @@ func validateBinaries(m *Manifest) error {
 	return nil
 }
 
+// validateHandler enforces the handler rules for the manifest's
+// runtime.
+//
+// Symmetrical on purpose. An executable runtime must name a handler,
+// as it always had to; a prose runtime must NOT — a manifest that says
+// "there is nothing to run" while pointing at a script is a manifest
+// whose two halves disagree, and the half that wins would be decided
+// by whichever code path read it first.
+//
+// handler_sha256 goes with the handler. A digest pinning a file that
+// does not exist is not harmless ceremony: it reads, to anybody
+// auditing, as a skill whose code is pinned.
+func validateHandler(m *Manifest, dir string) error {
+	if !m.Runtime.Executable() {
+		if m.Handler != "" {
+			return fmt.Errorf(
+				"manifest.handler %q is set but runtime is %q, which runs nothing — "+
+					"drop the handler, or name a runtime that executes it", m.Handler, m.Runtime)
+		}
+		if m.HandlerSHA256 != "" {
+			return fmt.Errorf("manifest.handler_sha256 is set but runtime %q has no handler", m.Runtime)
+		}
+		return nil
+	}
+	if m.Handler == "" {
+		return errors.New("manifest.handler is required")
+	}
+	// The handler must resolve to a path inside the manifest dir —
+	// belt + braces against traversal via "../" in operator-authored
+	// manifests. Manifests arrive from storage mounts the operator
+	// already trusts, but the runtime check costs nothing.
+	handlerAbs := filepath.Join(dir, m.Handler)
+	rel, err := filepath.Rel(dir, handlerAbs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("manifest.handler %q must be inside the manifest directory", m.Handler)
+	}
+	return nil
+}
+
 func validateDisclosure(m *Manifest) error {
 	if n := len([]rune(m.Description)); n > MaxDescriptionChars {
 		return fmt.Errorf(
@@ -564,19 +634,10 @@ func validateManifest(m *Manifest, dir string) error {
 		return err
 	}
 	if !m.Runtime.IsValid() {
-		return fmt.Errorf("manifest.runtime %q unsupported (python, bash)", m.Runtime)
+		return fmt.Errorf("manifest.runtime %q unsupported (python, bash, prose)", m.Runtime)
 	}
-	if m.Handler == "" {
-		return errors.New("manifest.handler is required")
-	}
-	// The handler must resolve to a path inside the manifest dir —
-	// belt + braces against traversal via "../" in operator-authored
-	// manifests. Manifests arrive from storage mounts the operator
-	// already trusts, but the runtime check costs nothing.
-	handlerAbs := filepath.Join(dir, m.Handler)
-	rel, err := filepath.Rel(dir, handlerAbs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("manifest.handler %q must be inside the manifest directory", m.Handler)
+	if err := validateHandler(m, dir); err != nil {
+		return err
 	}
 	if err := validateBinaries(m); err != nil {
 		return err

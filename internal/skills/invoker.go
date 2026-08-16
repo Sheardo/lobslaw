@@ -223,6 +223,16 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		return nil, err
 	}
 
+	// A prose skill has nothing to run. Refused here, at the top,
+	// rather than falling through to "unsupported runtime" from the
+	// interpreter lookup — that error reads as a misconfiguration, and
+	// this is not one. The caller asked the wrong question about a
+	// perfectly good skill, and the answer says so.
+	if !skill.Manifest.Runtime.Executable() {
+		return nil, fmt.Errorf("%w: %q is a prose skill — read its body, there is nothing to invoke",
+			ErrNotExecutable, skill.Name())
+	}
+
 	for _, s := range skill.Manifest.Storage {
 		if i.storage == nil {
 			return nil, fmt.Errorf("skills: skill %q declares storage access but no Manager configured", skill.Name())

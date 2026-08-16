@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"golang.org/x/mod/semver"
@@ -19,6 +20,11 @@ import (
 // registered. Callers translate to gRPC / HTTP "not found" in the
 // channel layer.
 var ErrSkillNotFound = errors.New("skills: skill not found")
+
+// ErrNotExecutable is returned when something asks the invoker to run
+// a skill that has no code — a prose skill. Its own error rather than
+// a generic failure, because a caller can act on it: read the body.
+var ErrNotExecutable = errors.New("skills: skill has nothing to execute")
 
 // Registry holds the live set of skills indexed by name. Multiple
 // storage mounts can expose skills with the same name — the registry
@@ -289,6 +295,61 @@ func (r *Registry) ScanWithPolicy(root string, policy SigningPolicy, verifier *V
 			r.log.Warn("skills: policy.d load failed",
 				"skill", skill.Name(), "err", err)
 			errs = append(errs, err)
+		}
+	}
+	return errs
+}
+
+// ScanAgent loads the materialised self-taught cache, whose layout is
+// <root>/<name>/<version>/manifest.yaml — one level deeper than the
+// operator skills directory, because the cache holds a version
+// directory that a rollback replaces wholesale.
+//
+// Separate from Scan rather than a flag on it, and it is not a
+// convenience. Everything it finds is tagged TierAgent and passed
+// through the capability floor: a manifest is a capability request,
+// and one that arrived by this route was written by the agent whatever
+// it says about itself. A shared scan with a tier parameter would put
+// that decision in the caller, where getting it wrong is a one-word
+// mistake that grants an agent-authored skill operator authority.
+//
+// No policy.d either. A skill the agent wrote does not get to install
+// tool policy — the floor refuses the capabilities a policy would
+// grant, so honouring the directory would be a second door to the same
+// place.
+func (r *Registry) ScanAgent(root string) []error {
+	var errs []error
+	names, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return []error{err}
+	}
+	for _, n := range names {
+		if !n.IsDir() || strings.HasPrefix(n.Name(), ".") {
+			continue
+		}
+		versions, err := os.ReadDir(filepath.Join(root, n.Name()))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, v := range versions {
+			if !v.IsDir() || strings.HasPrefix(v.Name(), ".") {
+				continue
+			}
+			dir := filepath.Join(root, n.Name(), v.Name())
+			skill, err := ParseAgentSkill(dir)
+			if err != nil {
+				if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); os.IsNotExist(statErr) {
+					continue
+				}
+				r.log.Warn("skills: agent-authored skill failed to load", "dir", dir, "err", err)
+				errs = append(errs, err)
+				continue
+			}
+			r.Put(skill)
 		}
 	}
 	return errs

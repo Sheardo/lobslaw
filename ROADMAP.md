@@ -2104,6 +2104,28 @@ the digest on the record, which is how `internal/binaries` already resolves them
 install. Oversized payloads **fail at import with the offending path named**, rather than being
 silently split or silently accepted.
 
+### Store-to-cache contract — ✅ **SHIPPED FOR THE SELF-TAUGHT HALF**
+
+The materialiser is built and wired for `BucketSelfTaught`, at
+`<data-dir>/skills-cache/<name>/<version>/`, reconciled on boot and once a minute on every node
+(not leader-gated: every node serves turns, and the cache is derived state, so two nodes produce
+byte-identical directories). `Registry.ScanAgent` reads it, tags everything `TierAgent`, and runs
+it through the capability floor. Convergent rather than incremental — `rm -rf` the cache and
+restart is complete recovery, which is the property that says the store is really the authority.
+
+Two things the design did not anticipate:
+
+- **A self-taught skill is prose, and every manifest required a handler.** That encoded an
+  assumption that a skill is a program. Added `runtime: prose` — a skill with no code, whose body
+  is the skill, delivered the way references already are. Refused symmetrically: a prose manifest
+  may not name a handler or pin `handler_sha256`, every other runtime must still name one, and the
+  invoker refuses a prose skill with its own error rather than "unsupported runtime".
+- **A record name becomes a directory name.** Traversal is refused before any path is built from
+  it, not validated afterwards by the parse that reads the result back.
+
+Still open for the operator/signed half: `BucketSkills`, `BucketSkillBlobs`, the importer/exporter,
+and storing manifest bytes verbatim so a detached signature survives the round trip.
+
 ### Store-to-cache contract
 
 Materialisation is not a compromise — execution requires a filesystem. `invoker.buildPolicy` grants
