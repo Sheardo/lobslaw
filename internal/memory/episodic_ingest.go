@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -104,11 +106,22 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 		tags = append(tags, "turn:"+turn.TurnID)
 	}
 
+	// Scan the stored text, not just the user's half: a reply that
+	// quotes a fetched page carries whatever that page said. A finding
+	// quarantines rather than drops — the record is usually the
+	// evidence, and a silently discarded memory is undebuggable.
+	stored := turn.UserMessage + "\n\n---\n\n" + turn.AssistReply
+	if f, ok := promptguard.Suspicious(stored); ok {
+		tags = append(tags, promptguard.Tag(f))
+		slog.Default().Warn("episodic ingest: record quarantined by promptguard",
+			"id", id, "detector", f.Detector, "detail", f.Detail, "owner", turn.Owner)
+	}
+
 	event := turnEventSummary(turn.UserMessage)
 	rec := &lobslawv1.EpisodicRecord{
 		Id:         id,
 		Event:      event,
-		Context:    turn.UserMessage + "\n\n---\n\n" + turn.AssistReply,
+		Context:    stored,
 		Importance: 5,
 		Timestamp:  timestamppb.New(turn.CompletedAt),
 		Tags:       tags,
