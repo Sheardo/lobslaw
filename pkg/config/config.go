@@ -1001,6 +1001,18 @@ type SkillsConfig struct {
 // produces sensible-default behaviour (deny-by-default ACL with
 // permissive fetch_url).
 type SecurityConfig struct {
+	// SessionGrantTTL bounds an "approve for the rest of this
+	// conversation" grant. Zero takes the default of 24h.
+	//
+	// It exists because the previous bound was the process exiting.
+	// That made the lifetime of a security grant a function of deploy
+	// cadence — weeks on a stable cluster, ninety seconds during a
+	// rollout — and neither of those is a decision anybody made.
+	//
+	// A day, by default, because the unit the user was reasoning about
+	// is a conversation and conversations are a day-shaped thing.
+	SessionGrantTTL time.Duration `koanf:"session_grant_ttl,omitempty"`
+
 	// EgressUpstreamProxy is the corporate proxy lobslaw chains
 	// through. Empty = direct egress. Format: "http://corp:8080"
 	// or "https://...". Forwarded to smokescreen's

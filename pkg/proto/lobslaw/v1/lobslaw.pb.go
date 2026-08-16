@@ -7291,6 +7291,7 @@ type LogEntry struct {
 	//	*LogEntry_SelfTaught
 	//	*LogEntry_SelfTaughtUsage
 	//	*LogEntry_SelfTaughtHistory
+	//	*LogEntry_SessionGrant
 	Payload isLogEntry_Payload `protobuf_oneof:"payload"`
 	// LOG_OP_CLAIM only: the value we expect on the current record's
 	// claimed_by field before we write. Used to enforce CAS semantics.
@@ -7546,6 +7547,15 @@ func (x *LogEntry) GetSelfTaughtHistory() *SelfTaughtRecord {
 	return nil
 }
 
+func (x *LogEntry) GetSessionGrant() *SessionGrant {
+	if x != nil {
+		if x, ok := x.Payload.(*LogEntry_SessionGrant); ok {
+			return x.SessionGrant
+		}
+	}
+	return nil
+}
+
 func (x *LogEntry) GetExpectedClaimer() string {
 	if x != nil {
 		return x.ExpectedClaimer
@@ -7649,6 +7659,10 @@ type LogEntry_SelfTaughtHistory struct {
 	SelfTaughtHistory *SelfTaughtRecord `protobuf:"bytes,31,opt,name=self_taught_history,json=selfTaughtHistory,proto3,oneof"`
 }
 
+type LogEntry_SessionGrant struct {
+	SessionGrant *SessionGrant `protobuf:"bytes,32,opt,name=session_grant,json=sessionGrant,proto3,oneof"`
+}
+
 func (*LogEntry_PolicyRule) isLogEntry_Payload() {}
 
 func (*LogEntry_ScheduledTask) isLogEntry_Payload() {}
@@ -7689,6 +7703,159 @@ func (*LogEntry_SelfTaughtUsage) isLogEntry_Payload() {}
 
 func (*LogEntry_SelfTaughtHistory) isLogEntry_Payload() {}
 
+func (*LogEntry_SessionGrant) isLogEntry_Payload() {}
+
+// SessionGrant is an "approved for the rest of this conversation"
+// answer, made durable and cluster-wide.
+//
+// It was an in-process map, and the argument for that was real: a
+// grant that outlives what the user was looking at is one they did not
+// knowingly give. But that argument covers the RESTART axis only. On
+// the cluster axis it never held — the same conversation, the same
+// continuity the user was reasoning about, and they were re-prompted
+// anyway because the next message happened to land on a different
+// node. That is not the continuity ending; that is routing.
+//
+// So the grant is replicated, and the bound that the dying process
+// used to provide is made explicit as expires_at.
+type SessionGrant struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// id is "<session_id>\x00<action>\x00<resource>". NUL separates the
+	// parts so a channel id containing the separator cannot forge a key
+	// belonging to a different conversation.
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// session_id is "<channel>:<channel_id>" — the same key
+	// SessionRecord uses, so dropping a conversation can drop its
+	// grants by prefix.
+	//
+	// Keyed by CONVERSATION rather than by user, deliberately: the
+	// confirmation was shown in a conversation and answered there, and
+	// in a group chat the person who taps Approve is approving for that
+	// chat. Widening it to the user across every conversation would
+	// grant more than the button appeared to offer.
+	SessionId string `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Action    string `protobuf:"bytes,3,opt,name=action,proto3" json:"action,omitempty"`
+	Resource  string `protobuf:"bytes,4,opt,name=resource,proto3" json:"resource,omitempty"`
+	// granted_by is the principal who tapped it, so a listing can say
+	// who — an unattributable standing grant is one nobody can audit.
+	GrantedBy string `protobuf:"bytes,5,opt,name=granted_by,json=grantedBy,proto3" json:"granted_by,omitempty"`
+	// prompt_id is the confirmation this came from. Provenance, for the
+	// same reason an approval-minted policy rule carries it.
+	PromptId  string                 `protobuf:"bytes,6,opt,name=prompt_id,json=promptId,proto3" json:"prompt_id,omitempty"`
+	GrantedAt *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=granted_at,json=grantedAt,proto3" json:"granted_at,omitempty"`
+	// expires_at bounds the grant explicitly.
+	//
+	// The process exiting used to be the bound, which meant the lifetime
+	// of a security grant was decided by deploy cadence — long on a
+	// stable cluster, minutes during a rollout. Neither is a decision
+	// anybody made. A stated TTL is.
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Revision      uint64                 `protobuf:"varint,9,opt,name=revision,proto3" json:"revision,omitempty"`
+	ClaimedBy     string                 `protobuf:"bytes,10,opt,name=claimed_by,json=claimedBy,proto3" json:"claimed_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SessionGrant) Reset() {
+	*x = SessionGrant{}
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[100]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SessionGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SessionGrant) ProtoMessage() {}
+
+func (x *SessionGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[100]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SessionGrant.ProtoReflect.Descriptor instead.
+func (*SessionGrant) Descriptor() ([]byte, []int) {
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{100}
+}
+
+func (x *SessionGrant) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetResource() string {
+	if x != nil {
+		return x.Resource
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetGrantedBy() string {
+	if x != nil {
+		return x.GrantedBy
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetPromptId() string {
+	if x != nil {
+		return x.PromptId
+	}
+	return ""
+}
+
+func (x *SessionGrant) GetGrantedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GrantedAt
+	}
+	return nil
+}
+
+func (x *SessionGrant) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *SessionGrant) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *SessionGrant) GetClaimedBy() string {
+	if x != nil {
+		return x.ClaimedBy
+	}
+	return ""
+}
+
 // Continuation is everything needed to resume a turn on a different
 // node. The in-memory registry stashed a live []Message and a
 // *TurnBudget in a Go map, which is precisely what stopped an
@@ -7722,7 +7889,7 @@ type Continuation struct {
 
 func (x *Continuation) Reset() {
 	*x = Continuation{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[100]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7734,7 +7901,7 @@ func (x *Continuation) String() string {
 func (*Continuation) ProtoMessage() {}
 
 func (x *Continuation) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[100]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7747,7 +7914,7 @@ func (x *Continuation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Continuation.ProtoReflect.Descriptor instead.
 func (*Continuation) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{100}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *Continuation) GetMessages() []*SessionMessage {
@@ -7879,7 +8046,7 @@ type PromptRecord struct {
 
 func (x *PromptRecord) Reset() {
 	*x = PromptRecord{}
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[101]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -7891,7 +8058,7 @@ func (x *PromptRecord) String() string {
 func (*PromptRecord) ProtoMessage() {}
 
 func (x *PromptRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[101]
+	mi := &file_lobslaw_v1_lobslaw_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -7904,7 +8071,7 @@ func (x *PromptRecord) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromptRecord.ProtoReflect.Descriptor instead.
 func (*PromptRecord) Descriptor() ([]byte, []int) {
-	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{101}
+	return file_lobslaw_v1_lobslaw_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *PromptRecord) GetId() string {
@@ -8631,7 +8798,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"claimed_by\x18\x02 \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x17\n" +
 	"\aturn_id\x18\x04 \x01(\tR\x06turnId\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x04R\brevision\"\xd2\v\n" +
+	"\brevision\x18\x05 \x01(\x04R\brevision\"\x93\f\n" +
 	"\bLogEntry\x12!\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x11.lobslaw.v1.LogOpR\x02op\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x129\n" +
@@ -8663,11 +8830,29 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\vself_taught\x18\x1d \x01(\v2\x1c.lobslaw.v1.SelfTaughtRecordH\x00R\n" +
 	"selfTaught\x12I\n" +
 	"\x11self_taught_usage\x18\x1e \x01(\v2\x1b.lobslaw.v1.SelfTaughtUsageH\x00R\x0fselfTaughtUsage\x12N\n" +
-	"\x13self_taught_history\x18\x1f \x01(\v2\x1c.lobslaw.v1.SelfTaughtRecordH\x00R\x11selfTaughtHistory\x12)\n" +
+	"\x13self_taught_history\x18\x1f \x01(\v2\x1c.lobslaw.v1.SelfTaughtRecordH\x00R\x11selfTaughtHistory\x12?\n" +
+	"\rsession_grant\x18  \x01(\v2\x18.lobslaw.v1.SessionGrantH\x00R\fsessionGrant\x12)\n" +
 	"\x10expected_claimer\x18\x14 \x01(\tR\x0fexpectedClaimer\x120\n" +
 	"\x11expected_revision\x18\x18 \x01(\x04H\x01R\x10expectedRevision\x88\x01\x01B\t\n" +
 	"\apayloadB\x14\n" +
-	"\x12_expected_revision\"\xe9\x03\n" +
+	"\x12_expected_revision\"\xde\x02\n" +
+	"\fSessionGrant\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06action\x18\x03 \x01(\tR\x06action\x12\x1a\n" +
+	"\bresource\x18\x04 \x01(\tR\bresource\x12\x1d\n" +
+	"\n" +
+	"granted_by\x18\x05 \x01(\tR\tgrantedBy\x12\x1b\n" +
+	"\tprompt_id\x18\x06 \x01(\tR\bpromptId\x129\n" +
+	"\n" +
+	"granted_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tgrantedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1a\n" +
+	"\brevision\x18\t \x01(\x04R\brevision\x12\x1d\n" +
+	"\n" +
+	"claimed_by\x18\n" +
+	" \x01(\tR\tclaimedBy\"\xe9\x03\n" +
 	"\fContinuation\x126\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1a.lobslaw.v1.SessionMessageR\bmessages\x12\x1b\n" +
 	"\tspent_usd\x18\x02 \x01(\x01R\bspentUsd\x12\x1d\n" +
@@ -8812,7 +8997,7 @@ func file_lobslaw_v1_lobslaw_proto_rawDescGZIP() []byte {
 }
 
 var file_lobslaw_v1_lobslaw_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_lobslaw_v1_lobslaw_proto_msgTypes = make([]protoimpl.MessageInfo, 114)
+var file_lobslaw_v1_lobslaw_proto_msgTypes = make([]protoimpl.MessageInfo, 115)
 var file_lobslaw_v1_lobslaw_proto_goTypes = []any{
 	(Visibility)(0),                     // 0: lobslaw.v1.Visibility
 	(Retention)(0),                      // 1: lobslaw.v1.Retention
@@ -8922,37 +9107,38 @@ var file_lobslaw_v1_lobslaw_proto_goTypes = []any{
 	(*SessionAppendRecord)(nil),         // 105: lobslaw.v1.SessionAppendRecord
 	(*SessionLease)(nil),                // 106: lobslaw.v1.SessionLease
 	(*LogEntry)(nil),                    // 107: lobslaw.v1.LogEntry
-	(*Continuation)(nil),                // 108: lobslaw.v1.Continuation
-	(*PromptRecord)(nil),                // 109: lobslaw.v1.PromptRecord
-	nil,                                 // 110: lobslaw.v1.ReloadResponse.ErrorsEntry
-	nil,                                 // 111: lobslaw.v1.VectorRecord.MetadataEntry
-	nil,                                 // 112: lobslaw.v1.InvokeToolRequest.ParamsEntry
-	nil,                                 // 113: lobslaw.v1.ProcessMessageRequest.MetadataEntry
-	nil,                                 // 114: lobslaw.v1.ProcessMessageResponse.MetadataEntry
-	nil,                                 // 115: lobslaw.v1.HandleUpdateRequest.HeadersEntry
-	nil,                                 // 116: lobslaw.v1.AgentCommitment.ParamsEntry
-	nil,                                 // 117: lobslaw.v1.ScheduledTaskRecord.ParamsEntry
-	nil,                                 // 118: lobslaw.v1.StorageMount.OptionsEntry
-	nil,                                 // 119: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry
-	nil,                                 // 120: lobslaw.v1.SelfTaughtRecord.FilesEntry
-	nil,                                 // 121: lobslaw.v1.PendingRevision.FilesEntry
-	(*timestamppb.Timestamp)(nil),       // 122: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),         // 123: google.protobuf.Duration
+	(*SessionGrant)(nil),                // 108: lobslaw.v1.SessionGrant
+	(*Continuation)(nil),                // 109: lobslaw.v1.Continuation
+	(*PromptRecord)(nil),                // 110: lobslaw.v1.PromptRecord
+	nil,                                 // 111: lobslaw.v1.ReloadResponse.ErrorsEntry
+	nil,                                 // 112: lobslaw.v1.VectorRecord.MetadataEntry
+	nil,                                 // 113: lobslaw.v1.InvokeToolRequest.ParamsEntry
+	nil,                                 // 114: lobslaw.v1.ProcessMessageRequest.MetadataEntry
+	nil,                                 // 115: lobslaw.v1.ProcessMessageResponse.MetadataEntry
+	nil,                                 // 116: lobslaw.v1.HandleUpdateRequest.HeadersEntry
+	nil,                                 // 117: lobslaw.v1.AgentCommitment.ParamsEntry
+	nil,                                 // 118: lobslaw.v1.ScheduledTaskRecord.ParamsEntry
+	nil,                                 // 119: lobslaw.v1.StorageMount.OptionsEntry
+	nil,                                 // 120: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry
+	nil,                                 // 121: lobslaw.v1.SelfTaughtRecord.FilesEntry
+	nil,                                 // 122: lobslaw.v1.PendingRevision.FilesEntry
+	(*timestamppb.Timestamp)(nil),       // 123: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),         // 124: google.protobuf.Duration
 }
 var file_lobslaw_v1_lobslaw_proto_depIdxs = []int32{
-	122, // 0: lobslaw.v1.HealthStatus.last_seen:type_name -> google.protobuf.Timestamp
+	123, // 0: lobslaw.v1.HealthStatus.last_seen:type_name -> google.protobuf.Timestamp
 	10,  // 1: lobslaw.v1.HealthStatus.components:type_name -> lobslaw.v1.ComponentHealth
 	8,   // 2: lobslaw.v1.RegisterRequest.node:type_name -> lobslaw.v1.NodeInfo
 	9,   // 3: lobslaw.v1.HeartbeatRequest.health:type_name -> lobslaw.v1.HealthStatus
 	8,   // 4: lobslaw.v1.GetPeersResponse.peers:type_name -> lobslaw.v1.NodeInfo
-	110, // 5: lobslaw.v1.ReloadResponse.errors:type_name -> lobslaw.v1.ReloadResponse.ErrorsEntry
-	111, // 6: lobslaw.v1.VectorRecord.metadata:type_name -> lobslaw.v1.VectorRecord.MetadataEntry
+	111, // 5: lobslaw.v1.ReloadResponse.errors:type_name -> lobslaw.v1.ReloadResponse.ErrorsEntry
+	112, // 6: lobslaw.v1.VectorRecord.metadata:type_name -> lobslaw.v1.VectorRecord.MetadataEntry
 	1,   // 7: lobslaw.v1.VectorRecord.retention:type_name -> lobslaw.v1.Retention
-	122, // 8: lobslaw.v1.VectorRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 8: lobslaw.v1.VectorRecord.created_at:type_name -> google.protobuf.Timestamp
 	0,   // 9: lobslaw.v1.VectorRecord.visibility:type_name -> lobslaw.v1.Visibility
 	1,   // 10: lobslaw.v1.VectorScanEntry.retention:type_name -> lobslaw.v1.Retention
 	0,   // 11: lobslaw.v1.VectorScanEntry.visibility:type_name -> lobslaw.v1.Visibility
-	122, // 12: lobslaw.v1.EpisodicRecord.timestamp:type_name -> google.protobuf.Timestamp
+	123, // 12: lobslaw.v1.EpisodicRecord.timestamp:type_name -> google.protobuf.Timestamp
 	1,   // 13: lobslaw.v1.EpisodicRecord.retention:type_name -> lobslaw.v1.Retention
 	0,   // 14: lobslaw.v1.EpisodicRecord.visibility:type_name -> lobslaw.v1.Visibility
 	25,  // 15: lobslaw.v1.StoreRequest.record:type_name -> lobslaw.v1.VectorRecord
@@ -8960,88 +9146,88 @@ var file_lobslaw_v1_lobslaw_proto_depIdxs = []int32{
 	1,   // 17: lobslaw.v1.SearchRequest.retention_filter:type_name -> lobslaw.v1.Retention
 	25,  // 18: lobslaw.v1.SearchResponse.hits:type_name -> lobslaw.v1.VectorRecord
 	27,  // 19: lobslaw.v1.EpisodicAddRequest.record:type_name -> lobslaw.v1.EpisodicRecord
-	122, // 20: lobslaw.v1.ForgetRequest.before:type_name -> google.protobuf.Timestamp
+	123, // 20: lobslaw.v1.ForgetRequest.before:type_name -> google.protobuf.Timestamp
 	1,   // 21: lobslaw.v1.FindClustersRequest.retention_filter:type_name -> lobslaw.v1.Retention
-	122, // 22: lobslaw.v1.FindClustersRequest.before:type_name -> google.protobuf.Timestamp
+	123, // 22: lobslaw.v1.FindClustersRequest.before:type_name -> google.protobuf.Timestamp
 	42,  // 23: lobslaw.v1.FindClustersResponse.clusters:type_name -> lobslaw.v1.Cluster
 	25,  // 24: lobslaw.v1.Cluster.records:type_name -> lobslaw.v1.VectorRecord
-	122, // 25: lobslaw.v1.ConsolidationRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 25: lobslaw.v1.ConsolidationRecord.created_at:type_name -> google.protobuf.Timestamp
 	45,  // 26: lobslaw.v1.PolicyRule.conditions:type_name -> lobslaw.v1.Condition
-	122, // 27: lobslaw.v1.PolicyRule.created_at:type_name -> google.protobuf.Timestamp
-	122, // 28: lobslaw.v1.Claims.expires_at:type_name -> google.protobuf.Timestamp
-	122, // 29: lobslaw.v1.Claims.issued_at:type_name -> google.protobuf.Timestamp
+	123, // 27: lobslaw.v1.PolicyRule.created_at:type_name -> google.protobuf.Timestamp
+	123, // 28: lobslaw.v1.Claims.expires_at:type_name -> google.protobuf.Timestamp
+	123, // 29: lobslaw.v1.Claims.issued_at:type_name -> google.protobuf.Timestamp
 	46,  // 30: lobslaw.v1.EvaluateRequest.claims:type_name -> lobslaw.v1.Claims
 	44,  // 31: lobslaw.v1.SyncRulesResponse.rules:type_name -> lobslaw.v1.PolicyRule
 	44,  // 32: lobslaw.v1.AddRuleRequest.rule:type_name -> lobslaw.v1.PolicyRule
-	123, // 33: lobslaw.v1.RequestConfirmationRequest.timeout:type_name -> google.protobuf.Duration
-	112, // 34: lobslaw.v1.InvokeToolRequest.params:type_name -> lobslaw.v1.InvokeToolRequest.ParamsEntry
+	124, // 33: lobslaw.v1.RequestConfirmationRequest.timeout:type_name -> google.protobuf.Duration
+	113, // 34: lobslaw.v1.InvokeToolRequest.params:type_name -> lobslaw.v1.InvokeToolRequest.ParamsEntry
 	46,  // 35: lobslaw.v1.InvokeToolRequest.claims:type_name -> lobslaw.v1.Claims
 	55,  // 36: lobslaw.v1.ListToolsResponse.tools:type_name -> lobslaw.v1.ToolDef
 	46,  // 37: lobslaw.v1.ProcessMessageRequest.claims:type_name -> lobslaw.v1.Claims
-	113, // 38: lobslaw.v1.ProcessMessageRequest.metadata:type_name -> lobslaw.v1.ProcessMessageRequest.MetadataEntry
-	114, // 39: lobslaw.v1.ProcessMessageResponse.metadata:type_name -> lobslaw.v1.ProcessMessageResponse.MetadataEntry
-	115, // 40: lobslaw.v1.HandleUpdateRequest.headers:type_name -> lobslaw.v1.HandleUpdateRequest.HeadersEntry
-	123, // 41: lobslaw.v1.PromptRequest.timeout:type_name -> google.protobuf.Duration
-	122, // 42: lobslaw.v1.AgentCommitment.due_at:type_name -> google.protobuf.Timestamp
-	116, // 43: lobslaw.v1.AgentCommitment.params:type_name -> lobslaw.v1.AgentCommitment.ParamsEntry
-	122, // 44: lobslaw.v1.AgentCommitment.claim_expires_at:type_name -> google.protobuf.Timestamp
-	117, // 45: lobslaw.v1.ScheduledTaskRecord.params:type_name -> lobslaw.v1.ScheduledTaskRecord.ParamsEntry
-	122, // 46: lobslaw.v1.ScheduledTaskRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 47: lobslaw.v1.ScheduledTaskRecord.last_run:type_name -> google.protobuf.Timestamp
-	122, // 48: lobslaw.v1.ScheduledTaskRecord.next_run:type_name -> google.protobuf.Timestamp
-	122, // 49: lobslaw.v1.ScheduledTaskRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
-	122, // 50: lobslaw.v1.InFlightWork.last_progress:type_name -> google.protobuf.Timestamp
-	122, // 51: lobslaw.v1.CheckBack.scheduled_for:type_name -> google.protobuf.Timestamp
-	123, // 52: lobslaw.v1.GetPlanRequest.window:type_name -> google.protobuf.Duration
-	123, // 53: lobslaw.v1.GetPlanResponse.window:type_name -> google.protobuf.Duration
+	114, // 38: lobslaw.v1.ProcessMessageRequest.metadata:type_name -> lobslaw.v1.ProcessMessageRequest.MetadataEntry
+	115, // 39: lobslaw.v1.ProcessMessageResponse.metadata:type_name -> lobslaw.v1.ProcessMessageResponse.MetadataEntry
+	116, // 40: lobslaw.v1.HandleUpdateRequest.headers:type_name -> lobslaw.v1.HandleUpdateRequest.HeadersEntry
+	124, // 41: lobslaw.v1.PromptRequest.timeout:type_name -> google.protobuf.Duration
+	123, // 42: lobslaw.v1.AgentCommitment.due_at:type_name -> google.protobuf.Timestamp
+	117, // 43: lobslaw.v1.AgentCommitment.params:type_name -> lobslaw.v1.AgentCommitment.ParamsEntry
+	123, // 44: lobslaw.v1.AgentCommitment.claim_expires_at:type_name -> google.protobuf.Timestamp
+	118, // 45: lobslaw.v1.ScheduledTaskRecord.params:type_name -> lobslaw.v1.ScheduledTaskRecord.ParamsEntry
+	123, // 46: lobslaw.v1.ScheduledTaskRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 47: lobslaw.v1.ScheduledTaskRecord.last_run:type_name -> google.protobuf.Timestamp
+	123, // 48: lobslaw.v1.ScheduledTaskRecord.next_run:type_name -> google.protobuf.Timestamp
+	123, // 49: lobslaw.v1.ScheduledTaskRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
+	123, // 50: lobslaw.v1.InFlightWork.last_progress:type_name -> google.protobuf.Timestamp
+	123, // 51: lobslaw.v1.CheckBack.scheduled_for:type_name -> google.protobuf.Timestamp
+	124, // 52: lobslaw.v1.GetPlanRequest.window:type_name -> google.protobuf.Duration
+	124, // 53: lobslaw.v1.GetPlanResponse.window:type_name -> google.protobuf.Duration
 	66,  // 54: lobslaw.v1.GetPlanResponse.commitments:type_name -> lobslaw.v1.AgentCommitment
 	67,  // 55: lobslaw.v1.GetPlanResponse.scheduled_tasks:type_name -> lobslaw.v1.ScheduledTaskRecord
 	68,  // 56: lobslaw.v1.GetPlanResponse.in_flight:type_name -> lobslaw.v1.InFlightWork
 	69,  // 57: lobslaw.v1.GetPlanResponse.check_back_threads:type_name -> lobslaw.v1.CheckBack
 	66,  // 58: lobslaw.v1.AddCommitmentRequest.commitment:type_name -> lobslaw.v1.AgentCommitment
-	122, // 59: lobslaw.v1.AuditEntry.timestamp:type_name -> google.protobuf.Timestamp
+	123, // 59: lobslaw.v1.AuditEntry.timestamp:type_name -> google.protobuf.Timestamp
 	76,  // 60: lobslaw.v1.AppendRequest.entry:type_name -> lobslaw.v1.AuditEntry
-	122, // 61: lobslaw.v1.QueryRequest.since:type_name -> google.protobuf.Timestamp
-	122, // 62: lobslaw.v1.QueryRequest.until:type_name -> google.protobuf.Timestamp
+	123, // 61: lobslaw.v1.QueryRequest.since:type_name -> google.protobuf.Timestamp
+	123, // 62: lobslaw.v1.QueryRequest.until:type_name -> google.protobuf.Timestamp
 	76,  // 63: lobslaw.v1.QueryResponse.entries:type_name -> lobslaw.v1.AuditEntry
-	118, // 64: lobslaw.v1.StorageMount.options:type_name -> lobslaw.v1.StorageMount.OptionsEntry
-	123, // 65: lobslaw.v1.StorageMount.poll_interval:type_name -> google.protobuf.Duration
+	119, // 64: lobslaw.v1.StorageMount.options:type_name -> lobslaw.v1.StorageMount.OptionsEntry
+	124, // 65: lobslaw.v1.StorageMount.poll_interval:type_name -> google.protobuf.Duration
 	83,  // 66: lobslaw.v1.AddMountRequest.mount:type_name -> lobslaw.v1.StorageMount
 	83,  // 67: lobslaw.v1.ListMountsResponse.mounts:type_name -> lobslaw.v1.StorageMount
-	122, // 68: lobslaw.v1.ChannelStateRecord.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 68: lobslaw.v1.ChannelStateRecord.updated_at:type_name -> google.protobuf.Timestamp
 	92,  // 69: lobslaw.v1.SoulTuneRecord.current:type_name -> lobslaw.v1.SoulTuneState
 	92,  // 70: lobslaw.v1.SoulTuneRecord.history:type_name -> lobslaw.v1.SoulTuneState
 	93,  // 71: lobslaw.v1.SoulTuneState.emotive_style:type_name -> lobslaw.v1.EmotiveStyleTune
-	122, // 72: lobslaw.v1.SoulTuneState.updated_at:type_name -> google.protobuf.Timestamp
-	122, // 73: lobslaw.v1.CredentialRecord.expires_at:type_name -> google.protobuf.Timestamp
-	122, // 74: lobslaw.v1.CredentialRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 75: lobslaw.v1.CredentialRecord.last_rotated:type_name -> google.protobuf.Timestamp
-	122, // 76: lobslaw.v1.CredentialRecord.last_used:type_name -> google.protobuf.Timestamp
-	119, // 77: lobslaw.v1.CredentialRecord.allowed_scopes_per_skill:type_name -> lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry
+	123, // 72: lobslaw.v1.SoulTuneState.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 73: lobslaw.v1.CredentialRecord.expires_at:type_name -> google.protobuf.Timestamp
+	123, // 74: lobslaw.v1.CredentialRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 75: lobslaw.v1.CredentialRecord.last_rotated:type_name -> google.protobuf.Timestamp
+	123, // 76: lobslaw.v1.CredentialRecord.last_used:type_name -> google.protobuf.Timestamp
+	120, // 77: lobslaw.v1.CredentialRecord.allowed_scopes_per_skill:type_name -> lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry
 	101, // 78: lobslaw.v1.UserPreferences.channels:type_name -> lobslaw.v1.UserChannelAddress
-	122, // 79: lobslaw.v1.UserPreferences.created_at:type_name -> google.protobuf.Timestamp
-	122, // 80: lobslaw.v1.UserPreferences.updated_at:type_name -> google.protobuf.Timestamp
-	122, // 81: lobslaw.v1.PinnedMemory.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 79: lobslaw.v1.UserPreferences.created_at:type_name -> google.protobuf.Timestamp
+	123, // 80: lobslaw.v1.UserPreferences.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 81: lobslaw.v1.PinnedMemory.updated_at:type_name -> google.protobuf.Timestamp
 	2,   // 82: lobslaw.v1.SelfTaughtRecord.kind:type_name -> lobslaw.v1.SelfTaughtKind
-	120, // 83: lobslaw.v1.SelfTaughtRecord.files:type_name -> lobslaw.v1.SelfTaughtRecord.FilesEntry
+	121, // 83: lobslaw.v1.SelfTaughtRecord.files:type_name -> lobslaw.v1.SelfTaughtRecord.FilesEntry
 	3,   // 84: lobslaw.v1.SelfTaughtRecord.origin:type_name -> lobslaw.v1.SelfTaughtOrigin
 	4,   // 85: lobslaw.v1.SelfTaughtRecord.state:type_name -> lobslaw.v1.SelfTaughtState
-	122, // 86: lobslaw.v1.SelfTaughtRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 87: lobslaw.v1.SelfTaughtRecord.updated_at:type_name -> google.protobuf.Timestamp
-	122, // 88: lobslaw.v1.SelfTaughtRecord.approved_at:type_name -> google.protobuf.Timestamp
+	123, // 86: lobslaw.v1.SelfTaughtRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 87: lobslaw.v1.SelfTaughtRecord.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 88: lobslaw.v1.SelfTaughtRecord.approved_at:type_name -> google.protobuf.Timestamp
 	99,  // 89: lobslaw.v1.SelfTaughtRecord.pending:type_name -> lobslaw.v1.PendingRevision
-	121, // 90: lobslaw.v1.PendingRevision.files:type_name -> lobslaw.v1.PendingRevision.FilesEntry
-	122, // 91: lobslaw.v1.PendingRevision.proposed_at:type_name -> google.protobuf.Timestamp
-	122, // 92: lobslaw.v1.SelfTaughtUsage.last_used_at:type_name -> google.protobuf.Timestamp
-	122, // 93: lobslaw.v1.SelfTaughtUsage.first_used_at:type_name -> google.protobuf.Timestamp
-	122, // 94: lobslaw.v1.SessionRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 95: lobslaw.v1.SessionRecord.updated_at:type_name -> google.protobuf.Timestamp
-	122, // 96: lobslaw.v1.SessionRecord.summary_updated_at:type_name -> google.protobuf.Timestamp
+	122, // 90: lobslaw.v1.PendingRevision.files:type_name -> lobslaw.v1.PendingRevision.FilesEntry
+	123, // 91: lobslaw.v1.PendingRevision.proposed_at:type_name -> google.protobuf.Timestamp
+	123, // 92: lobslaw.v1.SelfTaughtUsage.last_used_at:type_name -> google.protobuf.Timestamp
+	123, // 93: lobslaw.v1.SelfTaughtUsage.first_used_at:type_name -> google.protobuf.Timestamp
+	123, // 94: lobslaw.v1.SessionRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 95: lobslaw.v1.SessionRecord.updated_at:type_name -> google.protobuf.Timestamp
+	123, // 96: lobslaw.v1.SessionRecord.summary_updated_at:type_name -> google.protobuf.Timestamp
 	104, // 97: lobslaw.v1.SessionMessage.tool_calls:type_name -> lobslaw.v1.SessionToolCall
-	122, // 98: lobslaw.v1.SessionMessage.timestamp:type_name -> google.protobuf.Timestamp
+	123, // 98: lobslaw.v1.SessionMessage.timestamp:type_name -> google.protobuf.Timestamp
 	102, // 99: lobslaw.v1.SessionAppendRecord.session:type_name -> lobslaw.v1.SessionRecord
 	103, // 100: lobslaw.v1.SessionAppendRecord.messages:type_name -> lobslaw.v1.SessionMessage
-	122, // 101: lobslaw.v1.SessionLease.claim_expires_at:type_name -> google.protobuf.Timestamp
+	123, // 101: lobslaw.v1.SessionLease.claim_expires_at:type_name -> google.protobuf.Timestamp
 	5,   // 102: lobslaw.v1.LogEntry.op:type_name -> lobslaw.v1.LogOp
 	44,  // 103: lobslaw.v1.LogEntry.policy_rule:type_name -> lobslaw.v1.PolicyRule
 	67,  // 104: lobslaw.v1.LogEntry.scheduled_task:type_name -> lobslaw.v1.ScheduledTaskRecord
@@ -9057,90 +9243,93 @@ var file_lobslaw_v1_lobslaw_proto_depIdxs = []int32{
 	105, // 114: lobslaw.v1.LogEntry.session_append:type_name -> lobslaw.v1.SessionAppendRecord
 	102, // 115: lobslaw.v1.LogEntry.session:type_name -> lobslaw.v1.SessionRecord
 	106, // 116: lobslaw.v1.LogEntry.session_lease:type_name -> lobslaw.v1.SessionLease
-	109, // 117: lobslaw.v1.LogEntry.prompt:type_name -> lobslaw.v1.PromptRecord
+	110, // 117: lobslaw.v1.LogEntry.prompt:type_name -> lobslaw.v1.PromptRecord
 	43,  // 118: lobslaw.v1.LogEntry.consolidation:type_name -> lobslaw.v1.ConsolidationRecord
 	97,  // 119: lobslaw.v1.LogEntry.pinned:type_name -> lobslaw.v1.PinnedMemory
 	98,  // 120: lobslaw.v1.LogEntry.self_taught:type_name -> lobslaw.v1.SelfTaughtRecord
 	100, // 121: lobslaw.v1.LogEntry.self_taught_usage:type_name -> lobslaw.v1.SelfTaughtUsage
 	98,  // 122: lobslaw.v1.LogEntry.self_taught_history:type_name -> lobslaw.v1.SelfTaughtRecord
-	103, // 123: lobslaw.v1.Continuation.messages:type_name -> lobslaw.v1.SessionMessage
-	46,  // 124: lobslaw.v1.Continuation.claims:type_name -> lobslaw.v1.Claims
-	6,   // 125: lobslaw.v1.PromptRecord.decision:type_name -> lobslaw.v1.PromptDecision
-	7,   // 126: lobslaw.v1.PromptRecord.scope:type_name -> lobslaw.v1.PromptScope
-	122, // 127: lobslaw.v1.PromptRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 128: lobslaw.v1.PromptRecord.expires_at:type_name -> google.protobuf.Timestamp
-	108, // 129: lobslaw.v1.PromptRecord.continuation:type_name -> lobslaw.v1.Continuation
-	122, // 130: lobslaw.v1.PromptRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
-	95,  // 131: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry.value:type_name -> lobslaw.v1.AllowedScopes
-	13,  // 132: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
-	15,  // 133: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
-	17,  // 134: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
-	19,  // 135: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
-	21,  // 136: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
-	23,  // 137: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
-	11,  // 138: lobslaw.v1.NodeService.Propose:input_type -> lobslaw.v1.ProposeRequest
-	28,  // 139: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
-	30,  // 140: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
-	32,  // 141: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
-	34,  // 142: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
-	36,  // 143: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
-	38,  // 144: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
-	40,  // 145: lobslaw.v1.MemoryService.FindClusters:input_type -> lobslaw.v1.FindClustersRequest
-	47,  // 146: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
-	49,  // 147: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
-	51,  // 148: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
-	53,  // 149: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
-	56,  // 150: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
-	58,  // 151: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
-	60,  // 152: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
-	62,  // 153: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
-	64,  // 154: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
-	70,  // 155: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
-	72,  // 156: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
-	74,  // 157: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
-	77,  // 158: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
-	79,  // 159: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
-	81,  // 160: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
-	84,  // 161: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
-	86,  // 162: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
-	88,  // 163: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
-	14,  // 164: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
-	16,  // 165: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
-	18,  // 166: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
-	20,  // 167: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
-	22,  // 168: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
-	24,  // 169: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
-	12,  // 170: lobslaw.v1.NodeService.Propose:output_type -> lobslaw.v1.ProposeResponse
-	29,  // 171: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
-	31,  // 172: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
-	33,  // 173: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
-	35,  // 174: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
-	37,  // 175: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
-	39,  // 176: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
-	41,  // 177: lobslaw.v1.MemoryService.FindClusters:output_type -> lobslaw.v1.FindClustersResponse
-	48,  // 178: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
-	50,  // 179: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
-	52,  // 180: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
-	54,  // 181: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
-	57,  // 182: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
-	59,  // 183: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
-	61,  // 184: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
-	63,  // 185: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
-	65,  // 186: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
-	71,  // 187: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
-	73,  // 188: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
-	75,  // 189: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
-	78,  // 190: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
-	80,  // 191: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
-	82,  // 192: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
-	85,  // 193: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
-	87,  // 194: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
-	89,  // 195: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
-	164, // [164:196] is the sub-list for method output_type
-	132, // [132:164] is the sub-list for method input_type
-	132, // [132:132] is the sub-list for extension type_name
-	132, // [132:132] is the sub-list for extension extendee
-	0,   // [0:132] is the sub-list for field type_name
+	108, // 123: lobslaw.v1.LogEntry.session_grant:type_name -> lobslaw.v1.SessionGrant
+	123, // 124: lobslaw.v1.SessionGrant.granted_at:type_name -> google.protobuf.Timestamp
+	123, // 125: lobslaw.v1.SessionGrant.expires_at:type_name -> google.protobuf.Timestamp
+	103, // 126: lobslaw.v1.Continuation.messages:type_name -> lobslaw.v1.SessionMessage
+	46,  // 127: lobslaw.v1.Continuation.claims:type_name -> lobslaw.v1.Claims
+	6,   // 128: lobslaw.v1.PromptRecord.decision:type_name -> lobslaw.v1.PromptDecision
+	7,   // 129: lobslaw.v1.PromptRecord.scope:type_name -> lobslaw.v1.PromptScope
+	123, // 130: lobslaw.v1.PromptRecord.created_at:type_name -> google.protobuf.Timestamp
+	123, // 131: lobslaw.v1.PromptRecord.expires_at:type_name -> google.protobuf.Timestamp
+	109, // 132: lobslaw.v1.PromptRecord.continuation:type_name -> lobslaw.v1.Continuation
+	123, // 133: lobslaw.v1.PromptRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 134: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry.value:type_name -> lobslaw.v1.AllowedScopes
+	13,  // 135: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
+	15,  // 136: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
+	17,  // 137: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
+	19,  // 138: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
+	21,  // 139: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
+	23,  // 140: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
+	11,  // 141: lobslaw.v1.NodeService.Propose:input_type -> lobslaw.v1.ProposeRequest
+	28,  // 142: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
+	30,  // 143: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
+	32,  // 144: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
+	34,  // 145: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
+	36,  // 146: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
+	38,  // 147: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
+	40,  // 148: lobslaw.v1.MemoryService.FindClusters:input_type -> lobslaw.v1.FindClustersRequest
+	47,  // 149: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
+	49,  // 150: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
+	51,  // 151: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
+	53,  // 152: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
+	56,  // 153: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
+	58,  // 154: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
+	60,  // 155: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
+	62,  // 156: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
+	64,  // 157: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
+	70,  // 158: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
+	72,  // 159: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
+	74,  // 160: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
+	77,  // 161: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
+	79,  // 162: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
+	81,  // 163: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
+	84,  // 164: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
+	86,  // 165: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
+	88,  // 166: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
+	14,  // 167: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
+	16,  // 168: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
+	18,  // 169: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
+	20,  // 170: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
+	22,  // 171: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
+	24,  // 172: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
+	12,  // 173: lobslaw.v1.NodeService.Propose:output_type -> lobslaw.v1.ProposeResponse
+	29,  // 174: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
+	31,  // 175: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
+	33,  // 176: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
+	35,  // 177: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
+	37,  // 178: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
+	39,  // 179: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
+	41,  // 180: lobslaw.v1.MemoryService.FindClusters:output_type -> lobslaw.v1.FindClustersResponse
+	48,  // 181: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
+	50,  // 182: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
+	52,  // 183: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
+	54,  // 184: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
+	57,  // 185: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
+	59,  // 186: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
+	61,  // 187: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
+	63,  // 188: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
+	65,  // 189: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
+	71,  // 190: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
+	73,  // 191: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
+	75,  // 192: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
+	78,  // 193: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
+	80,  // 194: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
+	82,  // 195: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
+	85,  // 196: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
+	87,  // 197: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
+	89,  // 198: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
+	167, // [167:199] is the sub-list for method output_type
+	135, // [135:167] is the sub-list for method input_type
+	135, // [135:135] is the sub-list for extension type_name
+	135, // [135:135] is the sub-list for extension extendee
+	0,   // [0:135] is the sub-list for field type_name
 }
 
 func init() { file_lobslaw_v1_lobslaw_proto_init() }
@@ -9171,6 +9360,7 @@ func file_lobslaw_v1_lobslaw_proto_init() {
 		(*LogEntry_SelfTaught)(nil),
 		(*LogEntry_SelfTaughtUsage)(nil),
 		(*LogEntry_SelfTaughtHistory)(nil),
+		(*LogEntry_SessionGrant)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -9178,7 +9368,7 @@ func file_lobslaw_v1_lobslaw_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lobslaw_v1_lobslaw_proto_rawDesc), len(file_lobslaw_v1_lobslaw_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   114,
+			NumMessages:   115,
 			NumExtensions: 0,
 			NumServices:   8,
 		},

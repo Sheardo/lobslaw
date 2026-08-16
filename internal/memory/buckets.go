@@ -90,6 +90,17 @@ const (
 	// on every node, so unbounded history is a store-growth problem
 	// that only shows up months later as slow snapshots.
 	BucketSelfTaughtHistory = "self_taught_history"
+
+	// BucketSessionGrants holds "approved for the rest of this
+	// conversation" answers, keyed
+	// "<session_id>\x00<action>\x00<resource>" so a conversation's
+	// grants are a prefix scan and dropping a conversation drops them.
+	//
+	// Replicated rather than per-process. The in-process version was
+	// defensible against restarts and never was against a cluster: the
+	// user answered in one conversation and got asked again because
+	// the next message landed on a different node.
+	BucketSessionGrants = "session_grants"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -118,5 +129,6 @@ var allBuckets = []string{
 	BucketSelfTaught,
 	BucketSelfTaughtUsage,
 	BucketSelfTaughtArchive,
+	BucketSessionGrants,
 	BucketSelfTaughtHistory,
 }

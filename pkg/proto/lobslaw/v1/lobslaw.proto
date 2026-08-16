@@ -1181,6 +1181,7 @@ message LogEntry {
     // A history entry is the same message in a different bucket: a
     // prior version is a record, not a different kind of thing.
     SelfTaughtRecord self_taught_history = 31;
+    SessionGrant session_grant = 32;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -1223,6 +1224,54 @@ enum PromptScope {
   // Mints a policy rule, so it is visible and revocable rather than
   // an invisible forever-grant.
   PROMPT_SCOPE_ALWAYS = 3;
+}
+
+// SessionGrant is an "approved for the rest of this conversation"
+// answer, made durable and cluster-wide.
+//
+// It was an in-process map, and the argument for that was real: a
+// grant that outlives what the user was looking at is one they did not
+// knowingly give. But that argument covers the RESTART axis only. On
+// the cluster axis it never held — the same conversation, the same
+// continuity the user was reasoning about, and they were re-prompted
+// anyway because the next message happened to land on a different
+// node. That is not the continuity ending; that is routing.
+//
+// So the grant is replicated, and the bound that the dying process
+// used to provide is made explicit as expires_at.
+message SessionGrant {
+  // id is "<session_id>\x00<action>\x00<resource>". NUL separates the
+  // parts so a channel id containing the separator cannot forge a key
+  // belonging to a different conversation.
+  string id = 1;
+  // session_id is "<channel>:<channel_id>" — the same key
+  // SessionRecord uses, so dropping a conversation can drop its
+  // grants by prefix.
+  //
+  // Keyed by CONVERSATION rather than by user, deliberately: the
+  // confirmation was shown in a conversation and answered there, and
+  // in a group chat the person who taps Approve is approving for that
+  // chat. Widening it to the user across every conversation would
+  // grant more than the button appeared to offer.
+  string session_id = 2;
+  string action = 3;
+  string resource = 4;
+  // granted_by is the principal who tapped it, so a listing can say
+  // who — an unattributable standing grant is one nobody can audit.
+  string granted_by = 5;
+  // prompt_id is the confirmation this came from. Provenance, for the
+  // same reason an approval-minted policy rule carries it.
+  string prompt_id = 6;
+  google.protobuf.Timestamp granted_at = 7;
+  // expires_at bounds the grant explicitly.
+  //
+  // The process exiting used to be the bound, which meant the lifetime
+  // of a security grant was decided by deploy cadence — long on a
+  // stable cluster, minutes during a rollout. Neither is a decision
+  // anybody made. A stated TTL is.
+  google.protobuf.Timestamp expires_at = 8;
+  uint64 revision = 9;
+  string claimed_by = 10;
 }
 
 // Continuation is everything needed to resume a turn on a different

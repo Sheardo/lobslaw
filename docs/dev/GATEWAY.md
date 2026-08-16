@@ -476,3 +476,75 @@ Callouts deferred past Phase 6h:
 - **REST cross-node resume.** REST holds the connection open and resumes in the request that raised the prompt, so it stores no continuation. A REST turn approved elsewhere still records the decision, but the original request has to be re-sent.
 
 See [PLAN.md Phase 6](../../PLAN.md#phase-6-channels-rest--telegram--shipped) for the shipped-scope summary.
+
+---
+
+## Conversation-scoped approvals are replicated
+
+"Approve for the rest of this conversation" used to be honoured out of
+a `map[string]struct{}` in one process. The argument for that was real
+— a grant outliving what the user was looking at is one they did not
+knowingly give — but it only ever covered the **restart** axis.
+
+On the **cluster** axis it never held. Same conversation, same
+continuity the user was reasoning about, and they were asked again
+because the next message landed on a different node. That is not the
+continuity ending; that is routing.
+
+Grants now live in `BucketSessionGrants`, keyed
+`<session_id>\x00<action>\x00<resource>` — NUL-separated so a channel
+id containing the separator cannot forge a key belonging to another
+conversation, and prefixed by the same `<channel>:<channel_id>` key
+`SessionRecord` uses so a conversation's grants can be dropped
+alongside its transcript.
+
+### The bound is explicit now
+
+The process exiting used to be the TTL. That made the lifetime of a
+security grant a function of deploy cadence — weeks on a stable
+cluster, ninety seconds during a rollout — and neither of those is a
+decision anybody made.
+
+```toml
+[security]
+session_grant_ttl = "24h"   # default
+```
+
+A day, because the unit the user was reasoning about is a conversation
+and conversations are a day-shaped thing.
+
+**Expiry is enforced on read**, not by the sweeper. A grant revoked
+only when a background pass gets round to it is live for however long
+that pass is behind, and "how stale is the sweeper" must not be a
+question a permission check has an answer to. The hourly leader-gated
+sweep is bucket hygiene — it stops one dead record accumulating per
+confirmation ever answered.
+
+**A grant with no expiry is treated as expired, not as eternal.** Every
+path that creates one writes the field, so a record without it is one
+this code did not write, and the safe reading of "I do not know when
+this stops" is that it already has.
+
+### What a node with no raft gets
+
+The in-process map is kept alongside the replicated store rather than
+replaced. Two consequences, both deliberate:
+
+- A raft apply can fail — lost leader, timeout — and the user has
+  already tapped the button. The local grant means the conversation
+  they are in the middle of continues, degraded to what it was before
+  rather than broken.
+- A gateway on a compute-only node has no local raft, so it keeps the
+  process-local map: the behaviour it always had, confined to one
+  process, rather than a silently missing feature.
+
+The local map is also consulted first, so an ordinary same-node grant
+does not pay a store read on every policy check.
+
+### Forgetting a conversation
+
+`SessionGrantStore.RevokeSession` drops every grant belonging to one
+conversation, expired ones included. A cleared conversation must not
+keep privileges the user believes they revoked — and "forget" should
+be a statement about what is *stored*, not about what is currently
+enforceable.
