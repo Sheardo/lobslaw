@@ -38,6 +38,11 @@ type fakeCollector struct {
 
 	// hang blocks Export until released, standing in for a collector
 	// that accepts a connection and then stops reading.
+	//
+	// Set at construction and never reassigned — Export reads it
+	// without the mutex, so a test that swapped the field would race.
+	// Release it by CLOSING it, which makes the receive return
+	// immediately without touching the field.
 	hang chan struct{}
 	// fail makes Export return an error.
 	fail bool
@@ -230,8 +235,10 @@ func TestTheSinkRecoversAfterAHang(t *testing.T) {
 	if err := sink.Write(aSpan("turn-1", 0)); err == nil {
 		t.Fatal("the hanging export reported success")
 	}
+	// Closed, not nilled. A closed channel already returns immediately
+	// from the receive, so nilling the field bought nothing and raced
+	// with Export reading it.
 	close(srv.hang)
-	srv.hang = nil
 
 	if err := sink.Write(aSpan("turn-1", 1)); err != nil {
 		t.Fatalf("the sink did not recover: %v", err)
