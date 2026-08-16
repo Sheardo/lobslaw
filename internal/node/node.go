@@ -247,7 +247,13 @@ type Node struct {
 	executor     *compute.Executor
 	// approvals is shared between the executor (which spends session
 	// approvals) and the channels (which record them).
-	approvals        *compute.SessionApprovals
+	approvals *compute.SessionApprovals
+
+	// approvalRules mints the permanent policy rule behind an
+	// "always" approval. Nil on a node without raft — there is
+	// nowhere to record a lasting grant, so the channels hide the
+	// button rather than offering one that does nothing.
+	approvalRules    *policy.ApprovalRules
 	agent            *compute.Agent
 	embedder         compute.EmbeddingProvider
 	roleMap          *compute.RoleMap

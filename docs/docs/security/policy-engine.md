@@ -14,6 +14,35 @@ For every `Executor.Call(ctx, tool, args)`, the policy engine asks:
 
 If the answer is `deny`, the call returns an error before the tool runs. If it's `require_confirmation`, the call is paused until a human-in-the-loop confirms via the originating channel. Allow is silent and proceeds.
 
+## Approval-minted rules
+
+An "always" approval mints a rule rather than writing to a second store beside the engine. The
+engine already answers `(subject, action, resource)`, and two things deciding the same question
+eventually disagree.
+
+Such a rule carries `created_by = "approval:<prompt_id>"`, which is what makes the grant findable
+and revocable as a class:
+
+```
+lobslaw policy approvals                        # list them
+lobslaw policy revoke-approvals --apply         # revoke all
+lobslaw policy revoke-approvals approval:p1 --apply
+```
+
+Both are offline subcommands — the node must be stopped, as with `lobslaw memory`.
+`revoke-approvals` is a dry run unless `--apply` is given, and refuses to delete any rule an
+operator wrote.
+
+Constraints on minting, all enforced in `internal/policy/approval_rules.go`:
+
+| Rule | Why |
+|---|---|
+| Priority 1 | Below any operator-authored deny. An approval is one tap; it should not outrank a rule somebody wrote deliberately. |
+| No wildcards in action or resource | The button offered the operation the user saw, not a class of them. |
+| Subject must be `user:` / `role:` / `scope:` | Anything else fails closed in `subjectMatches`, so the rule would look like a grant in a listing and grant nothing. |
+| Refused if the [hardline floor](/security/hardline-floor) denies the resource | Checked at mint time as well as at invoke time, so a listing never shows a grant that reads as though it works. |
+| Id derived from the prompt id | Re-tapping is idempotent rather than piling up duplicates. |
+
 ## Inputs
 
 ```go
