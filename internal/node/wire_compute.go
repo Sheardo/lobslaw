@@ -313,6 +313,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 			Logger:     n.log,
 		}),
 		Skills:           skillDispatcherOrNil(n.skillAdapter),
+		SkillsProvider:   n.skillIndexProvider(),
 		TimezoneResolver: n.resolveUserTimezone,
 		BinariesProvider: binariesProvider,
 		ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),

@@ -163,6 +163,14 @@ type AgentConfig struct {
 	// Binaries section is rendered.
 	BinariesProvider func() []promptgen.BinaryInfo
 
+	// SkillsProvider supplies the skill index for the system prompt.
+	//
+	// Without it the "Installed Skills" section renders "(none
+	// installed)" on every turn no matter what is installed — which
+	// is what it did, so a skill could only ever be invoked by a model
+	// that guessed its name.
+	SkillsProvider func() []promptgen.SkillInfo
+
 	// Logger is used for structured log entries. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -483,9 +491,14 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 			if a.cfg.BinariesProvider != nil {
 				bins = a.cfg.BinariesProvider()
 			}
+			var skillIndex []promptgen.SkillInfo
+			if a.cfg.SkillsProvider != nil {
+				skillIndex = a.cfg.SkillsProvider()
+			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
 				Soul:     soul,
 				Tools:    toPromptgenTools(req.Tools),
+				Skills:   skillIndex,
 				Binaries: bins,
 				Runtime: promptgen.RuntimeInfo{
 					Channel:   req.Channel,

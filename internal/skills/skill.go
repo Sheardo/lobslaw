@@ -96,9 +96,39 @@ type Manifest struct {
 	// pipeline), or by pre-installation on the host. The invoker
 	// runs LookPath against each name pre-spawn; if any are missing
 	// it returns a structured error.
-	RequiresBinary []string       `yaml:"requires_binary,omitempty"`
-	Params         map[string]any `yaml:"params_schema,omitempty"`
+	RequiresBinary []string `yaml:"requires_binary,omitempty"`
+
+	// RequiresCapability names provider capabilities the skill needs
+	// (e.g. "vision", "audio"). A skill that summarises screenshots on
+	// a text-only deployment is not a broken skill, it is an
+	// inapplicable one — and the difference matters, because the index
+	// is read on every turn. Listing it teaches the model it has a
+	// capability it will then fail to use.
+	RequiresCapability []string `yaml:"requires_capability,omitempty"`
+
+	// Platforms restricts the skill to specific GOOS values. Empty
+	// means every platform. A skill shelling out to `launchctl` is
+	// noise on Linux.
+	Platforms []string `yaml:"platforms,omitempty"`
+
+	// References are the bundled documents the skill can be asked
+	// about — reference material, templates, scripts. Declared here so
+	// the index can say WHAT is available without reading any of it,
+	// which is the whole point of disclosing progressively.
+	References []string `yaml:"references,omitempty"`
+
+	Params map[string]any `yaml:"params_schema,omitempty"`
 }
+
+// MaxDescriptionChars bounds a skill's one-line description.
+//
+// Enforced at parse rather than at render. Truncating when the index
+// is built means an operator writes a 200-character description, sees
+// it accepted, and silently loses most of it — the error belongs where
+// it can be fixed. The bound exists because the index is rendered on
+// every turn and is O(skills): one verbose entry taxes every
+// conversation the deployment ever has.
+const MaxDescriptionChars = 160
 
 // BinaryAccess declares one binary the skill bundles. The install
 // pipeline fetches each binary (Phase B), verifies SHA-256 against
@@ -310,31 +340,19 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 
 // validateManifest applies the manifest-shape invariants. Listed
 // in a single place so Parse and test code share the checks.
-func validateManifest(m *Manifest, dir string) error {
-	if m.Name == "" {
-		return errors.New("manifest.name is required")
-	}
-	if strings.ContainsAny(m.Name, "/\\") {
-		return fmt.Errorf("manifest.name %q must not contain path separators", m.Name)
-	}
-	if m.Version == "" {
-		return errors.New("manifest.version is required")
-	}
-	if !m.Runtime.IsValid() {
-		return fmt.Errorf("manifest.runtime %q unsupported (python, bash)", m.Runtime)
-	}
-	if m.Handler == "" {
-		return errors.New("manifest.handler is required")
-	}
-	// The handler must resolve to a path inside the manifest dir —
-	// belt + braces against traversal via "../" in operator-authored
-	// manifests. Manifests arrive from storage mounts the operator
-	// already trusts, but the runtime check costs nothing.
-	handlerAbs := filepath.Join(dir, m.Handler)
-	rel, err := filepath.Rel(dir, handlerAbs)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return fmt.Errorf("manifest.handler %q must be inside the manifest directory", m.Handler)
-	}
+// validateDisclosure checks the fields that only exist to make the
+// skill index cheap and honest: the one-line description, the gating
+// that keeps inapplicable skills out of it, and the reference paths it
+// advertises.
+//
+// Split out of validateManifest because that function is a long list
+// of unrelated field checks and adding a sixth concern to it made the
+// complexity linter right rather than pedantic.
+// validateBinaries checks the bundled-binary declarations. Split out
+// for the same reason as validateDisclosure: validateManifest was a
+// flat list of unrelated field checks sitting at the complexity
+// ceiling, so the next addition to it had to pay for a seam.
+func validateBinaries(m *Manifest) error {
 	for i, b := range m.Binaries {
 		if strings.TrimSpace(b.Name) == "" {
 			return fmt.Errorf("manifest.binaries[%d].name is required", i)
@@ -352,6 +370,70 @@ func validateManifest(m *Manifest, dir string) error {
 		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, "/../") {
 			return fmt.Errorf("manifest.binaries[%d].target %q must be relative and not escape the install dir", i, b.Target)
 		}
+	}
+	return nil
+}
+
+func validateDisclosure(m *Manifest) error {
+	if n := len([]rune(m.Description)); n > MaxDescriptionChars {
+		return fmt.Errorf(
+			"manifest.description is %d characters, limit is %d — it is rendered in the "+
+				"skill index on every turn, so put the detail in the skill body instead",
+			n, MaxDescriptionChars)
+	}
+	if strings.ContainsAny(m.Description, "\n\r") {
+		return errors.New("manifest.description must be a single line; the index renders one entry per skill")
+	}
+	for i, p := range m.Platforms {
+		if strings.TrimSpace(p) == "" {
+			return fmt.Errorf("manifest.platforms[%d] is empty", i)
+		}
+	}
+	for i, c := range m.RequiresCapability {
+		if strings.TrimSpace(c) == "" {
+			return fmt.Errorf("manifest.requires_capability[%d] is empty", i)
+		}
+	}
+	for i, r := range m.References {
+		cleaned := filepath.Clean(r)
+		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
+			return fmt.Errorf(
+				"manifest.references[%d] %q must be relative and inside the skill directory", i, r)
+		}
+	}
+	return nil
+}
+
+func validateManifest(m *Manifest, dir string) error {
+	if m.Name == "" {
+		return errors.New("manifest.name is required")
+	}
+	if strings.ContainsAny(m.Name, "/\\") {
+		return fmt.Errorf("manifest.name %q must not contain path separators", m.Name)
+	}
+	if m.Version == "" {
+		return errors.New("manifest.version is required")
+	}
+	if err := validateDisclosure(m); err != nil {
+		return err
+	}
+	if !m.Runtime.IsValid() {
+		return fmt.Errorf("manifest.runtime %q unsupported (python, bash)", m.Runtime)
+	}
+	if m.Handler == "" {
+		return errors.New("manifest.handler is required")
+	}
+	// The handler must resolve to a path inside the manifest dir —
+	// belt + braces against traversal via "../" in operator-authored
+	// manifests. Manifests arrive from storage mounts the operator
+	// already trusts, but the runtime check costs nothing.
+	handlerAbs := filepath.Join(dir, m.Handler)
+	rel, err := filepath.Rel(dir, handlerAbs)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("manifest.handler %q must be inside the manifest directory", m.Handler)
+	}
+	if err := validateBinaries(m); err != nil {
+		return err
 	}
 	for i, c := range m.Credentials {
 		if strings.TrimSpace(c.Provider) == "" {

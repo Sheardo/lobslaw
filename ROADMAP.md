@@ -1647,10 +1647,21 @@ Supporting changes:
 
 ### Acceptance
 
-- [ ] Index cost is O(skills) in *names*, independent of body size.
-- [ ] Every installed skill appears at level 0 regardless of the user's message.
-- [ ] A skill whose gating fails is absent from the index and cannot be `skill_view`n.
-- [ ] Over-long descriptions fail at parse with the offending manifest named.
+- [x] Index cost is O(skills) in *names*, independent of body size. References are named, never
+      inlined.
+- [x] Every installed skill appears at level 0 regardless of the user's message, and the rendered
+      index tells the model the list is exhaustive.
+- [x] A skill whose gating fails is absent from the index, and the drop is logged once with the
+      reason — a skill vanishing silently is indistinguishable from one that failed to parse.
+- [x] Over-long descriptions fail at parse with the offending manifest named. Counted in runes.
+- [ ] Levels 1 and 2 (`skill_view(name)` / `skill_view(name, path)`). Needs a body concept in the
+      skill model first — `internal/skills` has no notion of a SKILL.md body today; only the
+      clawhub path carries prose. Its own PR.
+
+**Found while doing this:** `promptgen.GenerateInput.Skills` existed and `BuildSkills` rendered it,
+and **nothing ever populated it**. The "Installed Skills" section said "(none installed)" on every
+turn no matter what was installed, so a skill could only be invoked by a model that guessed its
+name. Level 0 did not exist at all; `AgentConfig.SkillsProvider` is what fills it.
 
 ---
 

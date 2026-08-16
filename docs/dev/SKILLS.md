@@ -392,3 +392,63 @@ Short timeouts are intentional: a stuck RTK shouldn't block tool dispatch. The h
 | **RTK hooks** (config-only PreToolUse/PostToolUse integration) | ⬜ Phase 8f |
 | **Signature verification** (minisign / SHA-pinning) | ⬜ Phase 8g |
 | Go runtime, WASM runtime | ⬜ roadmap |
+
+---
+
+## Progressive disclosure
+
+The skill index is level 0: **every** installed skill, by name and one
+line, in the system prompt on every turn. Bodies are fetched on demand.
+
+| Level | What | Cost |
+|---|---|---|
+| 0 | name + one-line description + named references | bounded, O(skills) |
+| 1 | the skill body | on demand *(not yet built)* |
+| 2 | a bundled reference file | on demand *(not yet built)* |
+
+**The index is complete, and says so.** Ranking and showing the top few
+is the obvious optimisation and it is the wrong one: a retrieval miss
+makes a capability invisible and the model then confabulates about what
+it has — precisely the failure that killed keyword tailoring here
+before. Ranking better is not the same as not hiding things.
+
+### Description limit
+
+`MaxDescriptionChars` (160 runes, single line) is enforced at **parse**,
+not at render. Truncating when the index is built means an operator
+writes a 200-character description, sees it accepted, and silently
+loses most of it. The error belongs where it can be fixed, naming the
+manifest. Counted in runes, so a non-Latin description gets the limit
+that is documented.
+
+### Conditional activation
+
+The one thing safely dropped from the index is a skill that could not
+run here at all. Advertising it teaches the model it has a capability
+it will then fail to use, which is worse than silence.
+
+```yaml
+platforms: [darwin]              # GOOS allowlist; empty means anywhere
+requires_capability: [vision]    # provider capabilities the skill needs
+requires_binary: [ffmpeg]        # host binaries that must resolve
+references:                      # named in the index, never inlined
+  - references/api.md
+```
+
+Every requirement must hold. A skill dropped for any of them is logged
+**once** with the reason — an operator asking "where did my skill go"
+needs an answer, and a skill vanishing silently is indistinguishable
+from one that failed to parse.
+
+The binary check fails **open** when the node cannot answer it: the
+invoker checks again before exec, so the cost of being wrong is one
+clear error rather than a capability that quietly disappeared.
+
+### The index was empty
+
+`promptgen.GenerateInput.Skills` existed and `BuildSkills` rendered it,
+and nothing ever populated it — so "Installed Skills" said "(none
+installed)" on every turn no matter what was installed. A skill could
+only be invoked by a model that guessed its name. `AgentConfig.SkillsProvider`
+is what fills it.
+
