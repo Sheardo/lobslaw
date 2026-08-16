@@ -101,7 +101,7 @@ func TestIndexNamesReferencesWithoutReadingThem(t *testing.T) {
 	t.Parallel()
 	n := indexNode(t, nil, skills.Manifest{
 		Name: "researcher", Description: "does research",
-		References: []string{"references/api.md", "templates/report.md"},
+		References: []skills.Reference{{Path: "references/api.md"}, {Path: "templates/report.md"}},
 	})
 
 	index := n.skillIndexProvider()()

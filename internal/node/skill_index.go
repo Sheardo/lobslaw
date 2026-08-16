@@ -58,7 +58,7 @@ func (n *Node) skillIndexProvider() func() []promptgen.SkillInfo {
 				Name:        s.Manifest.Name,
 				Description: s.Manifest.Description,
 				Location:    s.ManifestDir,
-				References:  s.Manifest.References,
+				References:  skills.ReferencePaths(s.Manifest.References),
 			})
 		}
 		return out
