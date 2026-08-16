@@ -8,6 +8,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/elevenlabs"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/imagen"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/veo"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
@@ -41,6 +42,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
 		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
+		s.RegisterImage(imagen.DriverName, imagenImageFactory)
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
 		s.RegisterJob(veo.DriverName, veoJobFactory)
@@ -117,6 +119,17 @@ func veoJobFactory(cfg compute.JobDriverConfig) (compute.JobDriver, error) {
 	return veo.New(veo.Config{
 		Endpoint:   cfg.Endpoint,
 		Model:      cfg.Model,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+	})
+}
+
+// imagenImageFactory adapts the Vertex AI Imagen driver.
+func imagenImageFactory(cfg compute.ImageDriverConfig) (compute.ImageDriver, error) {
+	return imagen.New(imagen.Config{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
+		Size:       cfg.Size,
 		Credential: cfg.Credential,
 		HTTPClient: cfg.HTTPClient,
 	})
