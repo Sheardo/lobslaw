@@ -17,27 +17,41 @@ func TestNormalizeFunctions(t *testing.T) {
 		rewrote int
 	}{
 		{
-			name:    "policy alone becomes memory",
+			// policy implies memory, and memory implies storage — the
+			// two are mutually required, so one bit yields the pair.
+			name:    "policy alone becomes the state pair",
 			in:      []NodeFunction{FunctionPolicy},
-			want:    []NodeFunction{FunctionMemory},
+			want:    []NodeFunction{FunctionMemory, FunctionStorage},
 			rewrote: 1,
 		},
 		{
-			name:    "policy alongside memory collapses to one",
+			name:    "policy alongside memory collapses",
 			in:      []NodeFunction{FunctionMemory, FunctionPolicy},
-			want:    []NodeFunction{FunctionMemory},
+			want:    []NodeFunction{FunctionMemory, FunctionStorage},
+			rewrote: 1,
+		},
+		{
+			name:    "storage alone pulls in memory",
+			in:      []NodeFunction{FunctionStorage},
+			want:    []NodeFunction{FunctionStorage, FunctionMemory},
+			rewrote: 0,
+		},
+		{
+			name:    "gateway becomes compute",
+			in:      []NodeFunction{FunctionGateway},
+			want:    []NodeFunction{FunctionCompute},
 			rewrote: 1,
 		},
 		{
 			name:    "order is preserved",
-			in:      []NodeFunction{FunctionCompute, FunctionPolicy, FunctionStorage},
+			in:      []NodeFunction{FunctionCompute, FunctionPolicy},
 			want:    []NodeFunction{FunctionCompute, FunctionMemory, FunctionStorage},
 			rewrote: 1,
 		},
 		{
-			name:    "a set without policy is untouched",
-			in:      []NodeFunction{FunctionMemory, FunctionCompute, FunctionGateway, FunctionStorage},
-			want:    []NodeFunction{FunctionMemory, FunctionCompute, FunctionGateway, FunctionStorage},
+			name:    "a canonical set is untouched",
+			in:      []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+			want:    []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
 			rewrote: 0,
 		},
 		{
@@ -45,6 +59,15 @@ func TestNormalizeFunctions(t *testing.T) {
 			in:      []NodeFunction{FunctionCompute, FunctionCompute},
 			want:    []NodeFunction{FunctionCompute},
 			rewrote: 0,
+		},
+		{
+			// The whole legacy spelling, which is what an existing
+			// config actually contains.
+			name: "a legacy five-function config still resolves",
+			in: []NodeFunction{FunctionMemory, FunctionPolicy, FunctionCompute,
+				FunctionGateway, FunctionStorage},
+			want:    []NodeFunction{FunctionMemory, FunctionCompute, FunctionStorage},
+			rewrote: 2,
 		},
 		{
 			name: "empty stays empty",

@@ -126,11 +126,11 @@ flowchart LR
   end
 ```
 
-Any subset of functions (`memory`, `compute`, `gateway`, `storage`) can run on each node. The Raft quorum is the subset of nodes running `memory`.
+Two roles, spelled with three function names: `memory` and `storage` (raft-backed state, mutually required — naming either yields both) and `compute` (the agent). The Raft quorum is the subset of nodes running state.
 
-`policy` was a sixth function and is deprecated: it never selected anything of its own, since both the policy and memory services are gated on hosting raft and rule enforcement is wired from the store. It is accepted in config and normalised to `memory` with a warning. See R25.
+`policy` and `gateway` were separate functions and are both deprecated. `policy` never selected anything of its own — the policy and memory services are gated on hosting raft, which memory already implies, and rule enforcement is wired from the store. `gateway` was a second switch for one decision: the gateway cannot run without an agent, and `[gateway].enabled` already decides whether it listens. Both are accepted in config and normalised away with a warning. See R25.
 
-Two constraints the diagram above obeys, and which config validation enforces: `memory` and `storage` require each other (storage is gated behind raft, which memory provides; memory without storage is rejected), and `gateway` requires `compute` — the gateway needs an agent to hand turns to. Extra `memory` nodes are Raft replicas for durability; they are not a memory service other nodes consume, because nothing dials `MemoryServiceClient` yet.
+Extra state nodes are Raft replicas for durability, not a memory service other nodes consume: memory is always local, and `MemoryServiceClient` is generated but uncalled. That is a decision (2026-08-16), not an omission — revisit only if remote memory is ever designed.
 
 ---
 

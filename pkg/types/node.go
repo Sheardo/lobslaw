@@ -28,7 +28,13 @@ const (
 	FunctionPolicy NodeFunction = "policy"
 	// FunctionCompute runs the agent loop, tool registry and builtins.
 	FunctionCompute NodeFunction = "compute"
-	// FunctionGateway terminates inbound channels (Telegram, HTTP).
+	// FunctionGateway is DEPRECATED and normalised to FunctionCompute.
+	// It was a second switch for one decision: the gateway also needs
+	// [gateway].enabled, and it cannot run without an agent, so the
+	// function bit added nothing that the enable flag and the compute
+	// function did not already say.
+	//
+	// Accepted so existing configs keep booting. See R25.
 	FunctionGateway NodeFunction = "gateway"
 	// FunctionStorage serves the object store and its sandboxed
 	// nested filesystem mounts.
@@ -99,17 +105,35 @@ type ComponentHealth struct {
 // and memory are the same thing.
 func NormalizeFunctions(fns []NodeFunction) (out []NodeFunction, rewrote []NodeFunction) {
 	seen := make(map[NodeFunction]bool, len(fns))
+	add := func(f NodeFunction) {
+		if !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
 	for _, f := range fns {
-		canonical := f
-		if f == FunctionPolicy {
-			canonical = FunctionMemory
+		switch f {
+		case FunctionPolicy:
 			rewrote = append(rewrote, f)
+			add(FunctionMemory)
+		case FunctionGateway:
+			// The gateway needs an agent to hand turns to, and
+			// [gateway].enabled already decides whether it listens.
+			rewrote = append(rewrote, f)
+			add(FunctionCompute)
+		default:
+			add(f)
 		}
-		if seen[canonical] {
-			continue
-		}
-		seen[canonical] = true
-		out = append(out, canonical)
+	}
+	// memory and storage require each other: the storage stage is
+	// gated behind raft, which only memory provides, and a memory node
+	// without storage is rejected outright. Expanding each into both
+	// states the coupling once, here, instead of making an operator
+	// discover it from a validation error telling them to add a
+	// function they never had a choice about.
+	if seen[FunctionMemory] || seen[FunctionStorage] {
+		add(FunctionMemory)
+		add(FunctionStorage)
 	}
 	return out, rewrote
 }

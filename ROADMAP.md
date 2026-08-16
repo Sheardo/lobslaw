@@ -92,14 +92,14 @@ table wins — and the section says so at its head.
 | R1 | **Largely landed** — `BucketSessions` + `BucketSessionMessages`, `internal/memory/session.go`, `internal/gateway/conversation.go`, `compute.ContextBudget`, rolling summary, `session_search`/`session_list`/`session_read`. Note the shipped design keeps messages in their own bucket rather than inline on the session record as proposed below |
 | R4 | **Done.** `Engine.Evaluate` returns `EffectDeny`/"no rule matched (default-deny)" at the bottom, denies nil claims, and a rule whose conditions cannot be evaluated is skipped only when it would have allowed — deny and require_confirmation apply anyway |
 | R19 | **Done for the handler.** `signing.go` + `ParseWithPolicy` enforce detached ed25519 signatures over `manifest.yaml`; the manifest pins `handler_sha256`, which is what makes the signature cover executable content, and the invoker re-hashes before exec. Signed manifests that pin nothing are rejected. Still open: only the handler is pinned, so a skill reading adjacent data files is unprotected, and there is no grace flag for migrating an existing signed corpus (nothing is deployed, so none exists) |
-| R6 | **Partial** — `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in |
+| R6 | **Partial, deliberately deferred (2026-08-16).** `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in. Deferred because current performance is tolerable to ~100k records and an inverted index is a large architecture commitment for a personal store — revisit as the corpus approaches that. Note the open correctness issue tracked under R21, which is independent of the index |
 | R7 | **Partial** — see the status note on the section itself |
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
 | R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
 | R3 | **Done.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`), the cluster-wide per-conversation lease (`internal/memory/session_lease.go`), and restart-safe delivery. The pending queue in the proposal was deliberately not built — the transports already provide the guarantee, and the real gap was duplicate processing on restart, now fixed by acknowledging the poll offset per update. See the section |
 | R5 | **Partial.** The trust-contract half is done: `ContextEngine` returns `promptgen.ContextBlock`s rather than a rendered string, recall goes through `WrapContext` so `BuildSafety` covers it, and it is delivered as a user-role message immediately before the user's own — out of the system prompt, and positioned so the cached prefix survives. Ingest-time scanning landed too: `internal/promptguard` scans on episodic ingest and quarantines rather than drops, and recall skips quarantined records. Deviation: the marker is a `promptguard:<detector>` tag rather than `metadata["promptguard"]`, because `EpisodicRecord` carries no metadata map and a tag needs no schema change. `memory_write` is scanned too, and tool output and errors are routed through `promptguard.Redact` before the model sees them. SOUL load and skill-manifest load are scanned too, but they WARN rather than quarantine — a SOUL is the agent's identity and refusing it on a heuristic would take the assistant down over a false positive. `NeutraliseCloseTags` has no caller left now that recall is out of the system prompt, so it is wanted only if something system-bound reappears. R5 is otherwise complete |
 | R20 | **20a/20b/20c done** (#21) plus the decrypt work the measurement turned up (#25). Latency −73% and allocation −99% geomean versus the starting point; allocation no longer scales with corpus size. **20d (the band prefilter) is open**, and its case is weaker than written — decrypt fell from ~71% to ~32% of a query, so the cosine arithmetic is now the largest share. The minimum score floor is also still open |
-| R21 | Not started. Embedding failures at ingest are still skipped silently, and the backfill `builtin_memory.go` reasons about still does not exist |
+| R21 | **Not started, deferred with R6 (2026-08-16).** Embedding failures at ingest are still skipped silently, and the backfill `builtin_memory.go` reasons about still does not exist. Worth flagging that this half is a live correctness bug rather than a performance item: a record whose embedding failed is stored and never becomes semantically searchable, with no signal to anyone. Small and independent of the index when it is picked up |
 | R8–R18 | Not started, except R19. R13–R18 (skills + self-learning) are untouched; R18 is a prerequisite for R15, and both are now documented as aide decisions (`lobslaw-skill-storage-model`, `lobslaw-skill-approval-lifecycle`) |
 
 R5 is P0 on security grounds and independent of everything else. With R0 landed,
@@ -2399,13 +2399,17 @@ So the five bits express two real roles: raft-backed state
 deprecated alias for `memory` so existing configs keep working, warn at
 boot, and drop it after a release.
 
-**Deferred, deliberately:** `gateway`, and collapsing
-`memory`+`storage`. Both are correct simplifications today and both
-become wrong the moment remote memory lands — at which point `memory`
-as a separately addressable role is exactly the thing that makes a
-compute node useful without a local store. Decide these together with
-the cluster-gRPC-principal work (R7 gap 7), which is the same
-conversation about what a non-state node is allowed to do.
+**Decided 2026-08-16: memory is always local raft replicas.** There is
+no design plan for a compute node reading another node's store, and
+`MemoryServiceClient` stays uncalled. That removes the reason to keep
+`memory` separately addressable, so the deferred half proceeds:
+`memory` and `storage` normalise to each other, and `gateway` retires
+in favour of the `Gateway.Enabled` switch that already existed. Revisit
+only if remote memory is ever actually designed.
+
+This also settles the shape of R7 gap 7 (the cluster gRPC principal):
+a non-state node is not a thing, so the question is narrower than it
+looked.
 
 Acceptance:
 - `functions = ["policy"]` boots, logs a deprecation warning naming

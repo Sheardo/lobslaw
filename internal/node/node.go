@@ -750,9 +750,6 @@ func validateConfig(cfg Config) error {
 			return errors.New("node.Config: MemoryKey required when memory or policy function is enabled")
 		}
 	}
-	if has(cfg.Functions, types.FunctionMemory) && !has(cfg.Functions, types.FunctionStorage) {
-		return errors.New("node.Config: memory function requires storage function on the same node")
-	}
 	// Durability check: a memory-enabled node running alone with no
 	// external snapshot target is one disk failure away from total
 	// amnesia. Require EITHER a snapshot target OR seed nodes (which

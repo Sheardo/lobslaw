@@ -72,7 +72,10 @@ func gateCompute(cfg Config) bool { return has(cfg.Functions, types.FunctionComp
 // operator running the gateway function for testing might leave it
 // disabled in config to bring up the rest of the cluster first.
 func gateGateway(cfg Config) bool {
-	return has(cfg.Functions, types.FunctionGateway) && cfg.Gateway.Enabled
+	// One switch, not two. The gateway function normalises to compute
+	// (it cannot run without an agent), so what remains is: does this
+	// node run an agent, and did the operator enable the channels.
+	return has(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
 }
 
 // gateStorage selects stages that need the storage function. Storage
