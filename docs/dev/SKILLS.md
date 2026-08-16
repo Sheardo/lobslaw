@@ -452,3 +452,42 @@ installed)" on every turn no matter what was installed. A skill could
 only be invoked by a model that guessed its name. `AgentConfig.SkillsProvider`
 is what fills it.
 
+---
+
+## Pinning what actually runs
+
+| Artefact | Signed | Pinned |
+|---|---|---|
+| `manifest.yaml` | detached ed25519 | `Skill.SHA256` |
+| handler script | via `handler_sha256` in the signed manifest | verified at parse **and** before exec |
+| reference files | via per-reference `sha256` | verified at parse **and** before exec |
+
+The manifest signature covers the manifest bytes, so pinning digests
+*inside* it is what transitively covers the content. Without that, a
+publisher signs a document that merely names a script.
+
+References are pinned for the same reason one level out: a skill whose
+behaviour comes from an adjacent rules document or prompt template is
+as changeable as one whose behaviour comes from its code.
+
+```yaml
+references:
+  - references/quick.md          # declared, unpinned
+  - path: references/rules.md    # pinned
+    sha256: 3b1f...
+```
+
+**A signed manifest must pin every reference it declares.** A signature
+covering the code and not the document that drives it reads as
+provenance in logs and in the registry's signed-candidate preference
+while guaranteeing less than it appears to — refused rather than
+recorded as a guarantee that cannot be made.
+
+Unpinned references stay legal under `SigningOff`. A skill with nothing
+to sign against should not have to carry digests it cannot verify.
+
+Both are re-hashed immediately before exec. That does not make the
+window zero — something could swap a file between the read and the
+exec — but it reduces it from hours to microseconds and catches the
+realistic case: a file edited after the node started.
+

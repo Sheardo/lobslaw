@@ -115,9 +115,61 @@ type Manifest struct {
 	// about — reference material, templates, scripts. Declared here so
 	// the index can say WHAT is available without reading any of it,
 	// which is the whole point of disclosing progressively.
-	References []string `yaml:"references,omitempty"`
+	//
+	// Each may pin a digest. Pinning the handler and not these leaves
+	// a real hole: a skill whose behaviour is driven by an adjacent
+	// data file — a prompt template, a rules document — is as
+	// changeable as its code, and the signature would still verify.
+	References []Reference `yaml:"references,omitempty"`
 
 	Params map[string]any `yaml:"params_schema,omitempty"`
+}
+
+// Reference is one bundled document, optionally pinned.
+//
+// Accepts two YAML shapes so an unsigned skill can declare what it
+// carries without computing digests, while a signed one must pin
+// everything:
+//
+//	references:
+//	  - references/quick.md                    # declared, unpinned
+//	  - path: references/api.md                # pinned
+//	    sha256: 3b1f...
+type Reference struct {
+	Path   string `yaml:"path"`
+	SHA256 string `yaml:"sha256,omitempty"`
+}
+
+// UnmarshalYAML accepts either a bare path or a mapping.
+//
+// The bare form is not a convenience to be deprecated later: a skill
+// under SigningOff has nothing to sign against, and forcing it to
+// carry digests it cannot verify would be ceremony. What matters is
+// that the signed path demands them.
+func (r *Reference) UnmarshalYAML(unmarshal func(any) error) error {
+	var path string
+	if err := unmarshal(&path); err == nil {
+		r.Path = path
+		return nil
+	}
+	// Alias avoids recursing back into this method.
+	type reference Reference
+	var full reference
+	if err := unmarshal(&full); err != nil {
+		return fmt.Errorf("manifest.references: entry must be a path or {path, sha256}: %w", err)
+	}
+	*r = Reference(full)
+	return nil
+}
+
+// ReferencePaths projects the declared paths, for the skill index —
+// which names what a skill carries without reading any of it.
+func ReferencePaths(refs []Reference) []string {
+	out := make([]string, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, r.Path)
+	}
+	return out
 }
 
 // MaxDescriptionChars bounds a skill's one-line description.
@@ -189,6 +241,12 @@ type Skill struct {
 	// The invoker re-hashes against this immediately before exec, so
 	// a handler swapped after registration is caught.
 	HandlerSHA256 string
+
+	// ReferenceSHA256 maps each pinned reference path to its verified
+	// digest. Re-checked before exec for the same reason the handler
+	// is: a skill driven by an adjacent rules document is as
+	// changeable as one driven by its code.
+	ReferenceSHA256 map[string]string
 
 	// IsSigned is true iff a valid ed25519 signature by a trusted
 	// publisher accompanied the manifest. Under SigningOff this is
@@ -304,6 +362,12 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 		skill.HandlerSHA256 = actual
 	}
 
+	refDigests, err := verifyReferences(dir, m.References)
+	if err != nil {
+		return nil, err
+	}
+	skill.ReferenceSHA256 = refDigests
+
 	if policy == SigningOff {
 		return skill, nil
 	}
@@ -333,6 +397,19 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 		return nil, fmt.Errorf("skills: %q: signed manifest does not declare handler_sha256, "+
 			"so the signature covers no executable content; re-publish with the handler digest pinned", manifestPath)
 	}
+	// Same argument one level out. A skill whose behaviour comes from
+	// an adjacent rules document is as changeable as one whose
+	// behaviour comes from its code, and a signature that covers the
+	// code and not the document reads as provenance while guaranteeing
+	// less than it appears to.
+	for _, r := range m.References {
+		if strings.TrimSpace(r.SHA256) == "" {
+			return nil, fmt.Errorf(
+				"skills: %q: signed manifest declares reference %q with no sha256; "+
+					"the signature would not cover it — re-publish with every reference pinned",
+				manifestPath, r.Path)
+		}
+	}
 	skill.IsSigned = true
 	skill.SignedBy = signer
 	return skill, nil
@@ -348,6 +425,37 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 // Split out of validateManifest because that function is a long list
 // of unrelated field checks and adding a sixth concern to it made the
 // complexity linter right rather than pedantic.
+// verifyReferences hashes every pinned reference and returns the
+// verified digests.
+//
+// A declared digest is checked whatever the signing policy says, for
+// the same reason the handler's is: the policy governs whether we
+// demand provenance, not whether we believe a digest the manifest
+// itself states.
+func verifyReferences(dir string, refs []Reference) (map[string]string, error) {
+	var out map[string]string
+	for _, r := range refs {
+		declared := strings.TrimSpace(r.SHA256)
+		if declared == "" {
+			continue
+		}
+		path := filepath.Join(dir, filepath.Clean(r.Path))
+		actual, err := fileDigest(path)
+		if err != nil {
+			return nil, fmt.Errorf("skills: hash reference %q: %w", r.Path, err)
+		}
+		if !strings.EqualFold(actual, declared) {
+			return nil, fmt.Errorf("skills: reference %q does not match its declared sha256 "+
+				"(declared %s, found %s)", r.Path, declared, actual)
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[r.Path] = actual
+	}
+	return out, nil
+}
+
 // validateBinaries checks the bundled-binary declarations. Split out
 // for the same reason as validateDisclosure: validateManifest was a
 // flat list of unrelated field checks sitting at the complexity
@@ -395,10 +503,13 @@ func validateDisclosure(m *Manifest) error {
 		}
 	}
 	for i, r := range m.References {
-		cleaned := filepath.Clean(r)
+		if strings.TrimSpace(r.Path) == "" {
+			return fmt.Errorf("manifest.references[%d].path is required", i)
+		}
+		cleaned := filepath.Clean(r.Path)
 		if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") {
 			return fmt.Errorf(
-				"manifest.references[%d] %q must be relative and inside the skill directory", i, r)
+				"manifest.references[%d] %q must be relative and inside the skill directory", i, r.Path)
 		}
 	}
 	return nil

@@ -1192,7 +1192,12 @@ that warns on manifest-only signatures before it starts rejecting them.
 ### Acceptance
 
 - [x] A modified handler fails verification with the manifest untouched.
-- [ ] A modified reference file fails verification. *Only the handler is pinned; a skill that reads adjacent data files is still unprotected.*
+- [x] A modified reference file fails verification. References may pin a `sha256`, verified at
+      parse and re-verified before exec (same window argument as the handler). A **signed** manifest
+      must pin every reference it declares — a signature covering the code and not the rules
+      document that drives it reads as provenance while guaranteeing less than it appears to.
+      Unpinned references stay legal under `SigningOff`: a skill with nothing to sign against
+      should not have to carry digits it cannot verify.
 - [x] Tamper between load and invoke is caught before execution.
 - [x] ~~A manifest-only signature warns under a grace flag~~ — no grace flag. A signed manifest that pins no handler is rejected outright. The flag existed to migrate a corpus of already-signed skills; there isn't one.
 

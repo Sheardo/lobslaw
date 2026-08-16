@@ -253,6 +253,24 @@ func (i *Invoker) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult,
 		}
 	}
 
+	// The same window argument as the handler, one level out: a skill
+	// driven by an adjacent rules document is as changeable as one
+	// driven by its code, and re-hashing at exec catches the file
+	// edited after the node started.
+	for path, want := range skill.ReferenceSHA256 {
+		full := filepath.Join(skill.ManifestDir, filepath.Clean(path))
+		actual, err := fileDigest(full)
+		if err != nil {
+			return nil, fmt.Errorf("skills: skill %q: re-hash reference %q before exec: %w",
+				skill.Name(), path, err)
+		}
+		if !strings.EqualFold(actual, want) {
+			return nil, fmt.Errorf("skills: skill %q: reference %q changed since it was registered "+
+				"(expected %s, found %s); refusing to execute",
+				skill.Name(), path, want, actual)
+		}
+	}
+
 	for _, name := range skill.Manifest.RequiresBinary {
 		if _, err := i.binaryLookup(name); err != nil {
 			return nil, fmt.Errorf("skills: skill %q: required binary %q not on PATH — install it via clawhub_install <skill> (the skill bundle's clawdbot.install array satisfies host bin requirements automatically), or pre-install on the host: %w", skill.Name(), name, err)
