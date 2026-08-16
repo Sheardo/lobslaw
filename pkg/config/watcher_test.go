@@ -85,8 +85,27 @@ func TestWatchDebouncesBursts(t *testing.T) {
 	done := make(chan struct{}, 1)
 	go func() {
 		_ = Watch(ctx, WatchOptions{
-			Paths:    []string{path},
-			Debounce: 150 * time.Millisecond,
+			Paths: []string{path},
+			// Comfortably longer than the burst below, because what
+			// this test measures is the debounce collapsing writes —
+			// not how promptly fsnotify delivers them.
+			//
+			// At 150ms this failed once on CI with fires = 2. The only
+			// way to get a second fire is for event delivery to lag
+			// far enough that the timer expires mid-burst: the writes
+			// are 20ms apart at the syscall, but delivery is the
+			// machine's business, not the debounce's.
+			//
+			// That mechanism is inferred rather than reproduced — 32
+			// runs under 8-way contention on a 12-core machine did not
+			// fail once, and CI runners are smaller and busier. So
+			// this is a widened margin against a plausible cause, not
+			// a fix for a diagnosed one. If it recurs at a second, the
+			// diagnosis is wrong and the assertion is the thing to
+			// revisit: "a burst collapses" is the real property, and
+			// "exactly one fire" is only reachable when delivery is
+			// prompt.
+			Debounce: time.Second,
 		}, func(batch []fsnotify.Event) {
 			atomic.AddInt32(&fires, 1)
 			mu.Lock()
@@ -110,13 +129,13 @@ func TestWatchDebouncesBursts(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("watcher did not fire within 2s")
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher did not fire within 5s")
 	}
 
-	// Give the debounce a bit more time; if another fire slips
-	// through, we'd see fires > 1.
-	time.Sleep(200 * time.Millisecond)
+	// Give a second fire time to slip through if the debounce did not
+	// actually collapse the burst.
+	time.Sleep(300 * time.Millisecond)
 
 	if got := atomic.LoadInt32(&fires); got != 1 {
 		t.Errorf("fires = %d; want 1 (debounce should collapse bursts)", got)
