@@ -16,6 +16,13 @@ type ProviderEntry struct {
 	Capabilities []string
 	Backup       string // label of backup provider; empty = end of chain
 	Client       LLMProvider
+	// Model is what this provider was configured to call, carried so a
+	// cost record and a span can name it without the caller guessing.
+	Model string
+	// Pricing is what makes a cost record cost anything. Without it
+	// EstimateCost returns zero, which is how every turn to date has
+	// reported a spend of nothing.
+	Pricing types.ProviderPricing
 }
 
 // ProviderRegistry is the runtime label → provider lookup. Shared

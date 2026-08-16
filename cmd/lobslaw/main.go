@@ -206,6 +206,9 @@ func main() {
 	if dispatchAudit(os.Args[1:]) {
 		return
 	}
+	if dispatchTrace(os.Args[1:]) {
+		return
+	}
 	if dispatchLearned(os.Args[1:]) {
 		return
 	}
@@ -450,6 +453,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		NotifyChannels:               cfg.SelfLearning.Notify.Channels,
 		NotifySubjects:               cfg.SelfLearning.Notify.Subjects,
 		NotifyInterval:               cfg.SelfLearning.Notify.Interval,
+		Trace:                        cfg.Trace,
 
 		SessionGrantTTL:     cfg.Security.SessionGrantTTL,
 		Identity:            cfg.Identity,

@@ -28,6 +28,8 @@ type Config struct {
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Identity  IdentityConfig   `koanf:"identity"`
+	// Trace is turn tracing. Off by default.
+	Trace TraceConfig `koanf:"trace"`
 	// SelfLearning defaults to off — the zero value of Mode parses to
 	// off, so a config that does not mention it has the capability
 	// absent rather than merely unused.
@@ -151,6 +153,36 @@ type SelfLearningConfig struct {
 	// Notify controls the in-channel nudge that says a review queue
 	// exists. Off unless both allowlists are populated.
 	Notify NotifyConfig `koanf:"notify"`
+}
+
+// TraceConfig is turn tracing: what a turn did, and what it cost.
+//
+// Off by default. Enabling it writes newline-delimited JSON under the
+// data dir, per node, readable with `lobslaw trace`.
+//
+// Per node rather than replicated, deliberately. A trace is
+// high-volume, short-lived and not agreed-upon state, so putting it in
+// raft would drag telemetry into the consensus path. The honest cost
+// is that a turn served on one node is not queryable from another —
+// the trace is local because the turn was.
+//
+// NO SPAN CARRIES CONTENT: no message text, no tool arguments, no tool
+// output. Sizes, counts, timings, names and provider labels only.
+type TraceConfig struct {
+	// Enabled turns on the local file sink.
+	Enabled bool `koanf:"enabled,omitempty"`
+
+	// Dir overrides where traces land. Empty puts them under the data
+	// dir, alongside the other per-node disposable state.
+	Dir string `koanf:"dir,omitempty"`
+
+	// MaxBytes bounds one trace file before it rotates; exactly one
+	// predecessor is kept, so the ceiling is twice this. Zero takes
+	// the default of 64 MiB.
+	//
+	// Bounded because an unbounded telemetry file on a long-running
+	// node is a disk-full incident waiting for a quiet week.
+	MaxBytes int64 `koanf:"max_bytes,omitempty"`
 }
 
 // NotifyConfig is the operator's opt-in to being told, in-channel,

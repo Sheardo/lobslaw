@@ -74,8 +74,8 @@ func TestAQualifyingBackupStillRescuesTheTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a qualifying backup was refused: %v", err)
 	}
-	if resp.Content != "ok from backup" {
-		t.Errorf("content = %q", resp.Content)
+	if resp.resp.Content != "ok from backup" {
+		t.Errorf("content = %q", resp.resp.Content)
 	}
 	if len(*calls) != 2 {
 		t.Errorf("calls = %v", *calls)

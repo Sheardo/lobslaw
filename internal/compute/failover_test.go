@@ -112,8 +112,8 @@ func TestFailoverAdvancesOnEachClass(t *testing.T) {
 			if tc.advance {
 				if err != nil {
 					t.Errorf("backup should have served the turn, got error: %v", err)
-				} else if resp.Content != "ok from backup" {
-					t.Errorf("reply came from %q, want the backup", resp.Content)
+				} else if resp.resp.Content != "ok from backup" {
+					t.Errorf("reply came from %q, want the backup", resp.resp.Content)
 				}
 			} else if err == nil {
 				t.Error("a permanent failure produced a successful turn")
@@ -156,7 +156,7 @@ func TestFailoverKeepsHeuristicForUnclassifiedErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unclassified transient error did not fail over: %v", err)
 	}
-	if resp.Content != "ok from backup" {
-		t.Errorf("reply came from %q, want the backup (calls: %v)", resp.Content, *calls)
+	if resp.resp.Content != "ok from backup" {
+		t.Errorf("reply came from %q, want the backup (calls: %v)", resp.resp.Content, *calls)
 	}
 }

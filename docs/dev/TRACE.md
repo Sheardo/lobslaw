@@ -220,3 +220,83 @@ Three questions an operator cannot answer today:
 
 Each is a question about a harness, answerable by exporting what the
 harness already knows.
+
+---
+
+## What has landed
+
+The span model, the recorder, the local file sink, `lobslaw trace`, and
+provider-attempt instrumentation. OTLP, the webhook sink, and the
+non-LLM spans (retrieval, compaction, ingest) are not built yet, nor is
+tool context attribution.
+
+### Stored locally, contrary to the design above
+
+This document says *"exported, not stored — no raft bucket and no
+reporting command"*. That argument was right about **raft**: a trace is
+high-volume, short-lived, and not agreed-upon state, so replicating it
+would drag telemetry into the consensus path.
+
+A per-node file is not raft. It gives `lobslaw trace <turn-id>` without
+any of that, and it means the record survives a collector being down —
+which is when you most want it.
+
+The honest cost: **a turn served on node A is not queryable from node
+B.** The trace is local because the turn was, and the CLI says so when
+it finds nothing.
+
+```
+<data-dir>/traces/turns.ndjson     current
+<data-dir>/traces/turns.ndjson.1   one predecessor
+```
+
+Bounded and rotated, because an unbounded telemetry file on a
+long-running node is a disk-full incident waiting for a quiet week. Two
+files is a ceiling somebody can reason about; a numbered series is the
+same problem with extra steps. `ReadTurn` reads both, so a turn that
+straddles a rotation comes back whole.
+
+### Dropping is the correct behaviour
+
+`Record` never blocks. A full buffer drops the span and counts the
+drop.
+
+That is not a compromise — tracing must never slow or fail a turn, and
+a collector that hangs, a disk that fills or a sink that errors must
+not reach the user waiting for a reply. The **count** is what makes it
+honest: a trace with a hole that says "4 dropped" is usable, while one
+that silently omits the interesting span is worse than no trace,
+because it is read as evidence of absence.
+
+This is also why traces stay away from the hash-chained audit log. An
+audit entry that may be dropped under load is not an audit entry.
+
+### Every attempt, not just the winner
+
+A provider span is emitted for the winner, for each candidate that
+failed and advanced, and for each candidate **never tried** — demoted
+by health, or refused by the trust floor.
+
+The skipped ones matter most. "The chain skipped three providers before
+succeeding" is the shape of a developing outage, and it is invisible if
+only attempts are recorded. `outcome` distinguishes them, because
+counting a protective decision as a failure would make the trust floor
+look like an outage.
+
+### The cost was never computed
+
+This document says the per-round-trip cost record is *"computed and
+then discarded"*. It was not computed.
+
+`CostRecord` was built with `ProviderLabel: ""` and `CostUSD: 0`,
+behind a comment saying a later phase would fill it in.
+`dispatchWithBackup` did not return which provider had won, so the
+caller had nothing to price against. **Every turn to date reported a
+spend of nothing** — which also means the budget's spend cap has never
+fired.
+
+The winning entry now comes back from dispatch carrying its model and
+pricing, and the cost is attributed to the provider that actually
+served the turn rather than to the one that was asked. On a failover
+those differ, and attributing to the requested model would misprice
+exactly the turns worth auditing.
