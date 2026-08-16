@@ -101,6 +101,23 @@ const (
 	// user answered in one conversation and got asked again because
 	// the next message landed on a different node.
 	BucketSessionGrants = "session_grants"
+
+	// BucketSkills holds imported skills — the operator and signed
+	// tiers — keyed "<name>@<version>".
+	//
+	// Authority moves here from the filesystem. A skill exists because
+	// the log says so rather than because a mount happens to be
+	// materialised on the node you asked, which is what made "is this
+	// skill installed?" a question with a per-node answer.
+	BucketSkills = "skills"
+
+	// BucketSkillBlobs holds content-addressed payloads — handlers,
+	// reference documents — keyed by "sha256:<hex>".
+	//
+	// Separate from the record so two versions of a skill sharing a
+	// reference store it once, and so listing skills does not pull
+	// every payload they mention.
+	BucketSkillBlobs = "skill_blobs"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -130,5 +147,7 @@ var allBuckets = []string{
 	BucketSelfTaughtUsage,
 	BucketSelfTaughtArchive,
 	BucketSessionGrants,
+	BucketSkills,
+	BucketSkillBlobs,
 	BucketSelfTaughtHistory,
 }
