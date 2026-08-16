@@ -343,6 +343,16 @@ message PolicyRule {
   repeated Condition conditions = 6;
   int32 priority = 7;
   string scope = 8;
+  // created_by records where a rule came from. Operator-authored rules
+  // leave it empty; a rule minted by an "always" approval carries
+  // "approval:<prompt_id>".
+  //
+  // Provenance is what stops "always" being a decision the user can
+  // never see again: it makes listing and revoking approval-derived
+  // rules a single command, rather than asking someone to recognise
+  // their own past taps in an undifferentiated rule list.
+  string created_by = 9;
+  google.protobuf.Timestamp created_at = 10;
 }
 
 message Condition {

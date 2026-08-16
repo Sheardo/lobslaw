@@ -16,6 +16,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -164,6 +165,31 @@ type TelegramConfig struct {
 	// here suppresses the next prompt for that operation. Nil leaves
 	// every confirmation one-shot.
 	Approvals *compute.SessionApprovals
+
+	// ApprovalRules mints the permanent rule behind "always". Nil
+	// hides the button rather than showing one that does nothing —
+	// a node without raft has nowhere to record a lasting grant.
+	ApprovalRules *policy.ApprovalRules
+}
+
+// grantSubject is the policy subject a permanent grant binds to.
+//
+// Read from the turn's claims rather than from the callback payload:
+// the callback is attacker-shaped input, and a subject taken from it
+// would let a crafted tap mint a rule for somebody else.
+//
+// KNOWN HAZARD, and not one "always" introduces: for Telegram this
+// identity is the @username when the user has one, which is
+// reassignable. A rename orphans the grant (safe), and whoever claims
+// the freed handle next inherits it (not safe). The same is true of
+// every operator-authored `user:tg-@name` rule and of role assignment,
+// so binding approvals to something else would be inconsistent without
+// fixing the larger problem. Tracked as its own roadmap item.
+func grantSubject(claims *types.Claims) string {
+	if claims == nil || claims.UserID == "" || claims.UserID == "tg-unknown" {
+		return ""
+	}
+	return "user:" + claims.UserID
 }
 
 // ChannelStateStore is a minimal raft-backed key-value interface for
@@ -596,14 +622,25 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	// future budget warnings would be the last thing an operator
 	// wants on that particular prompt.
 	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" {
+		subject := grantSubject(req.Claims)
 		h.pendingScopeMu.Lock()
 		h.pendingScope[p.ID] = scopedOperation{
-			action: resp.ConfirmationAction, resource: resp.ConfirmationResource,
+			action:   resp.ConfirmationAction,
+			resource: resp.ConfirmationResource,
+			subject:  subject,
 		}
 		h.pendingScopeMu.Unlock()
 		buttons = append(buttons, map[string]string{
 			"text": "Approve for this chat", "callback_data": "prompt:approve-session:" + p.ID,
 		})
+		// "Always" is offered only when there is a principal to bind it
+		// to and somewhere to record it. Nil ApprovalRules hides the
+		// button rather than showing one that silently does nothing.
+		if subject != "" && h.cfg.ApprovalRules != nil {
+			buttons = append(buttons, map[string]string{
+				"text": "Always allow", "callback_data": "prompt:approve-always:" + p.ID,
+			})
+		}
 	}
 	buttons = append(buttons, map[string]string{
 		"text": "Deny", "callback_data": "prompt:deny:" + p.ID,
@@ -665,6 +702,15 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		// the grant. Resolving first would let the resume race the
 		// grant and prompt a second time for the same operation.
 		if !h.grantForSession(ctx, promptID, q) {
+			reply = "Approved."
+		}
+	case "approve-always":
+		decision = PromptApproved
+		reply = "Approved — I won't ask about this again. Revoke it with `policy revoke-approvals`."
+		// Recorded before Resolve, for the same reason as the session
+		// grant: resolving first lets the resumed turn race the rule
+		// and prompt a second time for the same operation.
+		if !h.grantAlways(ctx, promptID, q) {
 			reply = "Approved."
 		}
 	case "deny":
@@ -1378,6 +1424,46 @@ func turnText(msg *tgMessage) string {
 type scopedOperation struct {
 	action   string
 	resource string
+	// subject is the principal an "always" grant binds to, captured
+	// when the prompt was raised rather than read off the callback.
+	// A callback is attacker-shaped input; the turn that triggered
+	// the confirmation is not.
+	subject string
+}
+
+// grantAlways mints the permanent policy rule behind "always".
+//
+// Reports whether a rule was actually recorded, so the reply does not
+// promise something that did not happen — the floor refuses grants for
+// protected paths and destructive commands, and that refusal must
+// reach the user rather than being logged and forgotten.
+func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
+	if h.cfg.ApprovalRules == nil || q.Message == nil {
+		return false
+	}
+	h.pendingScopeMu.Lock()
+	op, ok := h.pendingScope[promptID]
+	delete(h.pendingScope, promptID)
+	h.pendingScopeMu.Unlock()
+	if !ok || op.subject == "" {
+		return false
+	}
+
+	rule, err := h.cfg.ApprovalRules.Mint(ctx, policy.MintRequest{
+		PromptID: promptID,
+		Subject:  op.subject,
+		Action:   op.action,
+		Resource: op.resource,
+	})
+	if err != nil {
+		h.log.Warn("telegram: could not mint a permanent approval",
+			"action", op.action, "resource", op.resource, "err", err)
+		return false
+	}
+	h.log.Info("telegram: permanent approval recorded",
+		"rule_id", rule.Id, "subject", op.subject,
+		"action", op.action, "resource", op.resource)
+	return true
 }
 
 // grantForSession records "approved for the rest of this chat" for the

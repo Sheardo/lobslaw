@@ -402,9 +402,47 @@ test rather than trusting call ordering.
 - [ ] Approve after a full process restart; the turn resumes rather than asking the user to resend.
       (The record and its continuation survive; nothing populates the continuation yet.)
 - [x] Concurrent resolves cluster-wide: exactly one winner, everyone else `ErrPromptResolved`.
-- [ ] `always` produces a visible, revocable policy rule.
+- [x] `always` produces a visible, revocable policy rule (`lobslaw policy approvals` /
+      `revoke-approvals`).
 - [x] `always` cannot escalate past the hardline floor — the floor is evaluated before policy, so
       no allow rule can reach past it (`TestSessionGrantCannotReachTheFloor`).
+
+---
+
+## R2b — Telegram identity is a renameable handle
+
+Found while wiring R2's `always` scope.
+
+### Problem
+
+`tgUserIdentity` returns `tg-@<username>` when the user has one, falling back to the numeric id
+only when they don't. That string becomes `claims.UserID`, which is what policy subjects
+(`user:tg-@alice`), role assignment (`cfg.Roles(userID)`), and memory scoping all key on.
+
+Telegram usernames are changeable, and a freed handle can be claimed by somebody else. So:
+
+- A rename orphans every rule, role, and permanent approval bound to the old handle. Fails safe,
+  but silently — the user's grants stop working and nothing says why.
+- Whoever claims the freed handle inherits all of them. **Fails open.**
+
+This is not specific to approvals; it is how every Telegram principal is identified today. R2's
+`always` button makes it more consequential (a permanent allow rule transferring to a different
+person) but does not introduce it.
+
+### Proposal
+
+Make the numeric id the identity and the handle a display name:
+
+- `claims.UserID` becomes `tg-<numeric id>`, always.
+- The handle rides alongside for rendering and log lines only.
+- A migration for existing rules and prefs keyed on `tg-@name`, or a documented one-time
+  re-grant — deleting people's rules silently is worse than asking them to re-approve.
+
+### Acceptance
+
+- [ ] A user who renames keeps their roles, rules, and approvals.
+- [ ] Someone claiming a freed handle inherits nothing.
+- [ ] Existing `tg-@name`-keyed state is migrated or the operator is told plainly what to redo.
 
 ---
 

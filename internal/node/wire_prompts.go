@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 )
 
@@ -37,6 +38,12 @@ func (n *Node) wirePrompts() error {
 	}
 	n.promptRegistry = gateway.NewRaftPrompts(store, n.cfg.NodeID)
 	n.promptStore = store
+
+	rules, err := policy.NewApprovalRules(n.raft, n.store)
+	if err != nil {
+		return fmt.Errorf("approval rules: %w", err)
+	}
+	n.approvalRules = rules
 	return nil
 }
 
