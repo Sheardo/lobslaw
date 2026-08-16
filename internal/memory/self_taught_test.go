@@ -77,7 +77,7 @@ func TestModeDecidesInitialState(t *testing.T) {
 	ctx := context.Background()
 
 	proposeStore := selfTaught(t, SelfLearningPropose)
-	rec, err := proposeStore.Propose(ctx, aSkill("tidy-notes"))
+	rec, err := proposeStore.Propose(ctx, aSkill("tidy-notes"), ProposeIntent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestModeDecidesInitialState(t *testing.T) {
 	}
 
 	autoStore := selfTaught(t, SelfLearningAuto)
-	rec, err = autoStore.Propose(ctx, aSkill("tidy-notes"))
+	rec, err = autoStore.Propose(ctx, aSkill("tidy-notes"), ProposeIntent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCallerSuppliedStateIsIgnored(t *testing.T) {
 	rec := aSkill("sneaky")
 	rec.State = lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE
 
-	out, err := s.Propose(context.Background(), rec)
+	out, err := s.Propose(context.Background(), rec, ProposeIntent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestProposedArtefactsAreInert(t *testing.T) {
 	t.Parallel()
 	s := selfTaught(t, SelfLearningPropose)
 	ctx := context.Background()
-	if _, err := s.Propose(ctx, aSkill("tidy-notes")); err != nil {
+	if _, err := s.Propose(ctx, aSkill("tidy-notes"), ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,7 +147,7 @@ func TestApprovingSomethingAlreadyActiveIsRefused(t *testing.T) {
 	t.Parallel()
 	s := selfTaught(t, SelfLearningAuto)
 	ctx := context.Background()
-	if _, err := s.Propose(ctx, aSkill("thing")); err != nil {
+	if _, err := s.Propose(ctx, aSkill("thing"), ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Approve(ctx, "skill:thing", "alice"); !errors.Is(err, ErrNotProposed) {
@@ -162,7 +162,7 @@ func TestArchivingIsRecoverable(t *testing.T) {
 	t.Parallel()
 	s := selfTaught(t, SelfLearningAuto)
 	ctx := context.Background()
-	if _, err := s.Propose(ctx, aSkill("thing")); err != nil {
+	if _, err := s.Propose(ctx, aSkill("thing"), ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -204,7 +204,7 @@ func TestPinnedArtefactsResistArchiving(t *testing.T) {
 	ctx := context.Background()
 	rec := aSkill("keeper")
 	rec.Pinned = true
-	if _, err := s.Propose(ctx, rec); err != nil {
+	if _, err := s.Propose(ctx, rec, ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -223,13 +223,13 @@ func TestDiscardAllArchivesTheLot(t *testing.T) {
 	s := selfTaught(t, SelfLearningAuto)
 	ctx := context.Background()
 	for _, name := range []string{"one", "two", "three"} {
-		if _, err := s.Propose(ctx, aSkill(name)); err != nil {
+		if _, err := s.Propose(ctx, aSkill(name), ProposeIntent{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	keeper := aSkill("keeper")
 	keeper.Pinned = true
-	if _, err := s.Propose(ctx, keeper); err != nil {
+	if _, err := s.Propose(ctx, keeper, ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,11 +256,11 @@ func TestReproposalBumpsTheVersion(t *testing.T) {
 	s := selfTaught(t, SelfLearningAuto)
 	ctx := context.Background()
 
-	first, err := s.Propose(ctx, aSkill("thing"))
+	first, err := s.Propose(ctx, aSkill("thing"), ProposeIntent{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.Propose(ctx, aSkill("thing"))
+	second, err := s.Propose(ctx, aSkill("thing"), ProposeIntent{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestUsageIsBatchedUntilFlush(t *testing.T) {
 	t.Parallel()
 	s := selfTaught(t, SelfLearningAuto)
 	ctx := context.Background()
-	if _, err := s.Propose(ctx, aSkill("thing")); err != nil {
+	if _, err := s.Propose(ctx, aSkill("thing"), ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -331,10 +331,10 @@ func TestListScopesByOwnerToo(t *testing.T) {
 	mine := aSkill("mine")
 	theirs := aSkill("theirs")
 	theirs.Owner = "user:bob"
-	if _, err := s.Propose(ctx, mine); err != nil {
+	if _, err := s.Propose(ctx, mine, ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Propose(ctx, theirs); err != nil {
+	if _, err := s.Propose(ctx, theirs, ProposeIntent{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,10 +354,10 @@ func TestProposeRequiresNameAndKind(t *testing.T) {
 
 	if _, err := s.Propose(ctx, &lobslawv1.SelfTaughtRecord{
 		Kind: lobslawv1.SelfTaughtKind_SELF_TAUGHT_KIND_SKILL,
-	}); err == nil {
+	}, ProposeIntent{}); err == nil {
 		t.Error("an artefact with no name was accepted")
 	}
-	if _, err := s.Propose(ctx, &lobslawv1.SelfTaughtRecord{Name: "x"}); err == nil {
+	if _, err := s.Propose(ctx, &lobslawv1.SelfTaughtRecord{Name: "x"}, ProposeIntent{}); err == nil {
 		t.Error("an artefact with no kind was accepted")
 	}
 }

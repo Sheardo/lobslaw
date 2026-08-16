@@ -69,6 +69,17 @@ var (
 
 	// ErrArtefactNotFound is returned for an unknown id.
 	ErrArtefactNotFound = errors.New("self-taught: not found")
+
+	// ErrSimilarExists means a near-duplicate is already stored and
+	// the proposer did not say which this is. Refused rather than
+	// guessed at, for the same reason an ambiguous pinned-memory edit
+	// is: picking wrong produces a second instruction for one job that
+	// nothing downstream can reconcile.
+	ErrSimilarExists = errors.New("self-taught: a similar artefact already exists")
+
+	// ErrNoPendingRevision is returned when approving or rejecting a
+	// refinement that is not there.
+	ErrNoPendingRevision = errors.New("self-taught: no pending refinement")
 )
 
 // SelfTaughtStore holds what the agent wrote for itself.
@@ -76,6 +87,14 @@ type SelfTaughtStore struct {
 	raft  raftApplier
 	store *Store
 	mode  SelfLearningMode
+
+	// embedder powers the semantic half of the near-duplicate search.
+	// Optional: without one the search is lexical, which still catches
+	// a near-identical name. With one that ERRORS, the propose fails
+	// rather than silently degrading — the check exists to stop
+	// duplicates, and quietly skipping it produces exactly what it was
+	// wired to prevent.
+	embedder Embedder
 
 	// usage is batched in-process. Counter bumps are high-frequency
 	// and low-value, and paying consensus for each one is the obvious
@@ -109,16 +128,53 @@ func NewSelfTaughtStore(raft raftApplier, store *Store, mode SelfLearningMode) (
 	}, nil
 }
 
+// SetEmbedder wires the semantic half of the near-duplicate search.
+// Optional, and set after construction because the embedder lives in
+// the compute layer.
+func (s *SelfTaughtStore) SetEmbedder(e Embedder) {
+	if s != nil {
+		s.embedder = e
+	}
+}
+
 // Mode reports the configured mode. Never off on a live store: an off
 // deployment has no store at all.
 func (s *SelfTaughtStore) Mode() SelfLearningMode { return s.mode }
 
-// Propose records a new artefact.
+// ProposeIntent is what the proposer says this artefact is, relative
+// to what is already stored.
+//
+// Required whenever a near-duplicate exists. The alternative — infer
+// it — is what produces two skills for one job: a proposer that varies
+// the name slightly gets a second artefact, and nothing downstream has
+// any basis for reconciling them.
+type ProposeIntent struct {
+	// Refines names the artefact this improves. The named artefact
+	// keeps working; the change lands as a pending revision.
+	Refines string
+
+	// Rationale is why the refinement is better. Required with
+	// Refines: a diff with no reasoning is one nobody can approve with
+	// any confidence.
+	Rationale string
+
+	// Distinct declares that the similar artefacts found are genuinely
+	// different jobs, so a new artefact is correct. An explicit claim
+	// rather than a default, because it is the one that creates
+	// duplicates when it is wrong.
+	Distinct bool
+}
+
+// Propose records a new artefact, or stages a refinement to one.
+//
+// When a near-duplicate exists and the intent says neither Refines nor
+// Distinct, this returns ErrSimilarExists WITH the candidates, so the
+// caller can look at them and come back having decided.
 //
 // The initial state comes from the mode, not from the caller. A caller
 // that could choose would eventually choose ACTIVE somewhere, and the
 // operator's setting would quietly stop meaning what it says.
-func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaughtRecord) (*lobslawv1.SelfTaughtRecord, error) {
+func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaughtRecord, intent ProposeIntent) (*lobslawv1.SelfTaughtRecord, error) {
 	if rec == nil {
 		return nil, errors.New("self-taught: nil record")
 	}
@@ -128,11 +184,30 @@ func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaught
 	if rec.Kind == lobslawv1.SelfTaughtKind_SELF_TAUGHT_KIND_UNSPECIFIED {
 		return nil, errors.New("self-taught: kind is required")
 	}
+	if intent.Refines != "" {
+		return s.refine(ctx, rec, intent)
+	}
 
 	out := proto.Clone(rec).(*lobslawv1.SelfTaughtRecord)
 	if out.Id == "" {
 		out.Id = kindSlug(out.Kind) + ":" + out.Name
 	}
+
+	// An exact id collision is a refinement whether or not the
+	// proposer noticed, so it is routed as one rather than silently
+	// overwriting a working artefact.
+	if _, err := s.Get(out.Id); err == nil {
+		intent.Refines = out.Id
+		if intent.Rationale == "" {
+			intent.Rationale = "re-proposed under the same name"
+		}
+		return s.refine(ctx, rec, intent)
+	}
+
+	if err := s.guardAgainstDuplicates(ctx, out, intent); err != nil {
+		return nil, err
+	}
+
 	out.State = lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED
 	if s.mode == SelfLearningAuto {
 		out.State = lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE
@@ -140,20 +215,174 @@ func (s *SelfTaughtStore) Propose(ctx context.Context, rec *lobslawv1.SelfTaught
 	now := timestamppb.Now()
 	out.CreatedAt, out.UpdatedAt = now, now
 	out.Version = 1
-
-	if existing, err := s.Get(out.Id); err == nil {
-		// A re-proposal is a new version of the same artefact, not a
-		// second one. Overwriting the version would make the history
-		// R18 builds on start again from 1 every time the agent
-		// changed its mind.
-		out.Version = existing.Version + 1
-		out.CreatedAt = existing.CreatedAt
+	out.Pending = nil
+	if err := s.embed(ctx, out); err != nil {
+		return nil, err
 	}
 
 	if err := s.put(ctx, out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// SimilarityError carries the candidates alongside the refusal, so a
+// caller told "this looks like something you already have" can act on
+// it without a second round trip.
+type SimilarityError struct {
+	Candidates []SimilarArtefact
+}
+
+func (e *SimilarityError) Error() string {
+	var b strings.Builder
+	b.WriteString(ErrSimilarExists.Error())
+	b.WriteString("; say Refines:<id> with a rationale, or Distinct:true. Closest:")
+	for i, c := range e.Candidates {
+		if i == 3 {
+			b.WriteString(" …")
+			break
+		}
+		fmt.Fprintf(&b, " %s (%.2f, %s)", c.Record.Id, c.Similarity, c.Why)
+	}
+	return b.String()
+}
+
+func (e *SimilarityError) Unwrap() error { return ErrSimilarExists }
+
+// guardAgainstDuplicates refuses a new artefact that looks like one
+// already stored, unless the proposer has declared it distinct.
+func (s *SelfTaughtStore) guardAgainstDuplicates(ctx context.Context, rec *lobslawv1.SelfTaughtRecord, intent ProposeIntent) error {
+	if intent.Distinct {
+		return nil
+	}
+	similar, err := s.Similar(ctx, rec, 5)
+	if err != nil {
+		return err
+	}
+	var close []SimilarArtefact
+	for _, c := range similar {
+		if c.Similarity >= SimilarityThreshold {
+			close = append(close, c)
+		}
+	}
+	if len(close) == 0 {
+		return nil
+	}
+	return &SimilarityError{Candidates: close}
+}
+
+// refine stages a change to an existing artefact.
+//
+// The active version is NOT touched. A skill used successfully for a
+// month must not stop loading because the agent had an idea about
+// improving it — so the refinement waits alongside it, and approving
+// swaps them in one write.
+//
+// In auto mode there is nothing to wait for, so it applies directly:
+// that is what the operator asked for by choosing auto.
+func (s *SelfTaughtStore) refine(ctx context.Context, rec *lobslawv1.SelfTaughtRecord, intent ProposeIntent) (*lobslawv1.SelfTaughtRecord, error) {
+	target, err := s.Get(intent.Refines)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(intent.Rationale) == "" {
+		return nil, errors.New(
+			"self-taught: a refinement needs a rationale; a diff with no reasoning is one nobody can approve")
+	}
+
+	updated := proto.Clone(target).(*lobslawv1.SelfTaughtRecord)
+	updated.UpdatedAt = timestamppb.Now()
+
+	if s.mode == SelfLearningAuto {
+		updated.Body = rec.Body
+		updated.Files = rec.Files
+		updated.Description = rec.Description
+		updated.Version = target.Version + 1
+		updated.Pending = nil
+		if err := s.embed(ctx, updated); err != nil {
+			return nil, err
+		}
+		if err := s.put(ctx, updated); err != nil {
+			return nil, err
+		}
+		return updated, nil
+	}
+
+	updated.Pending = &lobslawv1.PendingRevision{
+		Body:        rec.Body,
+		Files:       rec.Files,
+		Description: rec.Description,
+		TurnId:      rec.TurnId,
+		Rationale:   intent.Rationale,
+		ProposedAt:  timestamppb.Now(),
+	}
+	if err := s.put(ctx, updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// ApprovePending swaps a staged refinement into force.
+func (s *SelfTaughtStore) ApprovePending(ctx context.Context, id, by string) (*lobslawv1.SelfTaughtRecord, error) {
+	current, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Pending == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoPendingRevision, id)
+	}
+	updated := proto.Clone(current).(*lobslawv1.SelfTaughtRecord)
+	updated.Body = current.Pending.Body
+	updated.Files = current.Pending.Files
+	updated.Description = current.Pending.Description
+	updated.Version = current.Version + 1
+	updated.Pending = nil
+	updated.ApprovedBy = by
+	updated.ApprovedAt = timestamppb.Now()
+	updated.UpdatedAt = updated.ApprovedAt
+	// An artefact that was still awaiting its first approval becomes
+	// active on the strength of the refinement, since approving the
+	// improved version approves the artefact.
+	updated.State = lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE
+	if err := s.embed(ctx, updated); err != nil {
+		return nil, err
+	}
+	if err := s.put(ctx, updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// RejectPending discards a staged refinement, leaving the active
+// version exactly as it was.
+func (s *SelfTaughtStore) RejectPending(ctx context.Context, id string) (*lobslawv1.SelfTaughtRecord, error) {
+	current, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	if current.Pending == nil {
+		return nil, fmt.Errorf("%w: %s", ErrNoPendingRevision, id)
+	}
+	updated := proto.Clone(current).(*lobslawv1.SelfTaughtRecord)
+	updated.Pending = nil
+	updated.UpdatedAt = timestamppb.Now()
+	if err := s.put(ctx, updated); err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// embed computes the similarity vector, when an embedder is wired.
+func (s *SelfTaughtStore) embed(ctx context.Context, rec *lobslawv1.SelfTaughtRecord) error {
+	if s.embedder == nil {
+		return nil
+	}
+	vec, err := s.embedder.Embed(ctx, similarityText(rec))
+	if err != nil {
+		return fmt.Errorf("self-taught: embed %s: %w", rec.Id, err)
+	}
+	rec.Embedding = vec
+	return nil
 }
 
 // Approve moves a PROPOSED artefact to ACTIVE.

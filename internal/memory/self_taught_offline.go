@@ -96,6 +96,41 @@ func (o *OfflineSelfTaught) Restore(rec *lobslawv1.SelfTaughtRecord) error {
 	return o.store.Delete(BucketSelfTaughtArchive, rec.Id)
 }
 
+// ApprovePending swaps a staged refinement into force, offline.
+func (o *OfflineSelfTaught) ApprovePending(rec *lobslawv1.SelfTaughtRecord, by string) error {
+	if rec.Pending == nil {
+		return fmt.Errorf("%w: %s", ErrNoPendingRevision, rec.Id)
+	}
+	updated := proto.Clone(rec).(*lobslawv1.SelfTaughtRecord)
+	updated.Body = rec.Pending.Body
+	updated.Files = rec.Pending.Files
+	updated.Description = rec.Pending.Description
+	updated.Version = rec.Version + 1
+	updated.Pending = nil
+	updated.ApprovedBy = by
+	updated.ApprovedAt = timestamppb.Now()
+	updated.UpdatedAt = updated.ApprovedAt
+	updated.State = lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE
+	// The embedding described the superseded body, so it is cleared
+	// rather than left stale: a wrong vector is worse than none, since
+	// the next near-duplicate check would score against text that is
+	// no longer there.
+	updated.Embedding = nil
+	return o.write(BucketSelfTaught, updated)
+}
+
+// RejectPending discards a staged refinement, leaving the live version
+// exactly as it was.
+func (o *OfflineSelfTaught) RejectPending(rec *lobslawv1.SelfTaughtRecord) error {
+	if rec.Pending == nil {
+		return fmt.Errorf("%w: %s", ErrNoPendingRevision, rec.Id)
+	}
+	updated := proto.Clone(rec).(*lobslawv1.SelfTaughtRecord)
+	updated.Pending = nil
+	updated.UpdatedAt = timestamppb.Now()
+	return o.write(BucketSelfTaught, updated)
+}
+
 // Usage reads the aggregated counters.
 func (o *OfflineSelfTaught) Usage(id string) *lobslawv1.SelfTaughtUsage {
 	raw, err := o.store.Get(BucketSelfTaughtUsage, id)
