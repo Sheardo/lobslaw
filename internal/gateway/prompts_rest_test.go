@@ -52,7 +52,7 @@ func TestRESTPromptGetReturnsState(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
 
-	p, err := reg.Create("turn-99", "scary action", "rest", time.Minute)
+	p, err := reg.Create(NewPrompt{TurnID: "turn-99", Reason: "scary action", Channel: "rest", TTL: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestRESTPromptGetUnknownIs404(t *testing.T) {
 func TestRESTPromptResolveApprove(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 
 	resp, err := http.Post(url+"/v1/prompts/"+p.ID+"/resolve",
 		"application/json", strings.NewReader(`{"approve":true}`))
@@ -121,7 +121,7 @@ func TestRESTPromptResolveApprove(t *testing.T) {
 func TestRESTPromptResolveDeny(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 
 	resp, err := http.Post(url+"/v1/prompts/"+p.ID+"/resolve",
 		"application/json", strings.NewReader(`{"approve":false}`))
@@ -143,7 +143,7 @@ func TestRESTPromptResolveDeny(t *testing.T) {
 func TestRESTPromptResolveDoubleIs409(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 
 	// First resolve succeeds.
 	resp1, _ := http.Post(url+"/v1/prompts/"+p.ID+"/resolve",
@@ -179,7 +179,7 @@ func TestRESTPromptResolveUnknownIs404(t *testing.T) {
 func TestRESTPromptResolveRejectsBadJSON(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 	resp, err := http.Post(url+"/v1/prompts/"+p.ID+"/resolve",
 		"application/json", strings.NewReader("not json"))
 	if err != nil {
@@ -194,7 +194,7 @@ func TestRESTPromptResolveRejectsBadJSON(t *testing.T) {
 func TestRESTPromptGetWrongMethod(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 	// POST on the bare id endpoint should 405.
 	resp, err := http.Post(url+"/v1/prompts/"+p.ID, "application/json", nil)
 	if err != nil {
@@ -209,7 +209,7 @@ func TestRESTPromptGetWrongMethod(t *testing.T) {
 func TestRESTPromptResolveWrongMethod(t *testing.T) {
 	t.Parallel()
 	url, reg := startRESTWithPrompts(t, nil)
-	p, _ := reg.Create("t", "r", "rest", time.Minute)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: time.Minute})
 	resp, err := http.Get(url + "/v1/prompts/" + p.ID + "/resolve")
 	if err != nil {
 		t.Fatal(err)

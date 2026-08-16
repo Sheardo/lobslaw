@@ -145,7 +145,7 @@ func TestTelegramCallbackApproveResolves(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create("turn-x", "reason", "telegram", time.Minute)
+	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute})
 
 	update := `{
 		"update_id": 700,
@@ -194,7 +194,7 @@ func TestTelegramCallbackDenyResolves(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create("turn-x", "reason", "telegram", time.Minute)
+	p, _ := h.registry.Create(NewPrompt{TurnID: "turn-x", Reason: "reason", Channel: "telegram", TTL: time.Minute})
 
 	update := `{
 		"update_id": 701,
@@ -286,8 +286,8 @@ func TestTelegramCallbackDoubleResolveReportsGracefully(t *testing.T) {
 	t.Parallel()
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create("t", "r", "telegram", time.Minute)
-	_ = h.registry.Resolve(p.ID, PromptApproved)
+	p, _ := h.registry.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "telegram", TTL: time.Minute})
+	_ = h.registry.Resolve(p.ID, PromptApproved, PromptScopeOnce)
 
 	update := `{
 		"update_id": 704,
@@ -342,11 +342,16 @@ func TestTelegramResumePersistsApprovedHalfOfTurn(t *testing.T) {
 	}
 	h.handler.conv.Append(context.Background(), ref, "turn-42", stopped[1:])
 
-	h.handler.resumeAfterApproval(context.Background(), &telegramContinuation{
-		req:      compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
-		messages: stopped,
-		chatID:   555,
-		session:  ref,
+	h.handler.resumeAfterApproval(context.Background(), &Prompt{
+		ID:        "p-42",
+		TurnID:    "turn-42",
+		SessionID: ref.ChannelID,
+		Channel:   "telegram",
+		ChannelID: "555",
+		Continuation: &Continuation{
+			Request:  compute.ProcessMessageRequest{TurnID: "turn-42", Budget: budget},
+			Messages: stopped,
+		},
 	})
 
 	tr, lerr := store.LoadTranscript(context.Background(), ref, 0)

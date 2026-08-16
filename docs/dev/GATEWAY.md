@@ -4,7 +4,7 @@ The gateway is the user-facing edge. It turns inbound REST / Telegram traffic in
 
 Three packages cooperate:
 
-- `internal/gateway` — the REST server (`Server`), the Telegram webhook handler (`TelegramHandler`), and the in-memory confirmation `PromptRegistry` both channels share.
+- `internal/gateway` — the REST server (`Server`), the Telegram webhook handler (`TelegramHandler`), and the confirmation registry both channels share (`Prompts`, with an in-memory and a raft-backed implementation).
 - `pkg/auth` — JWT validation (`Validator`, `ExtractBearer`) used by the REST server to authenticate inbound requests.
 - `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive.
 
@@ -155,30 +155,51 @@ For personal-scale deployments (tens of updates/minute) the O(n) per-call reap i
 
 ## Confirmation prompt flow
 
-The `PromptRegistry` is an in-memory map keyed by an unguessable 32-hex ID. Each prompt has:
+Channels talk to the `Prompts` interface. Two implementations exist:
+
+| Implementation | Used when | Behaviour |
+|---|---|---|
+| `PromptRegistry` | the node hosts no raft | in-memory, per-process. A `time.AfterFunc` handles expiry. |
+| `RaftPrompts` | anywhere raft is present | the record lives in Raft. Resolution is a CAS from `PENDING`, so first-writer-wins is cluster-wide. |
+
+A conformance suite (`prompts_conformance_test.go`) runs both through the same contract, so swapping them does not change what a user sees.
+
+Each prompt has:
 
 - `ID` — random from `crypto/rand` (16 bytes → 32 hex chars).
 - `TurnID` — the original agent turn this blocks on; threaded through for audit correlation.
 - `Reason` — rendered to the user verbatim.
-- `Channel` — `"rest"` or `"telegram"`; audit-only, not used for routing.
+- `Channel` / `ChannelID` — where the resolution gets delivered. A node that did not ask the question needs `ChannelID` to reply to it.
+- `SessionID` — the conversation the resumed leg is appended to.
+- `Action` / `Resource` — the operation being confirmed, so a `session` or `always` answer records a grant that matches. Empty for a budget confirmation: spend is not an operation, and a button that silenced future budget warnings is the last thing an operator wants on that prompt.
 - `Decision` — transitions once from `Pending` to `Approved` / `Denied` / `TimedOut`. First writer wins.
-- `ExpiresAt` — after this, the registry's `time.AfterFunc` fires and flips Pending → TimedOut without any user interaction.
+- `Scope` — `once` / `session` / `always`. Meaningless until `Decision` leaves Pending, and forced to `once` on a denial: "no, and never again" is not something any button offers.
+- `Continuation` — the paused turn (see below).
+- `ExpiresAt` — after this the prompt times out. In-memory uses a timer; raft-backed closes it when a waiter notices, with a leader-pinned sweeper as the backstop for prompts nobody is waiting on.
 
 ### Registry semantics
 
 | Method | Contract |
 |---|---|
-| `Create(turnID, reason, channel, ttl)` | Register a new Pending prompt. Starts an `AfterFunc(ttl)` that auto-resolves to TimedOut if still Pending. Returns the `Prompt`. |
+| `Create(NewPrompt)` | Register a new Pending prompt, carrying whatever the answering node needs. Returns the `Prompt`. |
 | `Get(id)` | Snapshot of current state, or `ErrPromptNotFound`. Snapshot so external mutation can't corrupt the stored entry. |
-| `Resolve(id, Approved\|Denied)` | Atomic check-and-set under `r.mu`. Returns `ErrPromptNotFound`, `ErrPromptResolved` (already decided), or nil. Rejects `Pending` / `TimedOut` — those are internal transitions only. |
+| `Resolve(id, Approved\|Denied, scope)` | Atomic check-and-set — under `r.mu` in memory, a revision CAS in raft. Returns `ErrPromptNotFound`, `ErrPromptResolved` (already decided), or nil. Rejects `Pending` / `TimedOut` — those are internal transitions only. |
 | `Wait(ctx, id)` | Blocks until the `resolved` channel closes (Resolve or timeout) or ctx cancels. Returns the final Decision or ctx.Err(). |
 | `Reap()` | Sweeps non-Pending entries whose ExpiresAt is in the past. Pending entries are left to their timer; Reap never forces a transition. |
 
 The atomicity of Resolve matters: a split lock would let multiple concurrent callers each pass the Pending check and each return nil, even though only one actually mutated state. The `TestPromptRegistryConcurrentResolveOnlyOneWinner` test pins this behaviour — exactly one goroutine sees `nil`, everyone else sees `ErrPromptResolved`.
 
-### Not clustered
+### Approval scope
 
-The registry is in-memory per REST server / per Telegram handler. A clustered deployment that wants "start a prompt on node A, resolve it on node B" would back this with `memory.Store` keyed by TurnID. Out of scope for Phase 6 — MVP is single-node.
+| Scope | Effect |
+|---|---|
+| `once` | This turn only. |
+| `session` | A `SessionApprovals` grant, keyed by conversation, living only in the process — a restart ends the continuity the user was reasoning about. |
+| `always` | Mints a policy allow rule with `created_by = "approval:<prompt_id>"`. See [Policy Engine](/security/policy-engine) for the constraints on minting and `lobslaw policy approvals` / `revoke-approvals` for listing and undoing them. |
+
+Telegram renders one button per available scope; REST takes `{"approve": true, "scope": "session"}`. An unrecognised scope narrows to `once` — a typo must never widen a grant.
+
+No scope can reach past the [hardline floor](/security/hardline-floor).
 
 ---
 
@@ -268,11 +289,18 @@ A node with `FunctionGateway` but no `FunctionCompute` has no agent to dispatch 
 When an agent turn returns `NeedsConfirmation`, both channels now resume automatically on approval:
 
 - **REST:** `handleMessages` long-polls `PromptRegistry.Wait` in a loop. Approved → `agent.ResumeFromConfirmation` with a `Budget.Relax()`'d turn budget, then loop again if the resumed turn hits another confirmation. Denied / TimedOut → short "Confirmation denied/timed_out: <reason>" reply. Client sees exactly one response per `POST /v1/messages`, whether or not a confirmation was involved.
-- **Telegram:** `handleMessage` sends the inline keyboard as before AND stashes the in-flight `TurnBudget` + conversation slice in a per-handler `continuations` map keyed by prompt ID. `handleCallbackQuery` on Approve drains that entry, relaxes the budget, calls `agent.ResumeFromConfirmation`, and `sendMessage`s the final reply. Deny drops the continuation. Approval AFTER a process restart (state lost) tells the user to resend.
+- **Telegram:** `handleMessage` sends the inline keyboard and stores the paused turn as the prompt's `Continuation`. `handleCallbackQuery` on Approve reads it back, relaxes the budget, calls `agent.ResumeFromConfirmation`, and `sendMessage`s the final reply. Because the continuation is on the record rather than in a handler's map, the tap can land on a node that never sent the keyboard, and an approval after a restart resumes the turn instead of telling the user to resend.
 
 Caps are lifted for the remainder of the turn via `TurnBudget.Relax()` — semantically, the user's Approve means "I authorize this turn to continue however it needs to." Counters are preserved so audit records the full trail.
 
-The continuation is per-handler and in-memory; a clustered deployment with node-A-sends-keyboard / node-B-receives-tap scenarios needs a shared store, which isn't shipped yet.
+### What the continuation carries
+
+Conversation state: the transcript so far, the user's message, claims, system prompt, model, timezone, summary, recall, and the budget already spent.
+
+Two deliberate omissions:
+
+- **Tools.** Node state, rebuilt from the resuming node's own registry. A serialised tool definition would outlive the redeploy that changed it.
+- **Budget caps.** Read from the resuming node's current config, so an operator lowering a limit is not overridden by a turn that started before the change. Only the *counters* are restored, and only ever forward — otherwise a confirmation would be a way to reset the allowance.
 
 ## Conversation history
 
@@ -317,6 +345,6 @@ Callouts deferred past Phase 6h:
 
 - **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.
 - **ACME / Let's Encrypt.** TLS certs are passed explicitly; automatic issuance isn't wired.
-- **Clustered confirmations.** PromptRegistry + Telegram continuations are per-process; cluster-wide state for multi-node deployments would need a shared backend (future: memory.Store keyed by TurnID).
+- **REST cross-node resume.** REST holds the connection open and resumes in the request that raised the prompt, so it stores no continuation. A REST turn approved elsewhere still records the decision, but the original request has to be re-sent.
 
 See [PLAN.md Phase 6](../../PLAN.md#phase-6-channels-rest--telegram--shipped) for the shipped-scope summary.

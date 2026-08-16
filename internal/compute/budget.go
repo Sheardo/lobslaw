@@ -195,6 +195,30 @@ func (b *TurnBudget) Records() []CostRecord {
 // "unlimited on that dimension".
 func (b *TurnBudget) Caps() BudgetCaps { return b.caps }
 
+// Restore replays already-spent budget onto a fresh TurnBudget, for a
+// turn resuming after a confirmation — possibly on a different node
+// and after a restart, so there is no live budget to carry over.
+//
+// Counters only move FORWARD. Without that, a confirmation would be a
+// way to reset the allowance: pause a turn near its cap, resume it
+// with a smaller restored figure, and spend the difference again. The
+// caps themselves are deliberately not restored — they come from the
+// resuming node's current config, so an operator lowering a limit is
+// not overridden by a turn that started before the change.
+func (b *TurnBudget) Restore(state BudgetState) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if state.ToolCalls > b.toolCalls {
+		b.toolCalls = state.ToolCalls
+	}
+	if state.SpendUSD > b.spendUSD {
+		b.spendUSD = state.SpendUSD
+	}
+	if state.EgressBytes > b.egressBytes {
+		b.egressBytes = state.EgressBytes
+	}
+}
+
 // Relax lifts every cap for the rest of this turn — all three
 // dimensions go to "unlimited". Used by channel handlers after a
 // user explicitly approves continuing past a budget-triggered

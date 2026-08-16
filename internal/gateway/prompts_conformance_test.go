@@ -11,6 +11,7 @@ import (
 
 	"github.com/hashicorp/raft"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 )
@@ -53,7 +54,7 @@ func newRaftPrompts(t *testing.T) *RaftPrompts {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRaftPrompts(ps, "conformance-node")
+	return NewRaftPrompts(ps, "conformance-node", compute.BudgetCaps{})
 }
 
 func eachPromptImpl(t *testing.T, fn func(t *testing.T, r Prompts)) {
@@ -72,7 +73,7 @@ func eachPromptImpl(t *testing.T, fn func(t *testing.T, r Prompts)) {
 func TestPromptsCreateRoundTrips(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("turn-1", "dangerous thing", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "turn-1", Reason: "dangerous thing", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,11 +104,11 @@ func TestPromptsResolveRecordsTheDecision(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
 		for _, want := range []PromptDecision{PromptApproved, PromptDenied} {
-			p, err := r.Create("t", "r", "rest", longTTL)
+			p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := r.Resolve(p.ID, want); err != nil {
+			if err := r.Resolve(p.ID, want, PromptScopeOnce); err != nil {
 				t.Fatal(err)
 			}
 			got, err := r.Get(p.ID)
@@ -126,14 +127,14 @@ func TestPromptsResolveRecordsTheDecision(t *testing.T) {
 func TestPromptsFirstWriterWins(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Resolve(p.ID, PromptApproved); err != nil {
+		if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Resolve(p.ID, PromptDenied); !errors.Is(err, ErrPromptResolved) {
+		if err := r.Resolve(p.ID, PromptDenied, PromptScopeOnce); !errors.Is(err, ErrPromptResolved) {
 			t.Errorf("second Resolve returned %v, want ErrPromptResolved", err)
 		}
 		got, _ := r.Get(p.ID)
@@ -146,7 +147,7 @@ func TestPromptsFirstWriterWins(t *testing.T) {
 func TestPromptsConcurrentResolveHasOneWinner(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +165,7 @@ func TestPromptsConcurrentResolveHasOneWinner(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				switch err := r.Resolve(p.ID, d); {
+				switch err := r.Resolve(p.ID, d, PromptScopeOnce); {
 				case err == nil:
 					wins.Add(1)
 				case errors.Is(err, ErrPromptResolved):
@@ -189,12 +190,12 @@ func TestPromptsConcurrentResolveHasOneWinner(t *testing.T) {
 func TestPromptsRejectNonUserDecisions(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, bad := range []PromptDecision{PromptPending, PromptTimedOut} {
-			if err := r.Resolve(p.ID, bad); err == nil {
+			if err := r.Resolve(p.ID, bad, PromptScopeOnce); err == nil {
 				t.Errorf("Resolve accepted %s", bad)
 			}
 		}
@@ -207,7 +208,7 @@ func TestPromptsUnknownIDIsNotFound(t *testing.T) {
 		if _, err := r.Get("nonexistent"); !errors.Is(err, ErrPromptNotFound) {
 			t.Errorf("Get returned %v, want ErrPromptNotFound", err)
 		}
-		if err := r.Resolve("nonexistent", PromptApproved); !errors.Is(err, ErrPromptNotFound) {
+		if err := r.Resolve("nonexistent", PromptApproved, PromptScopeOnce); !errors.Is(err, ErrPromptNotFound) {
 			t.Errorf("Resolve returned %v, want ErrPromptNotFound", err)
 		}
 		if _, err := r.Wait(context.Background(), "nonexistent"); !errors.Is(err, ErrPromptNotFound) {
@@ -219,13 +220,13 @@ func TestPromptsUnknownIDIsNotFound(t *testing.T) {
 func TestPromptsWaitUnblocksOnResolve(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
 		go func() {
 			time.Sleep(20 * time.Millisecond)
-			_ = r.Resolve(p.ID, PromptApproved)
+			_ = r.Resolve(p.ID, PromptApproved, PromptScopeOnce)
 		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -243,11 +244,11 @@ func TestPromptsWaitUnblocksOnResolve(t *testing.T) {
 func TestPromptsWaitReturnsImmediatelyWhenResolved(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Resolve(p.ID, PromptDenied); err != nil {
+		if err := r.Resolve(p.ID, PromptDenied, PromptScopeOnce); err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -267,7 +268,7 @@ func TestPromptsWaitReturnsImmediatelyWhenResolved(t *testing.T) {
 func TestPromptsWaitHonoursCancellation(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -290,7 +291,7 @@ func TestPromptsWaitHonoursCancellation(t *testing.T) {
 func TestPromptsExpireWithoutAnAnswer(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", 50*time.Millisecond)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: 50 * time.Millisecond})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -310,11 +311,11 @@ func TestPromptsExpireWithoutAnAnswer(t *testing.T) {
 func TestPromptsExpiryDoesNotOverwriteAnAnswer(t *testing.T) {
 	t.Parallel()
 	eachPromptImpl(t, func(t *testing.T, r Prompts) {
-		p, err := r.Create("t", "r", "rest", 20*time.Millisecond)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: 20 * time.Millisecond})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := r.Resolve(p.ID, PromptApproved); err != nil {
+		if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(60 * time.Millisecond)

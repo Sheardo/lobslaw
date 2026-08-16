@@ -18,11 +18,11 @@ func TestRESTPromptDeniedReplyText(t *testing.T) {
 	t.Parallel()
 
 	reg := NewPromptRegistry()
-	p, _ := reg.Create("t", "reason", "rest", time.Second)
+	p, _ := reg.Create(NewPrompt{TurnID: "t", Reason: "reason", Channel: "rest", TTL: time.Second})
 
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		_ = reg.Resolve(p.ID, PromptDenied)
+		_ = reg.Resolve(p.ID, PromptDenied, PromptScopeOnce)
 	}()
 
 	d, err := reg.Wait(t.Context(), p.ID)
@@ -53,22 +53,10 @@ func TestTelegramCallbackApproveResumesAgent(t *testing.T) {
 	}
 	h := newTGPromptHarness(t, agent, TelegramConfig{UnknownUserScope: "public"})
 
-	p, _ := h.registry.Create("turn-1", "reason", "telegram", time.Minute)
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
-	h.handler.continuationsMu.Lock()
-	h.handler.continuations[p.ID] = &telegramContinuation{
-		req: compute.ProcessMessageRequest{
-			TurnID: "turn-1",
-			Budget: budget,
-		},
-		messages: []compute.Message{
-			{Role: "user", Content: "original"},
-			{Role: "assistant", Content: "(paused)"},
-		},
-		chatID: 42,
-		reason: "reason",
-	}
-	h.handler.continuationsMu.Unlock()
+	p := pausedPrompt(t, h, "turn-1", []compute.Message{
+		{Role: "user", Content: "original"},
+		{Role: "assistant", Content: "(paused)"},
+	})
 
 	update := `{
 		"update_id": 800,
@@ -108,30 +96,30 @@ func TestTelegramCallbackApproveResumesAgent(t *testing.T) {
 		t.Error("missing the resumed-agent reply")
 	}
 
-	h.handler.continuationsMu.Lock()
-	_, stillThere := h.handler.continuations[p.ID]
-	h.handler.continuationsMu.Unlock()
-	if stillThere {
-		t.Error("continuation should be removed after approval")
+	// A second tap on the same button must not run the turn again.
+	// The record is resolved rather than deleted, so "already spent"
+	// is a decision check now, not an absent map entry.
+	before := len(h.capturedCalls())
+	_ = postUpdate(t, h.handler, "test-webhook-secret", update)
+	time.Sleep(50 * time.Millisecond)
+	for _, c := range h.capturedCalls()[before:] {
+		if c.Method != "sendMessage" {
+			continue
+		}
+		if txt, _ := c.Body["text"].(string); txt == "resumed reply" {
+			t.Error("a second tap resumed the turn again")
+		}
 	}
 }
 
-// TestTelegramCallbackDenyDropsContinuation — deny must NOT resume,
-// and must drain the stored continuation so a long-running bot
-// doesn't accumulate orphaned turn state.
-func TestTelegramCallbackDenyDropsContinuation(t *testing.T) {
+// TestTelegramCallbackDenyDoesNotResume — deny records the refusal
+// and stops. A denied turn that ran anyway would make the button a
+// decoration.
+func TestTelegramCallbackDenyDoesNotResume(t *testing.T) {
 	t.Parallel()
 
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
-	p, _ := h.registry.Create("turn-1", "reason", "telegram", time.Minute)
-	budget, _ := compute.NewTurnBudget(compute.BudgetCaps{})
-	h.handler.continuationsMu.Lock()
-	h.handler.continuations[p.ID] = &telegramContinuation{
-		req:      compute.ProcessMessageRequest{TurnID: "turn-1", Budget: budget},
-		messages: []compute.Message{{Role: "user", Content: "x"}},
-		chatID:   42,
-	}
-	h.handler.continuationsMu.Unlock()
+	p := pausedPrompt(t, h, "turn-1", []compute.Message{{Role: "user", Content: "x"}})
 
 	update := `{
 		"update_id": 801,
@@ -144,11 +132,8 @@ func TestTelegramCallbackDenyDropsContinuation(t *testing.T) {
 	}`
 	_ = postUpdate(t, h.handler, "test-webhook-secret", update)
 
-	h.handler.continuationsMu.Lock()
-	_, stillThere := h.handler.continuations[p.ID]
-	h.handler.continuationsMu.Unlock()
-	if stillThere {
-		t.Error("deny should drop the continuation")
+	if snap, err := h.registry.Get(p.ID); err != nil || snap.Decision != PromptDenied {
+		t.Errorf("prompt is %v (err %v), want denied", snap, err)
 	}
 
 	var denyCount, otherCount int
@@ -178,7 +163,14 @@ func TestTelegramCallbackApproveWithoutContinuation(t *testing.T) {
 	t.Parallel()
 
 	h := newTGPromptHarness(t, newAgentFor(t), TelegramConfig{UnknownUserScope: "public"})
-	p, _ := h.registry.Create("t", "r", "telegram", time.Minute)
+	// Deliberately no continuation: a prompt raised without one, or
+	// whose record predates this field.
+	p, err := h.registry.Create(NewPrompt{
+		TurnID: "t", Reason: "r", Channel: "telegram", TTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	update := `{
 		"update_id": 802,
@@ -204,4 +196,29 @@ func TestTelegramCallbackApproveWithoutContinuation(t *testing.T) {
 	if !sawLostTrack {
 		t.Error(`expected a "lost track" fallback reply`)
 	}
+}
+
+// pausedPrompt registers a confirmation carrying a paused turn, the
+// way sendConfirmationKeyboard does.
+func pausedPrompt(t *testing.T, h *tgPromptHarness, turnID string, msgs []compute.Message) *Prompt {
+	t.Helper()
+	budget, err := compute.NewTurnBudget(compute.BudgetCaps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := h.registry.Create(NewPrompt{
+		TurnID:    turnID,
+		Reason:    "reason",
+		Channel:   "telegram",
+		ChannelID: "42",
+		TTL:       time.Minute,
+		Continuation: &Continuation{
+			Request:  compute.ProcessMessageRequest{TurnID: turnID, Budget: budget},
+			Messages: msgs,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

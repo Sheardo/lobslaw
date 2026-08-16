@@ -1024,7 +1024,21 @@ message Continuation {
   int32 tool_calls = 3;
   int32 llm_calls = 4;
   bool relaxed = 5;
+  // system_prompt is carried rather than rebuilt: the resuming node
+  // may have a different SOUL, and the turn should finish as the one
+  // that started it, not as a different assistant.
   string system_prompt = 6;
+  // The rest of what ProcessMessageRequest needs to be rebuilt.
+  // Tools are deliberately absent — they are node state, rebuilt from
+  // the resuming node's own registry. Carrying them would let a
+  // stale definition outlive a redeploy.
+  string user_message = 7;
+  Claims claims = 8;
+  string user_timezone = 9;
+  string model = 10;
+  string conversation_summary = 11;
+  string recalled_context = 12;
+  int64 egress_bytes = 13;
 }
 
 // PromptRecord is one pending confirmation, in Raft rather than in a
