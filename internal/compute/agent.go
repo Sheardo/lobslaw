@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -1263,17 +1264,22 @@ func endsWithNewline(b []byte) bool {
 // output as untrusted data, not instructions.
 func toolResultMessage(tc ToolCall, inv ToolInvocation) Message {
 	var content string
+	// Redacted on the way in. A failing command routinely echoes the
+	// argument that failed, and that argument is sometimes the key —
+	// which would then sit in the transcript, get replayed every turn,
+	// and be summarised into memory. Replacing the secret keeps the
+	// error readable, which truncating the message would not.
 	if inv.Error != "" {
 		content = promptgen.WrapContext([]promptgen.ContextBlock{{
 			Source:  "tool:" + tc.Name + ":error",
 			Trust:   promptgen.TrustUntrusted,
-			Content: inv.Error,
+			Content: promptguard.Redact(inv.Error),
 		}})
 	} else {
 		content = promptgen.WrapContext([]promptgen.ContextBlock{{
 			Source:  "tool:" + tc.Name + ":output",
 			Trust:   promptgen.TrustUntrusted,
-			Content: inv.Output,
+			Content: promptguard.Redact(inv.Output),
 		}})
 	}
 	return Message{
