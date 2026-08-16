@@ -113,6 +113,9 @@ func writeFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, e
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be written",
 			"pick a path inside a writable storage mount")
 	}
+	if payload, exit, refused := hardlinePathRefusal(path, "written"); refused {
+		return payload, exit, nil
+	}
 	content := args["content"]
 	if len(content) > writeFileMaxBytes {
 		return marshalToolError("content_too_large",
@@ -165,6 +168,9 @@ func editFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 	}
 	if isInternalPath(path) {
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be edited", "")
+	}
+	if payload, exit, refused := hardlinePathRefusal(path, "edited"); refused {
+		return payload, exit, nil
 	}
 	oldStr := args["old_string"]
 	newStr := args["new_string"]

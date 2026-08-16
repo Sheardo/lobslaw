@@ -163,11 +163,25 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 		return nil, fmt.Errorf("tool %q is sidecar-only; direct invocation not yet supported", tool.Name)
 	}
 
+	// The floor is evaluated BEFORE policy, deliberately. Policy is
+	// operator-configurable all the way down to "allow everything",
+	// so a check that ran after it could be configured away — and a
+	// floor with an override flag is not a floor.
+	if err := hardlineCheck(req.Params); err != nil {
+		return nil, err
+	}
+
 	// Policy + PreToolUse hook fire the same way for both builtin
 	// and subprocess tools — the dispatch target differs, but the
 	// authorization and hook surface stays uniform so rtk-style
 	// hooks see every invocation.
 	if err := e.policyAllow(ctx, req.Claims, "tool:exec", tool.Name); err != nil {
+		return nil, err
+	}
+	// A sensitive-but-not-secret path escalates a policy allow to a
+	// confirmation. After policyAllow, so a path the operator's rules
+	// already deny is refused rather than prompted about.
+	if err := hardlineConfirm(req.Params); err != nil {
 		return nil, err
 	}
 	if e.hooks != nil {

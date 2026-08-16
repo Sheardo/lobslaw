@@ -114,6 +114,9 @@ func readFileBuiltin(_ context.Context, args map[string]string) ([]byte, int, er
 		return marshalToolError("internal_path", path+" is cluster-internal and cannot be read",
 			"this file holds private state (Raft snapshot, TLS key, etc.). Try a different path; workspace mounts are the typical target")
 	}
+	if payload, exit, refused := hardlinePathRefusal(path, "read"); refused {
+		return payload, exit, nil
+	}
 	offset := 0
 	if raw, ok := args["offset"]; ok && raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {

@@ -398,11 +398,13 @@ test rather than trusting call ordering.
 
 ### Acceptance
 
-- [ ] Approve on node B a prompt issued by node A.
+- [x] Approve on node B a prompt issued by node A.
 - [ ] Approve after a full process restart; the turn resumes rather than asking the user to resend.
-- [ ] Concurrent resolves cluster-wide: exactly one winner, everyone else `ErrPromptResolved`.
+      (The record and its continuation survive; nothing populates the continuation yet.)
+- [x] Concurrent resolves cluster-wide: exactly one winner, everyone else `ErrPromptResolved`.
 - [ ] `always` produces a visible, revocable policy rule.
-- [ ] `always` cannot escalate past the hardline floor.
+- [x] `always` cannot escalate past the hardline floor — the floor is evaluated before policy, so
+      no allow rule can reach past it (`TestSessionGrantCannotReachTheFloor`).
 
 ---
 
@@ -1371,10 +1373,10 @@ seccomp sandbox is the real boundary. Claiming otherwise would be worse than not
 
 ### Acceptance
 
-- [ ] Every hardline pattern is refused with every policy rule set to allow and confirmations off.
-- [ ] A test asserts no config path disables the floor.
-- [ ] `~/.ssh/id_*` reads are refused; `~/.ssh/config` prompts.
-- [ ] Docs state plainly what the denylist does and does not protect against.
+- [x] Every hardline pattern is refused with every policy rule set to allow and confirmations off.
+- [x] A test asserts no config path disables the floor.
+- [x] `~/.ssh/id_*` reads are refused; `~/.ssh/config` prompts.
+- [x] Docs state plainly what the denylist does and does not protect against.
 
 ---
 

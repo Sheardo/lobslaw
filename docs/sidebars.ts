@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
       items: [
         "security/threat-model",
         "security/policy-engine",
+        "security/hardline-floor",
         "security/sandbox",
         "security/egress-and-acl",
         "security/mtls",

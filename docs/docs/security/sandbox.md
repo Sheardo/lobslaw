@@ -1,5 +1,5 @@
 ---
-sidebar_position: 4
+sidebar_position: 5
 ---
 
 # Sandbox
@@ -47,13 +47,17 @@ Out of scope: kernel exploits, hardware side-channels, the agent itself being co
 
 The sandbox controls what a tool **can do once it's running**. It does not judge whether the tool should have been invoked, or whether the arguments make sense for the user's actual intent.
 
-Prompt-injection defence lives in three other places:
+Prompt-injection defence lives in four other places:
 
 | Mechanism | File | Purpose |
 |---|---|---|
+| [Hardline floor](/security/hardline-floor) | `internal/policy/hardline.go` | Compiled-in refusals no configuration disables |
 | Policy engine | `internal/policy/engine.go` | `tool:exec` rules — deny or `require_confirmation` |
 | PreToolUse hooks | `internal/hooks/dispatcher.go` | Arbitrary code blocking based on turn intent |
 | Registry constraints | `internal/compute/registry.go` | `allowed_paths`, argv templates, param shapes |
+
+The floor is not a boundary — a shell reaches those paths by other means, which is what the
+sandbox is for. It means a misconfigured policy cannot reach `rm -rf /`.
 
 For tools with broad capabilities (anything that writes, executes, or sends data off the host), `require_confirmation` is the correct defence — not tighter sandboxing.
 
