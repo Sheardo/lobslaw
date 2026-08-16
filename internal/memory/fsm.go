@@ -524,6 +524,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSessionLeases, p.SessionLease, nil
 	case *lobslawv1.LogEntry_Prompt:
 		return BucketPrompts, p.Prompt, nil
+	case *lobslawv1.LogEntry_Consolidation:
+		return BucketConsolidations, p.Consolidation, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

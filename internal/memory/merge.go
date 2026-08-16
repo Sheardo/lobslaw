@@ -67,28 +67,53 @@ func (d *DreamRunner) mergePhase(ctx context.Context) (MergeResult, error) {
 			"avg_similarity", c.AvgSimilarity,
 		)
 
+		// Every verdict is recorded, including the ones that change
+		// nothing. "Why did it NOT merge these" gets asked as often as
+		// the opposite, and a log of changes alone cannot answer it.
+		entry := consolidationFor(c, decision)
+
 		switch decision.Verdict {
 		case MergeVerdictMerge:
 			if err := d.applyMerge(c, decision); err != nil {
 				d.logger.Warn("merge: apply failed", "cluster", c.Id, "err", err)
+				// Recorded as attempted-and-failed rather than skipped.
+				// A merge that was chosen and then errored is exactly
+				// when a user notices something is off and needs the
+				// log to say so.
+				entry.Applied, entry.Error = false, err.Error()
+				d.recordConsolidation(entry)
 				continue
 			}
+			entry.ResultId = "merged-" + c.Id
 			result.Merged++
 		case MergeVerdictConflict:
 			if err := d.tagCluster(c, "conflict-cluster", c.Id); err != nil {
 				d.logger.Warn("merge: tag failed", "cluster", c.Id, "err", err)
+				entry.Applied, entry.Error = false, err.Error()
+				d.recordConsolidation(entry)
 				continue
 			}
+			entry.ResultId = "conflict-cluster"
 			result.Conflicts++
 		case MergeVerdictSupersedes:
 			if err := d.tagCluster(c, "supersedes-chain", c.Id); err != nil {
 				d.logger.Warn("merge: tag failed", "cluster", c.Id, "err", err)
+				entry.Applied, entry.Error = false, err.Error()
+				d.recordConsolidation(entry)
 				continue
 			}
+			entry.ResultId = "supersedes-chain"
 			result.Supersedes++
 		case MergeVerdictKeepDistinct:
 			// by design — no action taken, no data lost.
 		}
+		d.recordConsolidation(entry)
+	}
+
+	if pruned, err := d.pruneConsolidations(); err != nil {
+		d.logger.Warn("consolidation log: prune failed", "err", err)
+	} else if pruned > 0 {
+		d.logger.Debug("consolidation log: pruned", "count", pruned)
 	}
 	return result, nil
 }
