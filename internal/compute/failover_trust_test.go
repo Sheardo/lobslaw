@@ -86,7 +86,7 @@ func TestAQualifyingBackupStillRescuesTheTurn(t *testing.T) {
 // must behave exactly as it did.
 func TestWithNoFloorTheChainIsUnchanged(t *testing.T) {
 	t.Parallel()
-	a, calls := tieredAgent(t, "",
+	a, calls := tieredAgent(t, types.TrustUnset,
 		types.TrustPublic, types.TrustPublic, Transient(errors.New("429")))
 
 	if _, err := a.dispatchWithBackup(context.Background(), ChatRequest{}); err != nil {

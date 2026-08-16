@@ -87,7 +87,7 @@ func newListProvidersHandler(reg *ProviderRegistry) BuiltinFunc {
 		for _, e := range entries {
 			out = append(out, view{
 				Label:        e.Label,
-				TrustTier:    string(e.TrustTier),
+				TrustTier:    e.TrustTier.String(),
 				Capabilities: e.Capabilities,
 				Backup:       e.Backup,
 			})

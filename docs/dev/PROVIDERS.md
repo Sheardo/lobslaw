@@ -778,83 +778,113 @@ with four existing implementations, it will survive the fifth.
 
 ## The trust floor
 
-`min_trust_tier` in SOUL.md declares the weakest provider that may see
-this deployment's content:
+`trust_tier` declares how exposed your content is when a given
+provider handles it. **Higher is more trusted.**
 
-```yaml
-config:
-  min_trust_tier: private
+```toml
+[[compute.providers]]
+label = "ollama"
+trust_tier = "local"      # 100
+
+[[compute.providers]]
+label = "anthropic"
+trust_tier = "private"    # 50
+
+[[compute.providers]]
+label = "my-vps"
+trust_tier = 60           # between private and local
+
+[[compute.providers]]
+label = "openrouter"
+trust_tier = "public"     # 1
 ```
 
-| Tier | Meaning |
-|---|---|
-| `local` | inference on hardware you control; content never leaves the host |
-| `private` | a third party under a contract excluding training on submitted data |
-| `public` | anything else |
+```yaml
+# SOUL.md
+config:
+  min_trust_tier: private   # or 50
+```
 
-### It was enforced nowhere
+`min_trust_tier` admits every provider at or above it.
 
-Worth recording plainly, because the shape of the bug is instructive.
-The setting was parsed, validated, logged at boot, and rendered into
-the system prompt. The only code that *checked* it was
-`Resolver.buildDecision` — and nothing calls `Resolver.Resolve`. The
-path that serves every turn is the provider **backup chain**, which
-walked from label to label with no notion of a tier at all.
-`soul.ValidateProviderTier` had no callers either.
+### Why a number
 
-So: set `min_trust_tier = "private"`, see it in the prompt, and the
-first time the primary provider returns a 429 the turn completes on a
-public backup. **The failover machinery that makes the assistant
-resilient was the same machinery that lowered the floor** — and it did
-it precisely when something had gone wrong, which is when nobody is
-reading logs.
+Three named tiers was never the real shape. A model on a VPS you rent
+is not `local` — the hardware is somebody else's — and it is plainly
+better than a public API with no contract. Under a closed enum that
+provider has to be filed under a tier that misdescribes it, and the
+floor then admits or excludes it for the wrong reason.
 
-A floor checked at the first candidate and nowhere after is not a
-floor. It is a floor with a hole in it exactly where the interesting
-case lives.
+| Name | Value | Meaning |
+|---|---|---|
+| `local` | 100 | inference on hardware you control; content never leaves the host |
+| `private` | 50 | a third party under a contract excluding training on submitted data |
+| `public` | 1 | anything else |
+| — | 0 | **reserved: unset.** Never write it |
 
-### Where it is enforced now
+Config may write either form. The three names are **reserved points on
+the scale** — they carry something a bare number cannot (`local` is a
+categorical claim about where the hardware is, not a position on a
+continuum), and they can be added to but never renumbered: a
+deployment that pinned a provider at `private` and a floor at `50` has
+to keep meaning the same thing.
+
+An unrecognised **name** is an error, not a new tier. Operator-defined
+tier names would turn a typo into a silent extra tier, which is the one
+failure mode this scale must not have.
+
+### Zero is reserved
+
+`public` is 1 rather than 0, and that is the one place the scale
+departs from round numbers.
+
+An omitted field decodes to Go's zero. If the zero value were a real
+tier, every provider that forgot to declare one would silently acquire
+it — the bug `SkillTier` hit when `TierAgent` was the zero value and
+every struct-literal skill was quietly demoted. Here the cost would be
+worse: an undeclared provider would compare as a *genuine tier* against
+a floor.
+
+So `0` means **nobody said**, and it fails any floor that is set. An
+explicit `trust_tier = 0` is indistinguishable from omitting the field
+and is treated identically — the two mean the same thing
+operationally.
+
+`min_trust_tier` unset likewise means no floor at all, not "public".
+
+### Where it is enforced
 
 - **The chat backup chain**, at every candidate, on every turn.
 - **Every modality failover chain** — vision, audio, PDF, speak, image.
   A modality provider is not a lesser recipient: a vision provider is
   handed the user's image, and a speak provider the text of the reply.
-- **At boot**, so an operator finds out before a turn fails rather than
-  when one does.
+- **At boot**, in `wireLLMProviders`, fatally for any provider below
+  the floor.
+
+The runtime and boot checks are not redundant, and the reason is
+narrow: **the soul is tunable at runtime.** An operator who raises
+`min_trust_tier` after the node started has already passed the boot
+check, and before the runtime check existed their change took effect in
+the system prompt and nowhere else — the providers already in the
+registry carried on serving turns at the tier they were admitted at.
 
 The single-provider modality case used to skip the failover wrapper
-entirely on the grounds that one provider deserves no chain machinery.
-That is exactly the config where an unchecked provider is the *only*
-thing that runs, so the wrapper now always applies — only the error
-message varies, because "all 1 providers in the chain failed" reads as
-an outage across a chain that does not exist.
+entirely, on the grounds that one provider deserves no chain
+machinery. That is exactly the config where an unchecked provider is
+the *only* thing that runs, so the wrapper now always applies — only
+the error message varies, because "all 1 providers in the chain failed"
+reads as an outage across a chain that does not exist.
 
-### Boot behaviour is deliberately asymmetric
+### Range checking has two homes
 
-| Situation | Behaviour |
-|---|---|
-| primary below the floor | **refuse to start** |
-| a backup below the floor | warn, naming it; skipped at dispatch |
-| `min_trust_tier` is a typo | **refuse to start** |
-
-A backup below the floor is a config that *degrades* — the chain
-terminates earlier than expected and the reason is logged. A primary
-below the floor is a config where no turn can ever run, and booting
-into that wastes the one moment somebody was in a position to fix it.
-
-A typo is refused rather than ignored: the operator asked for a
-restriction and wrote a string nothing recognises, and treating that as
-"no floor" would grant the exact opposite of what they intended. For
-the same reason, a provider with **no** declared `trust_tier` fails any
-set floor — an undeclared tier is not evidence of a high one.
-
-An unset floor permits everything. An operator who has not opted in has
-not asked for a restriction, and inventing one would break every
-existing deployment on upgrade.
+A **named** or **quoted** value goes through the type's
+`UnmarshalText` and is checked there. A **bare TOML integer** does not
+— mapstructure converts int to int directly — so `config.Validate`
+range-checks it separately. Both paths refuse anything outside 1–100.
 
 ### What it is not
 
 The floor governs where content goes among *configured providers*. It
-says nothing about what a provider does with it after receiving it,
-and it cannot: `trust_tier` is an operator's assertion about a
-contract, not something lobslaw can verify.
+says nothing about what a provider does with it after receiving it, and
+it cannot: `trust_tier` is your assertion about a contract, not
+something lobslaw can verify.

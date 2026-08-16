@@ -151,7 +151,7 @@ func NewResolver(cfg *config.ComputeConfig) (*Resolver, error) {
 				problems = append(problems, fmt.Sprintf("chain %q step %d references unknown provider %q", ch.Label, i, step.Provider))
 			}
 		}
-		if ch.MinTrustTier != "" && !ch.MinTrustTier.IsValid() {
+		if ch.MinTrustTier != types.TrustUnset && !ch.MinTrustTier.IsValid() {
 			problems = append(problems, fmt.Sprintf("chain %q has invalid min_trust_tier %q", ch.Label, ch.MinTrustTier))
 		}
 	}

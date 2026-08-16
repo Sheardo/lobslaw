@@ -51,8 +51,8 @@ func TestNewResolverReportsAllProblems(t *testing.T) {
 		Providers: []config.ProviderConfig{
 			{Label: "", TrustTier: types.TrustPublic}, // empty label
 			providerAt("dup", types.TrustPublic),
-			providerAt("dup", types.TrustPublic),  // duplicate
-			{Label: "bad-tier", TrustTier: "wtf"}, // bad tier
+			providerAt("dup", types.TrustPublic),                 // duplicate
+			{Label: "bad-tier", TrustTier: types.TrustTier(999)}, // bad tier
 		},
 		Chains: []config.ChainConfig{
 			{Label: "", Steps: []config.ChainStepConfig{{Provider: "dup"}}}, // empty chain label

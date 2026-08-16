@@ -56,17 +56,17 @@ func TestTrustTierAtLeast(t *testing.T) {
 func TestTrustTierIsValid(t *testing.T) {
 	t.Parallel()
 	cases := map[TrustTier]bool{
-		TrustLocal:        true,
-		TrustPrivate:      true,
-		TrustPublic:       true,
-		TrustTier(""):     false,
-		TrustTier("weak"): false,
+		TrustLocal:     true,
+		TrustPrivate:   true,
+		TrustPublic:    true,
+		TrustUnset:     false,
+		TrustTier(999): false,
 	}
 	for in, want := range cases {
-		t.Run(string(in), func(t *testing.T) {
+		t.Run(in.String(), func(t *testing.T) {
 			t.Parallel()
 			if got := in.IsValid(); got != want {
-				t.Errorf("TrustTier(%q).IsValid() = %v, want %v", in, got, want)
+				t.Errorf("TrustTier(%d).IsValid() = %v, want %v", int(in), got, want)
 			}
 		})
 	}

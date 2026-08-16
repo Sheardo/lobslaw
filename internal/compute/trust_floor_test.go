@@ -20,8 +20,8 @@ import (
 
 func TestAnUnsetFloorPermitsEverything(t *testing.T) {
 	t.Parallel()
-	for _, tier := range []types.TrustTier{types.TrustLocal, types.TrustPrivate, types.TrustPublic, ""} {
-		if !MeetsFloor("", tier) {
+	for _, tier := range []types.TrustTier{types.TrustLocal, types.TrustPrivate, types.TrustPublic, types.TrustUnset} {
+		if !MeetsFloor(types.TrustUnset, tier) {
 			t.Errorf("tier %q was refused with no floor set", tier)
 		}
 	}
@@ -51,10 +51,10 @@ func TestTheFloorIsHonouredInBothDirections(t *testing.T) {
 // grant the exact opposite of what they intended.
 func TestAnInvalidFloorPermitsNothing(t *testing.T) {
 	t.Parallel()
-	if MeetsFloor("privat", types.TrustLocal) {
+	if MeetsFloor(types.TrustTier(-3), types.TrustLocal) {
 		t.Error("a typo'd floor permitted the most-trusted tier")
 	}
-	if MeetsFloor("privat", types.TrustPublic) {
+	if MeetsFloor(types.TrustTier(-3), types.TrustPublic) {
 		t.Error("a typo'd floor permitted a public provider")
 	}
 }
@@ -62,10 +62,10 @@ func TestAnInvalidFloorPermitsNothing(t *testing.T) {
 // An undeclared tier is not evidence of a high one.
 func TestAProviderWithNoTierFailsAnySetFloor(t *testing.T) {
 	t.Parallel()
-	if MeetsFloor(types.TrustPublic, "") {
+	if MeetsFloor(types.TrustPublic, types.TrustUnset) {
 		t.Error("a provider with no declared tier passed a floor")
 	}
-	if MeetsFloor(types.TrustPublic, "nonsense") {
+	if MeetsFloor(types.TrustPublic, types.TrustTier(999)) {
 		t.Error("a provider with an invalid tier passed a floor")
 	}
 }
@@ -89,10 +89,10 @@ func TestTheFloorIsReadPerCall(t *testing.T) {
 
 func TestFloorOfToleratesNilAtEveryLevel(t *testing.T) {
 	t.Parallel()
-	if got := FloorOf(nil); got != "" {
+	if got := FloorOf(nil); got != types.TrustUnset {
 		t.Errorf("nil accessor = %q", got)
 	}
-	if got := FloorOf(func() *types.SoulConfig { return nil }); got != "" {
+	if got := FloorOf(func() *types.SoulConfig { return nil }); got != types.TrustUnset {
 		t.Errorf("nil soul = %q", got)
 	}
 }

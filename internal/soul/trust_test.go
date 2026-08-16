@@ -70,7 +70,7 @@ func TestValidateProviderTierBelowFloorRejects(t *testing.T) {
 func TestValidateProviderTierInvalidFloorRejects(t *testing.T) {
 	t.Parallel()
 	s := DefaultSoul()
-	s.Config.MinTrustTier = types.TrustTier("garbage")
+	s.Config.MinTrustTier = types.TrustTier(999)
 	err := ValidateProviderTier(s, ProviderTrustTier{
 		Label: "p", TrustTier: types.TrustPublic,
 	})
@@ -84,7 +84,7 @@ func TestValidateProviderTierInvalidProviderTierRejects(t *testing.T) {
 	s := DefaultSoul()
 	s.Config.MinTrustTier = types.TrustPrivate
 	err := ValidateProviderTier(s, ProviderTrustTier{
-		Label: "p", TrustTier: types.TrustTier(""),
+		Label: "p", TrustTier: types.TrustUnset,
 	})
 	if err == nil {
 		t.Fatal("invalid provider tier should reject")

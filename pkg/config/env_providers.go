@@ -93,7 +93,9 @@ func collectEnvProviders(env []string) (map[string]types.ProviderConfig, error) 
 		case "API_KEY":
 			p.APIKeyRef = val
 		case "TRUST_TIER":
-			p.TrustTier = types.TrustTier(val)
+			if tier, err := types.ParseTrustTier(val); err == nil {
+				p.TrustTier = tier
+			}
 		case "CAPABILITIES":
 			capabilitiesByLabel[labelKey] = splitCommaTrim(val)
 		}
@@ -202,7 +204,7 @@ func overlayProvider(base ProviderConfig, env types.ProviderConfig) ProviderConf
 	if env.APIKeyRef != "" {
 		base.APIKeyRef = env.APIKeyRef
 	}
-	if env.TrustTier != "" {
+	if env.TrustTier != types.TrustUnset {
 		base.TrustTier = env.TrustTier
 	}
 	if len(env.Capabilities) > 0 {

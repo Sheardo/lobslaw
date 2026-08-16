@@ -28,6 +28,12 @@ import (
 // case lives, because the whole point of a backup is that it is used
 // when something has gone wrong.
 
+// TrustUnsetFloor is the zero value: no floor configured. Named
+// rather than written as a bare zero at each check, because "floor ==
+// 0" reads as a comparison against the weakest tier when it actually
+// means nobody set one.
+const TrustUnsetFloor = types.TrustUnset
+
 // ErrBelowTrustFloor is returned when nothing available meets the
 // configured floor.
 //
@@ -80,7 +86,7 @@ type TrustCandidate struct {
 // A candidate with an invalid or empty tier fails any set floor, for
 // the same reason: an undeclared tier is not evidence of a high one.
 func MeetsFloor(floor types.TrustTier, tier types.TrustTier) bool {
-	if floor == "" {
+	if floor == TrustUnsetFloor {
 		return true
 	}
 	if !floor.IsValid() {
@@ -101,11 +107,11 @@ func MeetsFloor(floor types.TrustTier, tier types.TrustTier) bool {
 // change took effect in the prompt and not in the routing.
 func FloorOf(soul func() *types.SoulConfig) types.TrustTier {
 	if soul == nil {
-		return ""
+		return TrustUnsetFloor
 	}
 	s := soul()
 	if s == nil {
-		return ""
+		return TrustUnsetFloor
 	}
 	return s.MinTrustTier
 }
