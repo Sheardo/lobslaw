@@ -2083,10 +2083,19 @@ failure message says exactly this.
 start before it was possible to. A skill that sat three months in the proposal queue and was
 approved yesterday is one day old.
 
-**PROPOSED is deliberately not curated,** and this is an open question rather than a settled one.
-Archiving a proposal nobody has looked at converts "not reviewed yet" into "declined", and the
-pending queue is the operator's inbox. But an unbounded proposal queue in `propose` mode is a real
-problem, and something should eventually bound it — probably a notification rather than an archive.
+**PROPOSED is now bounded, and it was the uncomfortable call.** Archiving a proposal nobody has
+looked at converts "not reviewed yet" into a decision nobody made. But an unbounded inbox is not an
+inbox: a queue of two hundred is one nobody will work through, at which point the review fork is
+writing into something that functions as `/dev/null` and the operator has *lost* the thing rather
+than deferred it. So `proposal_expiry_days` defaults to 30, negative disables it, and the archived
+record carries `archived_reason = "unreviewed"` — distinct from anything somebody declined, because
+an operator reading the archive needs to tell those two apart.
+
+Two things made that tolerable rather than merely necessary: approval no longer requires stopping
+the cluster (`lobslaw learned approve` over mTLS, live by default with `--offline` as the opt-out),
+and nothing is deleted. Still open: the in-channel notification that tells the operator a queue
+exists at all. That belongs on the durable confirmation records, and it should be per-channel
+opt-in so adding a channel later is configuration rather than code.
 
 Leader-gated via `singleton.Run`, the opposite of the materialiser: a cache is per-node and a
 lifecycle is not.

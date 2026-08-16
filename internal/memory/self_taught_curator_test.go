@@ -234,10 +234,78 @@ func TestAPinnedArtefactNeverTransitions(t *testing.T) {
 	}
 }
 
-// Archiving a proposal nobody has looked at converts "not reviewed
-// yet" into "declined". The pending queue is the operator's inbox, not
-// the curator's to empty.
-func TestAProposalIsNeverCurated(t *testing.T) {
+// The review queue is bounded, and this is the uncomfortable one.
+// Expiring a proposal converts "not reviewed yet" into a decision
+// nobody made — but an unbounded inbox is not an inbox, and a queue of
+// two hundred is one nobody will ever work through, at which point the
+// review fork is writing into something that functions as /dev/null.
+//
+// So: archived, not deleted, and distinguishable from a decline.
+func TestAnUnreviewedProposalExpires(t *testing.T) {
+	t.Parallel()
+	s := selfTaught(t, SelfLearningPropose)
+	ctx := context.Background()
+	if _, err := s.Propose(ctx, named("tidy", "d", "body"), ProposeIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	idleFor(t, s, "skill:tidy", 40*24*time.Hour)
+
+	res, err := s.Curate(ctx, fastCurator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Expired) != 1 || res.Expired[0] != "skill:tidy" {
+		t.Fatalf("expired = %v", res.Expired)
+	}
+	// Reported separately from Archived: a skill that fell out of use
+	// and a decision nobody made are different events.
+	if len(res.Archived) != 0 {
+		t.Errorf("archived = %v; an expired proposal was counted as an archived skill", res.Archived)
+	}
+
+	// And the archive says WHICH it was. An operator reading it needs
+	// to tell "nobody looked" from "somebody said no".
+	archived, err := s.List(SelfTaughtQuery{Archived: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(archived) != 1 {
+		t.Fatalf("archive holds %d", len(archived))
+	}
+	if archived[0].ArchivedReason != ProposalExpiredReason {
+		t.Errorf("reason = %q, want %q", archived[0].ArchivedReason, ProposalExpiredReason)
+	}
+	// Restorable, like everything else here.
+	if _, err := s.Restore(ctx, "skill:tidy"); err != nil {
+		t.Errorf("an expired proposal could not be restored: %v", err)
+	}
+}
+
+// A proposal inside the window is left alone — the queue is the
+// operator's inbox until it demonstrably is not being read.
+func TestAFreshProposalIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	s := selfTaught(t, SelfLearningPropose)
+	ctx := context.Background()
+	if _, err := s.Propose(ctx, named("tidy", "d", "body"), ProposeIntent{}); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := s.Curate(ctx, fastCurator())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Expired) != 0 {
+		t.Fatalf("a proposal made moments ago expired: %v", res.Expired)
+	}
+	if got := stateOf(t, s, "skill:tidy"); got != lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED {
+		t.Errorf("state = %v, want PROPOSED", got)
+	}
+}
+
+// For somebody who would rather have an unbounded inbox than an
+// automatic decision.
+func TestANegativeExpiryDisablesTheQueueBound(t *testing.T) {
 	t.Parallel()
 	s := selfTaught(t, SelfLearningPropose)
 	ctx := context.Background()
@@ -246,15 +314,35 @@ func TestAProposalIsNeverCurated(t *testing.T) {
 	}
 	idleFor(t, s, "skill:tidy", 1000*24*time.Hour)
 
+	cfg := fastCurator()
+	cfg.ProposalExpiryDays = -1
+	res, err := s.Curate(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Expired) != 0 {
+		t.Errorf("expiry ran with it disabled: %v", res.Expired)
+	}
+}
+
+// A pinned proposal is exempt like everything else pinned.
+func TestAPinnedProposalDoesNotExpire(t *testing.T) {
+	t.Parallel()
+	s := selfTaught(t, SelfLearningPropose)
+	ctx := context.Background()
+	rec := named("tidy", "d", "body")
+	rec.Pinned = true
+	if _, err := s.Propose(ctx, rec, ProposeIntent{}); err != nil {
+		t.Fatal(err)
+	}
+	idleFor(t, s, "skill:tidy", 1000*24*time.Hour)
+
 	res, err := s.Curate(ctx, fastCurator())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(res.Staled)+len(res.Archived) != 0 {
-		t.Fatalf("a proposal was curated: %+v", res)
-	}
-	if got := stateOf(t, s, "skill:tidy"); got != lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED {
-		t.Errorf("state = %v, want PROPOSED", got)
+	if len(res.Expired) != 0 {
+		t.Errorf("a pinned proposal expired: %v", res.Expired)
 	}
 }
 

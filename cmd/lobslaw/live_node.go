@@ -1,0 +1,133 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"time"
+
+	"google.golang.org/grpc"
+
+	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/mtls"
+)
+
+// Talking to a RUNNING node.
+//
+// Every CLI subcommand before this one opened state.db directly, which
+// takes bbolt's exclusive lock and therefore requires the node to be
+// stopped. That is the right shape for forensics — you want to read a
+// cluster that will not start — and the wrong one for anything
+// routine. Approving a proposal is routine, and a workflow that begins
+// "stop the node" is one nobody performs.
+//
+// So this is the counterpart to offlineStore, and it deliberately
+// mirrors its flag conventions rather than inventing a second way to
+// find a cluster: the same --config locates it, the same env var
+// overrides, and the mTLS paths come from [cluster.mtls] exactly as
+// the node reads them.
+
+// liveNode holds the flags a subcommand needs to reach a running node.
+type liveNode struct {
+	configPath string
+	addr       string
+	caCert     string
+	nodeCert   string
+	nodeKey    string
+	timeout    time.Duration
+}
+
+// bind registers the shared flags on fs. Call before fs.Parse.
+func (l *liveNode) bind(fs *flag.FlagSet) {
+	fs.StringVar(&l.configPath, "config", envOr("LOBSLAW_CONFIG", ""),
+		"path to config.toml; supplies [cluster] advertise_addr and [cluster.mtls] paths")
+	fs.StringVar(&l.addr, "addr", envOr("LOBSLAW_NODE_ADDR", ""),
+		"host:port of a running node; overrides --config")
+	fs.StringVar(&l.caCert, "ca-cert", "", "CA cert; overrides --config")
+	fs.StringVar(&l.nodeCert, "node-cert", "", "client cert; overrides --config")
+	fs.StringVar(&l.nodeKey, "node-key", "", "client key; overrides --config")
+	fs.DurationVar(&l.timeout, "timeout", 10*time.Second, "per-call timeout")
+}
+
+// dial opens an mTLS connection to the node.
+//
+// mTLS is not optional and there is no plaintext fallback flag. Every
+// cluster service already requires it, and a "just for local
+// debugging" escape hatch is exactly the flag that ends up in a
+// systemd unit — the CLI presents the same credential a peer node
+// does, or it does not connect.
+func (l *liveNode) dial() (*grpc.ClientConn, error) {
+	addr, ca, cert, key, err := l.resolve()
+	if err != nil {
+		return nil, err
+	}
+	creds, err := mtls.LoadNodeCreds(ca, cert, key)
+	if err != nil {
+		return nil, fmt.Errorf("load client credentials: %w", err)
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(creds.ClientCreds()))
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", addr, err)
+	}
+	return conn, nil
+}
+
+// ctx returns a context bounded by the configured timeout.
+func (l *liveNode) ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), l.timeout)
+}
+
+// resolve works out where to connect and with what.
+//
+// Explicit flags win over the config file, and a missing piece is
+// named individually rather than as "configuration error" — somebody
+// running this on a machine that is not a cluster member will be
+// missing exactly one of these, and which one is the whole answer.
+func (l *liveNode) resolve() (addr, ca, cert, key string, err error) {
+	addr, ca, cert, key = l.addr, l.caCert, l.nodeCert, l.nodeKey
+
+	if addr == "" || ca == "" || cert == "" || key == "" {
+		if l.configPath == "" {
+			return "", "", "", "", errors.New(
+				"no --addr / --ca-cert / --node-cert / --node-key, and no --config to read them from")
+		}
+		cfg, cerr := config.Load(config.LoadOptions{Path: l.configPath})
+		if cerr != nil {
+			return "", "", "", "", fmt.Errorf("load config %q: %w", l.configPath, cerr)
+		}
+		if addr == "" {
+			// AdvertiseAddr is what peers dial, so it is what a client
+			// should dial too. ListenAddr can be 0.0.0.0:port, which
+			// is a bind address and not somewhere to connect.
+			addr = cfg.Cluster.AdvertiseAddr
+			if addr == "" {
+				addr = cfg.Cluster.ListenAddr
+			}
+		}
+		if ca == "" {
+			ca = cfg.Cluster.MTLS.CACert
+		}
+		if cert == "" {
+			cert = cfg.Cluster.MTLS.NodeCert
+		}
+		if key == "" {
+			key = cfg.Cluster.MTLS.NodeKey
+		}
+	}
+
+	var missing []string
+	for _, f := range []struct{ name, value string }{
+		{"--addr", addr}, {"--ca-cert", ca}, {"--node-cert", cert}, {"--node-key", key},
+	} {
+		if f.value == "" {
+			missing = append(missing, f.name)
+		}
+	}
+	if len(missing) > 0 {
+		return "", "", "", "", fmt.Errorf(
+			"cannot reach a node: missing %v (pass them, or point --config at a config.toml that has them)",
+			missing)
+	}
+	return addr, ca, cert, key, nil
+}

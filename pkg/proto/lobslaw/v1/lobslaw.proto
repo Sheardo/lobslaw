@@ -134,6 +134,86 @@ message AddMemberResponse {
 }
 
 // -----------------------------------------------------------------------------
+// SelfLearningService — inspect and decide on what the agent taught itself
+// -----------------------------------------------------------------------------
+//
+// The offline `lobslaw learned` CLI opens state.db directly, which
+// means bbolt's exclusive lock, which means the node must be stopped.
+// That is a fine shape for forensics and a terrible one for approval:
+// approving a proposal is a routine act, and requiring a service
+// outage to perform it guarantees that nobody does it — after which
+// propose mode is a queue that only fills.
+//
+// So the same operations are reachable on a RUNNING cluster. Writes
+// forward to the leader like every other write; the offline CLI stays
+// for the case where the node will not start.
+//
+// Deliberately NOT reachable from a conversation. Approval is the act
+// that decides whether the agent's own suggestion becomes something it
+// follows, and routing it through the channel the agent writes in puts
+// the request and the approval on the same wire. The in-channel path
+// is a later, separate decision, and it will sit on the durable
+// confirmation records rather than on this service.
+service SelfLearningService {
+  rpc ListArtefacts(ListArtefactsRequest) returns (ListArtefactsResponse);
+  rpc ApproveArtefact(ApproveArtefactRequest) returns (ApproveArtefactResponse);
+  rpc DecideRevision(DecideRevisionRequest) returns (DecideRevisionResponse);
+  rpc ArchiveArtefact(ArchiveArtefactRequest) returns (ArchiveArtefactResponse);
+  rpc RestoreArtefact(RestoreArtefactRequest) returns (RestoreArtefactResponse);
+}
+
+message ListArtefactsRequest {
+  // state filters the live set. UNSPECIFIED returns everything live.
+  SelfTaughtState state = 1;
+  // archived reads the archive instead of the live set.
+  bool archived = 2;
+}
+
+message ListArtefactsResponse {
+  repeated SelfTaughtRecord artefacts = 1;
+}
+
+message ApproveArtefactRequest {
+  string id = 1;
+  // approved_by is recorded on the record. Required: an approval
+  // nobody is named on is one nobody can be asked about.
+  string approved_by = 2;
+}
+
+message ApproveArtefactResponse {
+  SelfTaughtRecord artefact = 1;
+}
+
+// DecideRevision accepts or rejects a refinement staged against a live
+// artefact. One RPC with a boolean rather than two, because the two
+// answers are the same decision and a caller holding the id should not
+// have to pick a method name to express which way it went.
+message DecideRevisionRequest {
+  string id = 1;
+  bool accept = 2;
+  string decided_by = 3;
+}
+
+message DecideRevisionResponse {
+  SelfTaughtRecord artefact = 1;
+}
+
+message ArchiveArtefactRequest {
+  string id = 1;
+  string reason = 2;
+}
+
+message ArchiveArtefactResponse {}
+
+message RestoreArtefactRequest {
+  string id = 1;
+}
+
+message RestoreArtefactResponse {
+  SelfTaughtRecord artefact = 1;
+}
+
+// -----------------------------------------------------------------------------
 // MemoryService — vector + episodic memory + retention + forget
 // -----------------------------------------------------------------------------
 

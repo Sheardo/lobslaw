@@ -697,3 +697,86 @@ An agent-authored skill that loses its name to an operator's is logged
 once per node. Tier-first precedence already decides it correctly and
 *silently* — and silently is the problem: the artefact is ACTIVE in the
 store, listed by `lobslaw learned`, and never once reaches the prompt.
+
+---
+
+## Deciding on what the agent proposed
+
+`propose` mode means every artefact costs somebody an approval. Two
+things follow from that, and both were missing.
+
+### Approval must not require an outage
+
+Every `lobslaw learned` subcommand opened `state.db` directly, which
+takes bbolt's exclusive lock and therefore needs the node **stopped**.
+That is the right shape for forensics — you want to read a cluster that
+will not start. It is the wrong one for approval: approving a proposal
+is routine, and a workflow beginning "stop the cluster" is one nobody
+performs. After which propose mode is a queue that only fills.
+
+So the routine operations reach a **running** node over mTLS:
+
+```console
+$ lobslaw learned pending --all
+ID          KIND   NAME   WAITING ON  DESCRIPTION
+skill:tidy  skill  tidy   approval    how this user likes things tidied
+skill:plan  skill  plan   refinement  a better opening question
+
+$ lobslaw learned approve skill:tidy
+approved skill:tidy (tidy) by user:john
+```
+
+`--offline` selects the stopped-node path instead. Live is the default
+and offline is the opt-out, not the other way round: the common case
+should not be the one that needs a flag.
+
+| Subcommand | Live | Offline |
+|---|---|---|
+| `pending`, `accept`, `reject`, `archive`, `restore` | default | `--offline` |
+| `approve` | only | — |
+| `list`, `history`, `rollback`, `discard` | — | only |
+
+`approve` has no offline form. Somebody who passes `--offline` believes
+the node is down, and recording a decision against a store they think
+is quiescent — which the running cluster then never sees — is exactly
+the misunderstanding worth refusing.
+
+**Approval is attributed.** `--as` defaults to the OS user; an approval
+recorded against the tool rather than a person is one nobody can be
+asked about, which is the whole reason the field exists. A *rejection*
+needs no attribution: it changes nothing about what the agent follows,
+and the thing discarded was never in force.
+
+**Not reachable from a conversation.** Approval decides whether the
+agent's own suggestion becomes something it follows, and routing that
+through the channel the agent writes in puts the request and the
+approval on one wire. The in-channel path is a separate decision and
+belongs on the durable confirmation records.
+
+### The queue is bounded
+
+An unbounded inbox is not an inbox. A queue of two hundred is one
+nobody will work through, at which point the review fork is writing
+into something that functions as `/dev/null` — and the operator has
+*lost* the thing rather than deferred it.
+
+```toml
+[self_learning]
+proposal_expiry_days = 30   # default; negative disables
+```
+
+This is an uncomfortable threshold and it is worth saying so.
+Expiring a proposal converts "not reviewed yet" into a decision nobody
+made. Three things make it tolerable:
+
+- **Archived, not deleted.** Restorable like everything else here.
+- **`archived_reason = "unreviewed"`**, distinct from anything somebody
+  declined. An operator reading the archive needs to tell "nobody
+  looked" from "somebody said no" — they are different facts.
+- **Shorter than the staleness thresholds**, on purpose. A proposal has
+  never been useful to anyone, so the evidence for keeping it is weaker
+  than for a skill that was in service and went quiet.
+
+Pinned proposals are exempt, like everything else pinned. A proposal
+with no `created_at` is left alone rather than expired — a missing
+timestamp is not evidence of age.

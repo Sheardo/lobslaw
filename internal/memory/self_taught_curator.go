@@ -49,6 +49,35 @@ const (
 	// same question rather than a sum somebody has to compute.
 	DefaultArchiveAfterDays = 90
 
+	// DefaultProposalExpiryDays is how long a proposal waits for
+	// somebody to look at it.
+	//
+	// This one is a genuinely uncomfortable threshold, and it is worth
+	// saying why rather than presenting it as obvious. Archiving a
+	// proposal nobody has read converts "not reviewed yet" into
+	// "declined", and the pending queue is meant to be the operator's
+	// inbox rather than the curator's to empty.
+	//
+	// But an unbounded inbox is not an inbox. In propose mode every
+	// marginal artefact costs somebody an approval, and a queue of two
+	// hundred is one nobody will ever work through — at which point
+	// the review fork is writing into a place that functions as
+	// /dev/null, and the operator has lost the thing rather than
+	// deferred it.
+	//
+	// So: expired, not deleted, and distinguishable in the archive
+	// from something anybody actually declined. Shorter than the
+	// staleness thresholds on purpose — a proposal has never been
+	// useful to anyone, so the evidence for keeping it is weaker than
+	// for a skill that was in service and went quiet.
+	DefaultProposalExpiryDays = 30
+
+	// ProposalExpiredReason is the archived_reason an expired proposal
+	// carries. A distinct string so a listing can tell "nobody looked"
+	// apart from "somebody said no" — they are different facts and an
+	// operator reviewing the archive needs both.
+	ProposalExpiredReason = "unreviewed"
+
 	// DefaultCurateInterval is how often the pass runs. Daily: the
 	// thresholds are in days, so a faster tick could not change any
 	// outcome and would only add raft traffic.
@@ -59,7 +88,22 @@ const (
 type CuratorConfig struct {
 	StaleAfterDays   int
 	ArchiveAfterDays int
-	Interval         time.Duration
+	// ProposalExpiryDays bounds the review queue. Negative disables
+	// it, which is the setting for somebody who would rather have an
+	// unbounded inbox than an automatic decision.
+	ProposalExpiryDays int
+	Interval           time.Duration
+}
+
+func (c CuratorConfig) proposalExpiry() (time.Duration, bool) {
+	if c.ProposalExpiryDays < 0 {
+		return 0, false
+	}
+	d := DefaultProposalExpiryDays
+	if c.ProposalExpiryDays > 0 {
+		d = c.ProposalExpiryDays
+	}
+	return time.Duration(d) * 24 * time.Hour, true
 }
 
 func (c CuratorConfig) staleAfter() time.Duration {
@@ -96,6 +140,11 @@ func (c CuratorConfig) interval() time.Duration {
 type CurationResult struct {
 	Staled   []string
 	Archived []string
+	// Expired names proposals that timed out unreviewed. Reported
+	// separately from Archived because they are a different event: one
+	// is a skill that fell out of use, the other is a decision nobody
+	// made.
+	Expired []string
 	// Revived names artefacts that were STALE and have been used
 	// since. Counted because it is the evidence that STALE is a
 	// warning rather than a one-way door.
@@ -125,11 +174,16 @@ func (s *SelfTaughtStore) Curate(ctx context.Context, cfg CuratorConfig) (Curati
 		if rec.Pinned {
 			continue
 		}
-		// PROPOSED is deliberately untouched. Archiving a proposal
-		// nobody has looked at converts "not reviewed yet" into
-		// "declined" — and the pending queue is the operator's inbox,
-		// not the curator's to empty.
 		switch rec.State {
+		case lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_PROPOSED:
+			expired, err := s.expireProposal(ctx, rec, now, cfg)
+			if err != nil {
+				return res, err
+			}
+			if expired {
+				res.Expired = append(res.Expired, rec.Id)
+			}
+			continue
 		case lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ACTIVE,
 			lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_STALE:
 		default:
@@ -165,6 +219,37 @@ func (s *SelfTaughtStore) Curate(ctx context.Context, cfg CuratorConfig) (Curati
 		}
 	}
 	return res, nil
+}
+
+// expireProposal archives a proposal nobody has looked at.
+//
+// Measured from when it was PROPOSED — created_at — rather than from
+// any later timestamp, because nothing has happened to it since. That
+// is the whole point of the state.
+//
+// Archived rather than deleted, with a reason that says "unreviewed"
+// rather than "declined": an operator reading the archive needs to be
+// able to tell a decision somebody made from one nobody did, and a
+// single "archived" string collapses the two.
+func (s *SelfTaughtStore) expireProposal(ctx context.Context, rec *lobslawv1.SelfTaughtRecord, now time.Time, cfg CuratorConfig) (bool, error) {
+	after, enabled := cfg.proposalExpiry()
+	if !enabled {
+		return false, nil
+	}
+	proposed := rec.GetCreatedAt()
+	if proposed == nil {
+		// No creation time is not evidence of age. Left alone rather
+		// than archived, because the alternative empties the queue of
+		// every record written before whichever field went missing.
+		return false, nil
+	}
+	if now.Sub(proposed.AsTime()) < after {
+		return false, nil
+	}
+	if err := s.Archive(ctx, rec.Id, ProposalExpiredReason); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // lastActivity is when an artefact was last relevant.
@@ -242,9 +327,10 @@ func (s *SelfTaughtStore) CurateLoop(ctx context.Context, cfg CuratorConfig, log
 			// Logged only when something moved. A daily "curated 0
 			// artefacts" is noise that teaches an operator to filter
 			// out the line that matters.
-			if len(res.Staled)+len(res.Archived)+len(res.Revived) > 0 {
+			if len(res.Staled)+len(res.Archived)+len(res.Revived)+len(res.Expired) > 0 {
 				log.Info("self-taught: curated",
-					"staled", res.Staled, "archived", res.Archived, "revived", res.Revived)
+					"staled", res.Staled, "archived", res.Archived,
+					"revived", res.Revived, "expired_unreviewed", res.Expired)
 			}
 		}
 	}

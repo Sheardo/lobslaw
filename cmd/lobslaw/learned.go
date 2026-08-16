@@ -18,9 +18,14 @@ import (
 
 const learnedUsage = `lobslaw learned — inspect and manage what the agent taught itself
 
-The node must be STOPPED. These subcommands open state.db directly and
-bbolt takes an exclusive lock on the file, so a running node makes every
-one of them fail.
+Most subcommands talk to a RUNNING node over mTLS. Pass --offline to
+open state.db directly instead — that path needs the node STOPPED,
+because bbolt takes an exclusive lock on the file, and it exists for
+reading a cluster that will not start.
+
+Approving a proposal is routine, so it should not require an outage.
+list, history, rollback and discard are offline-only; approve is
+live-only.
 
 subcommands:
   list                 what the agent has written for itself
@@ -32,6 +37,7 @@ subcommands:
   reject <id>...       discard a staged refinement, leaving the live one
   history <id>         prior versions kept for rollback
   rollback <id> <ver>  restore a prior version as the current one
+  approve <id>...      let a proposal out of PROPOSED (live only)
 
 Nothing here deletes. Archived artefacts stay readable with
 --archived — an agent that can silently erase evidence of what it
@@ -50,26 +56,58 @@ func dispatchLearned(args []string) bool {
 		os.Exit(2)
 	}
 
+	// Live is the default and --offline is the opt-out, not the other
+	// way round. Approving a proposal is routine; reading a cluster
+	// that will not start is not, and the common case should not be
+	// the one that needs a flag.
+	rest, offline := takeOffline(sub[1:])
+
 	var err error
 	switch sub[0] {
 	case "list":
-		err = learnedList(sub[1:])
-	case "archive":
-		err = learnedArchive(sub[1:])
-	case "discard":
-		err = learnedDiscard(sub[1:])
-	case "restore":
-		err = learnedRestore(sub[1:])
-	case "pending":
-		err = learnedPending(sub[1:])
-	case "accept":
-		err = learnedAccept(sub[1:])
-	case "reject":
-		err = learnedReject(sub[1:])
+		err = learnedList(rest)
 	case "history":
-		err = learnedHistory(sub[1:])
+		err = learnedHistory(rest)
 	case "rollback":
-		err = learnedRollback(sub[1:])
+		err = learnedRollback(rest)
+	case "discard":
+		err = learnedDiscard(rest)
+	case "approve":
+		if offline {
+			err = errLiveOnly("approve")
+			break
+		}
+		err = liveApprove(rest)
+	case "pending":
+		if offline {
+			err = learnedPending(rest)
+			break
+		}
+		err = livePending(rest)
+	case "accept":
+		if offline {
+			err = learnedAccept(rest)
+			break
+		}
+		err = liveDecide(rest, true)
+	case "reject":
+		if offline {
+			err = learnedReject(rest)
+			break
+		}
+		err = liveDecide(rest, false)
+	case "archive":
+		if offline {
+			err = learnedArchive(rest)
+			break
+		}
+		err = liveShelve(rest)
+	case "restore":
+		if offline {
+			err = learnedRestore(rest)
+			break
+		}
+		err = liveRestore(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
 		os.Exit(2)
@@ -460,4 +498,34 @@ func stateLabel(s lobslawv1.SelfTaughtState) string {
 
 func originLabel(o lobslawv1.SelfTaughtOrigin) string {
 	return strings.ToLower(strings.TrimPrefix(o.String(), "SELF_TAUGHT_ORIGIN_"))
+}
+
+// takeOffline strips --offline from args and reports whether it was
+// there.
+//
+// Pulled out before flag.Parse because each subcommand builds its own
+// FlagSet, and which FlagSet to build is the thing this decides. A
+// flag that selects the parser cannot be parsed by it.
+func takeOffline(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	var offline bool
+	for _, a := range args {
+		if a == "--offline" || a == "-offline" {
+			offline = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, offline
+}
+
+// errLiveOnly explains a subcommand that has no offline form.
+//
+// Named rather than silently ignoring --offline: somebody who passed
+// it believes the node is stopped, and approving against a store they
+// think is quiescent is exactly the misunderstanding worth stopping.
+func errLiveOnly(name string) error {
+	return fmt.Errorf(
+		"%s has no --offline form: it is a decision, and recording one against a stopped "+
+			"node would mean the running cluster never sees it", name)
 }
