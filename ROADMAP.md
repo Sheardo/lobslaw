@@ -2443,3 +2443,10 @@ Candidates, chosen to be un-alike rather than convenient:
 Acceptance: each new driver passes the existing conformance suite
 unchanged. A suite that needs editing to admit the second driver is
 the finding, not the driver.
+
+**Status: done.** ElevenLabs (speak), Imagen (image) and Veo (video)
+all landed and all passed the suite unchanged. Veo produced the first
+real `ArtifactMount` — until then only the mock had — and its
+operation-resource-name handle is what finally tested `JobHandle`'s
+opacity, which had been asserted and only mock-exercised. All three
+are fake-verified; no accounts exist for any of them.
