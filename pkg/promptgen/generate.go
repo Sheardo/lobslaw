@@ -20,6 +20,13 @@ type GenerateInput struct {
 	Tools  []ToolInfo
 	Skills []SkillInfo
 
+	// Pinned is the always-on memory: what the assistant knows about
+	// this user and about this environment. Rendered in the stable
+	// prefix and expected to be a per-session snapshot, so a write
+	// mid-session does not invalidate the provider's prompt cache for
+	// every turn after it.
+	Pinned PinnedBlocks
+
 	// Binaries render the operator-declared [[binary]] catalogue with
 	// description + post_install prose + truncated --help. Empty list
 	// elides the section entirely.
@@ -83,6 +90,12 @@ func Generate(in GenerateInput) string {
 		BuildTooling(in.Tools),
 		BuildSkills(in.Skills),
 		BuildBinaries(in.Binaries),
+		// Pinned memory sits AFTER tooling and BEFORE the volatile
+		// sections. It is stable for the session, so keeping it above
+		// the clock means the cacheable prefix ends later rather than
+		// earlier.
+		BuildUserProfile(in.Pinned.Profile),
+		BuildAgentNotes(in.Pinned.Notes),
 		BuildCurrentTime(now, in.Timezone),
 		BuildRuntime(in.Runtime),
 		BuildWorkspace(in.Workspace),

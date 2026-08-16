@@ -219,6 +219,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.PromptRecord:
 		return p.Revision, true
+	case *lobslawv1.PinnedMemory:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -233,6 +235,8 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.SessionLease:
 		p.Revision = rev
 	case *lobslawv1.PromptRecord:
+		p.Revision = rev
+	case *lobslawv1.PinnedMemory:
 		p.Revision = rev
 	}
 }
@@ -468,6 +472,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketPinned:
+		var r lobslawv1.PinnedMemory
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
@@ -479,7 +489,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts:
+	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned:
 		return true
 	default:
 		return false
@@ -526,6 +536,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketPrompts, p.Prompt, nil
 	case *lobslawv1.LogEntry_Consolidation:
 		return BucketConsolidations, p.Consolidation, nil
+	case *lobslawv1.LogEntry_Pinned:
+		return BucketPinned, p.Pinned, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

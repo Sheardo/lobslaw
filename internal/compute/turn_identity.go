@@ -62,6 +62,13 @@ type TurnIdentity struct {
 	// is an input to a rule, and the rule is what allows or denies.
 	Roles []string
 
+	// TurnID identifies this turn. Carried so a builtin can bound a
+	// per-turn budget — the pinned-memory tools cap consecutive
+	// failures so a fragile edit cannot loop the turn to exhaustion
+	// and suppress the user's reply, and "this turn" has to mean
+	// something for that to work.
+	TurnID string
+
 	// Channel and ChannelID address the conversation this turn is
 	// happening in — "telegram" and a chat id, say. Both empty for
 	// turns with no channel origin: the scheduler, commitment fires,

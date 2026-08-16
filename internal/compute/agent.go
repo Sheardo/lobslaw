@@ -163,6 +163,17 @@ type AgentConfig struct {
 	// Binaries section is rendered.
 	BinariesProvider func() []promptgen.BinaryInfo
 
+	// PinnedProvider supplies the always-on memory blocks for a
+	// session.
+	//
+	// Called with a session key and expected to return the SAME
+	// snapshot for the life of that session. A block that changed
+	// mid-session would invalidate the provider's prompt cache on the
+	// turn after every write — the opposite of what an always-on block
+	// is for. Writes are durable immediately; the rendered snapshot
+	// refreshes at the next session boundary.
+	PinnedProvider func(sessionKey, userID string) promptgen.PinnedBlocks
+
 	// SkillsProvider supplies the skill index for the system prompt.
 	//
 	// Without it the "Installed Skills" section renders "(none
@@ -495,10 +506,15 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 			if a.cfg.SkillsProvider != nil {
 				skillIndex = a.cfg.SkillsProvider()
 			}
+			var pinned promptgen.PinnedBlocks
+			if a.cfg.PinnedProvider != nil {
+				pinned = a.cfg.PinnedProvider(sessionKeyFor(req), userIDFor(req))
+			}
 			req.SystemPrompt = promptgen.Generate(promptgen.GenerateInput{
 				Soul:     soul,
 				Tools:    toPromptgenTools(req.Tools),
 				Skills:   skillIndex,
+				Pinned:   pinned,
 				Binaries: bins,
 				Runtime: promptgen.RuntimeInfo{
 					Channel:   req.Channel,
@@ -578,6 +594,27 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 // toPromptgenTools renders the LLM-facing Tools as promptgen's
 // ToolInfo shape so the system-prompt "Available Tools" section
 // matches what the model actually has.
+// sessionKeyFor identifies the conversation a snapshot is frozen
+// against. Channel plus channel id rather than the turn id, because a
+// snapshot per turn is not a snapshot.
+//
+// A turn with no channel — the scheduler's — gets an empty key, which
+// the provider treats as its own session. That is correct: a scheduled
+// turn is not part of anybody's conversation, so freezing it against
+// one would hand it a stale view.
+func sessionKeyFor(req *ProcessMessageRequest) string {
+	return req.Channel + ":" + req.ChannelID
+}
+
+// userIDFor is whose pinned memory a turn renders. Empty claims mean
+// no profile rather than somebody else's.
+func userIDFor(req *ProcessMessageRequest) string {
+	if req.Claims == nil {
+		return ""
+	}
+	return req.Claims.UserID
+}
+
 func toPromptgenTools(tools []Tool) []promptgen.ToolInfo {
 	out := make([]promptgen.ToolInfo, 0, len(tools))
 	for _, t := range tools {
@@ -1124,6 +1161,7 @@ func isRetryableProviderError(ctx context.Context, err error) bool {
 // work is being done for (see Node.schedulerClaims), not of a chat.
 func (a *Agent) turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
 	t := TurnIdentity{
+		TurnID:    req.TurnID,
 		Channel:   req.Channel,
 		ChannelID: req.ChannelID,
 		Timezone:  req.UserTimezone,
