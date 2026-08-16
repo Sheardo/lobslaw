@@ -14,6 +14,40 @@ For every `Executor.Call(ctx, tool, args)`, the policy engine asks:
 
 If the answer is `deny`, the call returns an error before the tool runs. If it's `require_confirmation`, the call is paused until a human-in-the-loop confirms via the originating channel. Allow is silent and proceeds.
 
+## When a condition cannot be evaluated
+
+A rule's conditions can fail to evaluate in two ways: the key names an evaluator this build does
+not have, or a registered evaluator returns an error. Either way the engine does not know whether
+the rule matched, and the effect decides what happens:
+
+| Effect | On evaluation error |
+|---|---|
+| `deny` | **Applied.** Skipping it would drop exactly the protection the rule exists for, and evaluation would continue into whatever lower-priority allow sits underneath. |
+| `require_confirmation` | **Applied**, for the same reason. |
+| `allow` | **Skipped.** This is fail-closed: applying an allow yields the most permissive effect there is, so whatever sits below — a deny, a confirmation, or default-deny — is never a wider grant. |
+
+Skipping an erroring allow is deliberately *not* a hard deny. A hard deny would turn one flaky
+evaluator into a total outage while providing no additional safety, since the rules below it
+evaluated cleanly on their own merits.
+
+### The boot audit
+
+No condition evaluator is registered in lobslaw today, so **every** conditioned rule is currently
+unevaluable. At decision time that is handled safely, but silently — an operator's time-of-day
+allow looks correct in a listing and simply never grants.
+
+`Engine.LogUnevaluableRules()` runs at boot and says so at error level, naming each rule, the
+condition keys it cannot resolve, and what the rule actually does:
+
+```
+policy: unevaluable rule rule_id=office-hours-allow effect=allow
+  condition_keys=[time_of_day]
+  consequence="this rule will never grant anything; requests fall through to
+               lower-priority rules and ultimately to default-deny"
+```
+
+Registering the evaluator clears the defect.
+
 ## Approval-minted rules
 
 An "always" approval mints a rule rather than writing to a second store beside the engine. The

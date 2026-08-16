@@ -597,16 +597,41 @@ if ok, err := e.conditionsHold(ctx, rule.Conditions); err != nil {
 }
 ```
 
-Add `[policy] condition_error_mode = "deny" | "skip"`, default `"deny"`, so an operator with a
-flaky custom evaluator has an escape hatch that is a deliberate, documented, logged-at-boot choice
-rather than the silent default. Update the `ARCHITECTURE.md` diagram in the same commit (per
-`lobslaw-documentation-diagrams`) and delete the TODO.
+### What was built, and where it differs from the proposal above
+
+The fix is **effect-dependent** rather than a blanket deny, which is strictly better:
+
+| Effect | On evaluation error |
+|---|---|
+| `deny` / `require_confirmation` | applied without evaluating |
+| `allow` | skipped |
+
+Skipping an erroring allow *is* fail-closed. Applying an allow yields the most permissive effect
+there is, so whatever sits below it — a deny, a confirmation, or default-deny — is never a wider
+grant. A blanket deny would turn one flaky evaluator into a total outage and buy no safety, since
+the rules underneath evaluated cleanly on their own merits.
+`TestSkippingAnErroringAllowIsNeverMorePermissive` asserts the property rather than leaving it as
+an argument in a comment.
+
+`condition_error_mode` was therefore **not built**. Its only purpose would be to restore the
+blanket "skip", which reopens the deny leak this item exists to close, for a scenario — a flaky
+custom evaluator — that cannot occur while no evaluator is registered at all. Raise it again if a
+real one lands and turns out to be flaky.
+
+**Found while doing this:** no condition evaluator is registered anywhere in production code, so
+every conditioned rule is unevaluable today. An operator's time-of-day allow looks correct in a
+listing, never grants, and says so only at warn level. `Engine.LogUnevaluableRules()` now reports
+it at boot at error level, naming each rule, its unresolvable keys, and what it actually does.
 
 ### Acceptance
 
-- [ ] An erroring evaluator on a deny rule denies.
-- [ ] An erroring evaluator on an allow rule denies (not "falls through to a later allow").
-- [ ] `condition_error_mode = "skip"` restores the old behaviour and logs a warning at boot.
+- [x] An erroring evaluator on a deny rule denies.
+- [x] An erroring evaluator on an allow rule never widens the grant — asserted against a deny, a
+      confirmation, and nothing beneath it.
+- [x] Rules that can never behave as written are reported at boot, by id, with the consequence
+      spelled out.
+- [x] The `ARCHITECTURE.md` diagram matches the code and the TODO is gone.
+- [~] `condition_error_mode` deliberately not built — see above.
 
 ---
 

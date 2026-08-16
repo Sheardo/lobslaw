@@ -328,10 +328,14 @@ sequenceDiagram
       Note over Eng: continue
     else match
       Eng->>Eval: conditionsHold(ctx, conditions) [RLock]
-      alt evaluator errors
-        Note over Eng: log warn, SKIP rule<br/>(⚠ see TODO: fail-closed)
+      alt evaluator errors, rule is allow
+        Note over Eng: skip — can only be<br/>more restrictive than applying
+      else evaluator errors, rule is deny / require_confirmation
+        Eng-->>Caller: Decision{rule.Effect, "applied without evaluating"}
       else conditions true
         Eng-->>Caller: Decision{rule.Effect, reason}
+      else conditions false
+        Note over Eng: skip — definitely does not apply
       end
     end
   end
@@ -341,7 +345,7 @@ sequenceDiagram
 
 ### Channel request flow (Phase 6)
 
-Inbound user message → channel → agent → back. Confirmations branch through the shared `PromptRegistry`.
+Inbound user message → channel → agent → back. Confirmations branch through the shared `Prompts` registry — raft-backed where the node hosts cluster state, so a confirmation can be answered on a node that did not ask it.
 
 ```mermaid
 sequenceDiagram
