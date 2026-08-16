@@ -13,6 +13,8 @@ import (
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
+
+	"github.com/jmylchreest/lobslaw/internal/promptguard"
 )
 
 // ContextEngine assembles per-turn contextual additions to the
@@ -165,6 +167,15 @@ func (e *ContextEngine) Assemble(ctx context.Context, userMessage string) Contex
 			// SourceIds into a private episodic record, and this is
 			// the path that puts recalled text into the system prompt.
 			if !audience.AllowsEpisodic(&epi) {
+				continue
+			}
+			// Quarantined at ingest. The record is kept — it is usually
+			// the evidence — but recall is the path that replays it into
+			// a prompt on every later turn, which is the whole reason it
+			// was flagged.
+			if promptguard.IsQuarantined(epi.Tags) {
+				e.log.Warn("context engine: skipping quarantined record in recall",
+					"id", epi.Id, "tags", epi.Tags)
 				continue
 			}
 			entries = append(entries, recallEntry{rec: &epi, score: h.Score()})
