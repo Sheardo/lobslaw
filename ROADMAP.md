@@ -1420,12 +1420,20 @@ so the existing resolver/capability/roles tests stay green throughout.
 
 ### Acceptance
 
-- [ ] A vision call whose primary provider 429s succeeds on the next configured provider.
-- [ ] A 400 / content-length error aborts immediately without burning the candidate list.
-- [ ] A provider returning 401 is demoted with a distinct, actionable log line.
-- [ ] A chain step falls through without abandoning the chain.
+- [x] A vision call whose primary provider 429s succeeds on the next configured provider.
+- [x] A 400 / content-length error aborts immediately without burning the candidate list.
+- [x] A provider returning 401 is demoted with a distinct, actionable log line.
+      Required a fourth failure class: `credential-rejected` is neither transient (waiting does
+      not fix a wrong key) nor permanent (the next provider has its own key). It reverses an
+      earlier decision that 401 was permanent — see the note in `drivertest/conformance.go` for
+      why that was defensible and why the ERROR-level log is what makes advancing safe now.
+- [x] Health tracking: a provider that failed recently is skipped rather than re-tried every turn.
+      Per-node, not Raft; no half-open probe state — the chain is the probe.
+- [ ] A chain step falls through without abandoning the chain. *Chat and modality chains both
+      fail over; a multi-step chain's individual STEP still resolves to one provider.*
 - [ ] Trust-tier floor is honoured at every candidate, not just the first.
 - [ ] `hint = "deep"` resolves through a chain an operator can inspect and override.
+- [ ] Per-attempt audit entries (provider, latency, outcome, cost).
 
 ---
 

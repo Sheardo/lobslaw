@@ -249,6 +249,13 @@ type Node struct {
 	// approvals) and the channels (which record them).
 	approvals *compute.SessionApprovals
 
+	// providerHealth remembers which providers recently failed, so a
+	// failover chain skips one in cooldown rather than paying a
+	// round-trip to rediscover it every turn. Per-node, not raft: one
+	// node behind a broken egress proxy must not convince the cluster
+	// that a provider is down.
+	providerHealth *compute.ProviderHealth
+
 	// approvalRules mints the permanent policy rule behind an
 	// "always" approval. Nil on a node without raft — there is
 	// nowhere to record a lasting grant, so the channels hide the

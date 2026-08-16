@@ -42,6 +42,11 @@ type VisionConfig struct {
 	// to disable scoping (only sensible in tests).
 	AllowedRoot string
 	HTTPClient  *http.Client
+
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with every other modality that reaches the
+	// same endpoint. Empty opts out of health tracking.
+	Label string
 }
 
 // RegisterVisionBuiltin installs the read_image builtin. Returns
@@ -56,7 +61,7 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 	if len(cfgs) == 0 {
 		return errors.New("read_image: at least one provider config required")
 	}
-	handlers := make([]BuiltinFunc, 0, len(cfgs))
+	handlers := make([]failoverHandler, 0, len(cfgs))
 	for _, cfg := range cfgs {
 		if cfg.Endpoint == "" || cfg.APIKey == "" {
 			return errors.New("read_image: Endpoint and APIKey both required")
@@ -79,9 +84,9 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 		if client == nil {
 			client = &http.Client{Timeout: 60 * time.Second}
 		}
-		handlers = append(handlers, newReadImageHandler(cfg, client))
+		handlers = append(handlers, failoverHandler{label: cfg.Label, fn: newReadImageHandler(cfg, client)})
 	}
-	return b.Register("read_image", failoverBuiltin("read_image", nil, handlers...))
+	return b.Register("read_image", failoverBuiltin("read_image", nil, b.Health(), handlers...))
 }
 
 // VisionToolDef is the ToolDef registered alongside the builtin.

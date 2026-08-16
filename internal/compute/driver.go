@@ -52,12 +52,20 @@ type ChatDriver interface {
 
 // --- failure classification ---------------------------------------
 
-// FailureClass decides what the layer above does with an error. Three
-// classes, not two: a plan-billed provider that has exhausted its
-// monthly quota is neither transient (retrying it before the month
-// rolls over will fail identically) nor a request bug (the request is
-// fine). Alibaba's Token Plan blocks calls outright at that point
-// rather than charging overage.
+// FailureClass decides what the layer above does with an error. More
+// than two, because the interesting failures are neither.
+//
+// A plan-billed provider that has exhausted its monthly quota is
+// neither transient (retrying before the month rolls over fails
+// identically) nor a request bug (the request is fine). Alibaba's
+// Token Plan blocks calls outright at that point rather than charging
+// overage.
+//
+// A rejected credential is neither either: retrying the same provider
+// is pointless because the key is wrong, but the NEXT provider has its
+// own key and is very likely fine. Classing it permanent — which is
+// where an unclassified 401 lands — means one stale key takes down a
+// turn that had two working providers behind it.
 type FailureClass int
 
 const (
@@ -75,6 +83,13 @@ const (
 	// who has been silently billed per call ever since will want to
 	// have known. Not retried against this provider until reset.
 	FailureQuotaExhausted
+
+	// FailureCredential is a rejected or missing credential: 401, 403,
+	// a revoked key, an expired token. Advances to the next provider —
+	// its key is a different key — but never retries this one, and is
+	// logged loudly because it is a configuration fault somebody has
+	// to fix rather than weather that passes.
+	FailureCredential
 )
 
 func (c FailureClass) String() string {
@@ -83,6 +98,8 @@ func (c FailureClass) String() string {
 		return "transient"
 	case FailureQuotaExhausted:
 		return "quota-exhausted"
+	case FailureCredential:
+		return "credential-rejected"
 	default:
 		return "permanent"
 	}
@@ -114,6 +131,11 @@ func QuotaExhausted(err error) error {
 
 // Permanent wraps err as not worth trying elsewhere.
 func Permanent(err error) error { return &DriverError{Class: FailurePermanent, Err: err} }
+
+// CredentialRejected wraps err as a bad or missing credential.
+func CredentialRejected(err error) error {
+	return &DriverError{Class: FailureCredential, Err: err}
+}
 
 // ClassifyFailure reports what to do with err.
 //
@@ -162,6 +184,11 @@ func ClassifyHTTPStatus(status int, body string) FailureClass {
 			return FailureQuotaExhausted
 		}
 		return FailureTransient
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		// Not permanent: the next provider authenticates with its own
+		// key. Not transient either — retrying this one cannot help,
+		// because nothing about the credential changes by waiting.
+		return FailureCredential
 	case status >= 500:
 		return FailureTransient
 	case status == http.StatusRequestTimeout:

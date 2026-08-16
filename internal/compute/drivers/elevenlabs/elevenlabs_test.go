@@ -157,7 +157,7 @@ func TestClassifiesFailuresLikeEveryOtherDriver(t *testing.T) {
 		want   compute.FailureClass
 	}{
 		{503, `{"detail":"upstream"}`, compute.FailureTransient},
-		{401, `{"detail":"bad key"}`, compute.FailurePermanent},
+		{401, `{"detail":"bad key"}`, compute.FailureCredential},
 		{422, `{"detail":"unknown voice"}`, compute.FailurePermanent},
 	} {
 		f := newFake(t, tc.status, tc.body)

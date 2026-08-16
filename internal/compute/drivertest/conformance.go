@@ -171,8 +171,23 @@ func chatFailures(t *testing.T, s Subject) {
 			"402 is the unambiguous quota signal"},
 		{"bad request", 400, `{"error":"unknown model"}`, compute.FailurePermanent,
 			"a 400 fails identically on the backup; falling through multiplies the error"},
-		{"unauthorized", 401, `{"error":"bad key"}`, compute.FailurePermanent,
-			"a bad key is an operator problem, not a reason to spend the backup's quota"},
+		// This used to expect permanent, on the reasoning that a bad key
+		// is an operator problem and failing over spends the backup's
+		// quota to paper over it. The concern was right; the conclusion
+		// was not. Permanent means one rotated key takes the assistant
+		// down while two working providers sit idle, and the user's
+		// experience of a config fault should not be "it stopped
+		// replying".
+		//
+		// What made permanent defensible was that nothing else made the
+		// fault visible. logProviderFailure now reports a credential
+		// rejection at ERROR, saying plainly that the chain is covering
+		// for it — so the operator finds out AND the assistant keeps
+		// working, instead of trading one for the other.
+		{"unauthorized", 401, `{"error":"bad key"}`, compute.FailureCredential,
+			"the next provider has its own key; this one is logged loudly rather than failing the turn"},
+		{"forbidden", 403, `{"error":"key lacks permission"}`, compute.FailureCredential,
+			"same as 401 — the credential is the problem, and it is this provider's credential"},
 	}
 
 	for _, tc := range cases {
