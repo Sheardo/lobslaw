@@ -1958,12 +1958,30 @@ means a marginal artefact costs the user an approval prompt.
 
 ### Acceptance
 
-- [ ] Review fires after the reply, never before it.
-- [ ] Skill review triggers on a tool-heavy single turn; memory review on turn count.
-- [ ] A fork cannot spawn a fork.
-- [ ] Scheduler-originated turns spawn no review.
-- [ ] Routing the review to a non-main provider switches replay to a digest.
-- [ ] The fork cannot write outside the self-taught namespace — enforced by policy, shown in audit.
+- [x] Review fires after the reply, never before it — `Consider` is called once the response is
+      assembled, and does not block.
+- [x] Skill review triggers on a tool-heavy single turn; memory review on turn count, per
+      conversation.
+- [x] A fork cannot spawn a fork (`ProcessMessageRequest.IsReviewFork`).
+- [x] Scheduler-originated turns spawn no review — a turn with no channel has no human in the loop.
+- [x] Routing the review to a non-main provider switches replay to a digest, derived from
+      `RoleMap.IsMain(RoleReview)` rather than configured separately.
+- [~] The fork cannot write outside the self-taught namespace. Enforced **structurally** rather
+      than by a policy scope: `ArtefactStore` is the fork's entire write surface and can only reach
+      the self-taught store, so there is no broader handle to misuse. That is a stronger guarantee
+      than a rule evaluated per call — but it means the restriction does NOT appear in the audit
+      log as a decision, because no decision is made. Worth revisiting if the fork ever needs a
+      second write target; at one target, a policy scope would be ceremony around an interface that
+      already cannot do anything else.
+
+Prompt carries the preference order (refine before add), the anti-sprawl naming rule, and the
+three-way axis split — memory is state, skills are procedure, soul is disposition. hermes's action
+bias is deliberately **not** adopted: it is what forced them to build a curator and a stale
+lifecycle, and lobslaw has Dream to catch a quiet pass plus `propose` mode making every marginal
+artefact cost somebody an approval.
+
+An unparseable decision is treated as "nothing learned" rather than retried, and a refused proposal
+is logged and dropped — asking again costs another replay to maybe produce a marginal artefact.
 
 ---
 

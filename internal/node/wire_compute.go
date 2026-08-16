@@ -312,9 +312,12 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 			CrossOwner: n.crossOwnerAuthz(),
 			Logger:     n.log,
 		}),
-		Skills:           skillDispatcherOrNil(n.skillAdapter),
-		SkillsProvider:   n.skillIndexProvider(),
-		PinnedProvider:   n.pinnedProvider(),
+		Skills:         skillDispatcherOrNil(n.skillAdapter),
+		SkillsProvider: n.skillIndexProvider(),
+		PinnedProvider: n.pinnedProvider(),
+		// Populated after this stage by wire-review-fork, which needs
+		// the RoleMap built here. Set on the agent below rather than
+		// passed in, for that ordering.
 		TimezoneResolver: n.resolveUserTimezone,
 		BinariesProvider: binariesProvider,
 		ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),

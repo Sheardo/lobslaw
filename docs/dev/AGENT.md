@@ -274,3 +274,109 @@ Every tool-role message fed back into the LLM goes through `promptgen.WrapContex
 ## Upstream tracking
 
 No specific upstream movement affects the agent loop. The `LLMProvider` interface is narrow by design so future SDK improvements (Anthropic native with prompt caching metadata, streaming, structured outputs) slot in as separate implementations without breaking the loop.
+
+---
+
+## The post-turn review fork
+
+After the reply has gone out, the fork replays the turn and asks
+whether anything is worth keeping. Everything about it is behind the
+reply, on a bounded background context, failures logged and swallowed —
+the pattern `maybeIngestTurn` already established. A learning side
+effect must never cost somebody their answer.
+
+### Asymmetric triggers
+
+| Axis | Interval | Unit |
+|---|---|---|
+| Skills | 10 | tool iterations **in one turn** |
+| Memory | 10 | conversation **turns** |
+
+Different axes on purpose. A skill answers *"was there enough work here
+to be worth encoding"*, which is a property of one turn — forty tool
+calls in a debugging session is a procedure waiting to be written down.
+Memory answers *"have we learned who this person is"*, which only
+accumulates. Measuring both the same way gets one of them wrong: forty
+turns of chat produce no procedure, and one enormous turn teaches
+nothing about the user.
+
+Configurable as `self_learning.review_skill_tool_iterations` /
+`review_memory_turn_interval`. Negative disables that axis.
+
+### When it does not run
+
+- **A fork cannot spawn a fork** (`IsReviewFork`). Without the guard
+  the first review triggers the second, and a review of a review is
+  meaningless and unbounded.
+- **Scheduler-originated turns spawn none.** No channel means no human
+  in the loop, so there is nothing to learn about the user — and the
+  fork is expensive enough that spending it on a cron tick is the wrong
+  trade twice over.
+- **Self-learning off** means no fork exists at all, because there is
+  nowhere for it to write.
+
+### Replay cost
+
+The instinct to route background work to a cheap model is wrong here:
+
+> Same model → full replay. Different model → compact digest.
+
+On the main model the fork reads a **warm prefix cache**, so replaying
+the whole conversation is mostly cache reads. A different model cannot
+reuse that cache, so a full replay would cold-write the entire
+transcript to learn at most one skill. The mode is derived from
+`RoleMap.IsMain(RoleReview)` rather than configured separately, so the
+two cannot disagree.
+
+The system prompt is excluded from the replay either way — reviewing it
+would have the fork learning from its own configuration rather than
+from the exchange. Tool-call turns with no prose survive it, because
+for the skill axis the tools *are* the procedure.
+
+### What the prompt does
+
+Three things carry the weight:
+
+- **Preference order** — refine an existing skill, then extend one,
+  then and only then add a new one. Left to itself a model writes a new
+  skill per session.
+- **Naming rule** — no skill named after an issue number, an error
+  string, or a session (`fix-issue-4021`, `debug-telegram-timeout`).
+  Those never match another task and sit in the index forever.
+- **The axis split**, which is the conceptual payload:
+
+  > Memory is state. Skills are procedure. Soul is disposition.
+
+  Frustration and style corrections are **first-class skill signals**.
+  "Stop giving me essays" recorded as a memory changes nothing next
+  time, because nothing retrieves it at the moment it matters. Encoded
+  into the procedure that governs the task, it does.
+
+The fork is shown the **complete** list of existing skills, so it can
+name a refinement target. A filtered view produces duplicates of
+whatever the filter missed.
+
+### Deliberately conservative
+
+hermes's action bias — *"a pass that does nothing is a missed learning
+opportunity, not a neutral outcome"* — is **not** adopted. That
+pressure is what forced them to build a curator, usage telemetry, a
+stale/archive lifecycle and protected-skill rules. lobslaw has Dream to
+catch what a quiet pass missed, and `propose` mode means every marginal
+artefact costs somebody an approval. The prompt says plainly that
+learning nothing is a correct and common outcome.
+
+An unparseable decision is treated as "nothing learned" rather than
+retried — a badly-shaped response is not a good basis for writing an
+instruction the agent will follow. A refused proposal (a near-duplicate
+the fork was given the index to avoid) is logged and dropped, never
+retried.
+
+### Authority
+
+`ArtefactStore` is the fork's entire write surface, and it can only
+reach the self-taught store. The restriction is structural rather than
+a policy rule evaluated per call — there is no broader handle to
+misuse. The trade: it does not appear in the audit log as a decision,
+because no decision is made.
+

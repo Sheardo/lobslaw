@@ -174,6 +174,12 @@ type AgentConfig struct {
 	// refreshes at the next session boundary.
 	PinnedProvider func(sessionKey, userID string) promptgen.PinnedBlocks
 
+	// Review is the post-turn fork that decides whether a turn taught
+	// anything worth keeping. Nil disables it entirely — which is what
+	// self-learning being off looks like from here, since the node
+	// wires no fork when there is no store for it to write to.
+	Review *ReviewFork
+
 	// SkillsProvider supplies the skill index for the system prompt.
 	//
 	// Without it the "Installed Skills" section renders "(none
@@ -270,6 +276,13 @@ type Agent struct {
 	cfg AgentConfig
 }
 
+// SetReview attaches the post-turn review fork.
+//
+// A setter rather than a constructor field because the fork routes
+// through the RoleMap the agent's own construction builds, so it
+// cannot exist yet when the agent is made. Nil leaves reviews off.
+func (a *Agent) SetReview(f *ReviewFork) { a.cfg.Review = f }
+
 // SetSkillDispatcher swaps the skill dispatcher post-construction.
 // Used by node wiring to swap in a SkillDispatcherChain once MCP
 // servers have started (their tools aren't known at agent-
@@ -315,6 +328,12 @@ type ProcessMessageRequest struct {
 	// tasks. Empty for internally-originated turns (scheduler).
 	Channel   string
 	ChannelID string
+
+	// IsReviewFork marks a turn as the post-turn review replaying a
+	// conversation. The recursion guard: without it the first review
+	// triggers the second, and a review of a review is meaningless and
+	// unbounded.
+	IsReviewFork bool
 
 	// UserTimezone is the user's preferred IANA zone for time
 	// rendering (e.g. "Europe/London"). Resolved from the user's
@@ -721,6 +740,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// soft failure compared to dropping the user's
 			// reply.
 			a.maybeIngestTurn(ctx, req, chatResp.Content)
+			a.cfg.Review.Consider(req, resp.Messages, len(resp.ToolCalls))
 			return resp, nil
 		}
 
@@ -840,6 +860,10 @@ func (a *Agent) forceSummaryReply(
 	messages = append(messages, Message{Role: "assistant", Content: chatResp.Content})
 	resp.Messages = messages
 	a.maybeIngestTurn(ctx, req, chatResp.Content)
+	// After the reply is assembled, never before. A learning side
+	// effect must not delay somebody's answer, and Consider does not
+	// block.
+	a.cfg.Review.Consider(req, messages, len(resp.ToolCalls))
 	return resp, nil
 }
 

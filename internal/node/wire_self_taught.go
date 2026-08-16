@@ -3,6 +3,7 @@ package node
 import (
 	"fmt"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 )
 
@@ -33,5 +34,35 @@ func (n *Node) wireSelfTaught() error {
 	n.selfTaught = store
 	n.log.Info("self-learning: enabled", "mode", string(mode),
 		"artefacts_active_immediately", mode == memory.SelfLearningAuto)
+	return nil
+}
+
+// wireReviewFork builds the post-turn review.
+//
+// Returns nil having built nothing when there is no self-taught store,
+// which is the same absence-not-a-flag property: with self-learning
+// off there is no fork to disable, because there was never anywhere
+// for it to write.
+func (n *Node) wireReviewFork() error {
+	if n.selfTaught == nil || n.roleMap == nil {
+		return nil
+	}
+	fork, err := compute.NewReviewFork(compute.ReviewConfig{
+		Roles:               n.roleMap,
+		Store:               artefactStoreAdapter{inner: n.selfTaught},
+		Logger:              n.log,
+		SkillToolIterations: n.cfg.ReviewSkillToolIterations,
+		MemoryTurnInterval:  n.cfg.ReviewMemoryTurnInterval,
+	})
+	if err != nil {
+		return fmt.Errorf("review fork: %w", err)
+	}
+	n.reviewFork = fork
+	if n.agent != nil {
+		n.agent.SetReview(fork)
+	}
+	n.log.Info("review fork: enabled",
+		"skill_tool_iterations", n.cfg.ReviewSkillToolIterations,
+		"memory_turn_interval", n.cfg.ReviewMemoryTurnInterval)
 	return nil
 }
