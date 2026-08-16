@@ -50,9 +50,35 @@ func (n *Node) startTracing() error {
 	if err != nil {
 		return fmt.Errorf("trace: %w", err)
 	}
-	n.traces = trace.NewRecorder(n.log, sink)
+	sinks := []trace.Sink{sink}
+
+	// In ADDITION to the file, not instead of it. The file is the
+	// record; the collector is where you look. A collector going down
+	// must not lose the trace of the turn that was failing while it
+	// was down — which is exactly the trace anybody would want
+	// afterwards.
+	if endpoint := n.cfg.Trace.OTLPEndpoint; endpoint != "" {
+		otlp, err := trace.NewOTLPSink(trace.OTLPConfig{
+			Endpoint:    endpoint,
+			Insecure:    n.cfg.Trace.OTLPInsecure,
+			ServiceName: n.cfg.Trace.ServiceName,
+			NodeID:      n.cfg.NodeID,
+		})
+		if err != nil {
+			// Not fatal, and the file sink is why. Losing the collector
+			// degrades tracing to local-only; refusing to boot over it
+			// would take the assistant down to protect telemetry.
+			n.log.Error("trace: otlp export disabled", "endpoint", endpoint, "err", err)
+		} else {
+			sinks = append(sinks, otlp)
+			n.log.Info("trace: exporting to a collector",
+				"endpoint", endpoint, "insecure", n.cfg.Trace.OTLPInsecure)
+		}
+	}
+
+	n.traces = trace.NewRecorder(n.log, sinks...)
 	n.log.Info("trace: recording turns", "dir", dir,
-		"max_bytes", n.cfg.Trace.MaxBytes, "content_recorded", false)
+		"max_bytes", n.cfg.Trace.MaxBytes, "sinks", len(sinks), "content_recorded", false)
 	return nil
 }
 

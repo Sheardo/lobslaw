@@ -2638,8 +2638,12 @@ never be dropped becomes a reliability problem on the reply path.
 ### Acceptance
 
 - [x] Off by default. Absence, not a flag: with tracing off the recorder is nil, and a nil recorder is usable, so no instrumented path branches on whether tracing exists.
-- [ ] A turn's spans nest correctly in an OTel backend, with tokens and
-      cost as attributes.
+- [x] A turn's spans nest correctly in an OTel backend, with tokens and cost as attributes.
+      Written against the OTLP wire format rather than the OTel SDK: the SDK brings a tracer
+      provider, span processor, batcher and propagation layer, every one of which this package
+      already has, so adopting it would mean converting our spans into its spans so its batcher
+      could hand them to its exporter. Trace and span ids are HASHED from the turn and span ids
+      rather than generated, so a turn groups into one trace on every node and every re-export.
 - [x] No span carries message text, tool arguments or tool output. Asserted against the SERIALISED bytes rather than the struct, because the bytes are what leaves the process.
 - [x] A collector that hangs neither slows nor fails a turn; dropped spans are counted. Record
       never blocks — a full buffer drops and counts. A trace with a hole that says "4 dropped" is
