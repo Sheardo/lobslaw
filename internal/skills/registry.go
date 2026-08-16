@@ -85,6 +85,19 @@ func NewRegistryWithPolicy(log *slog.Logger, _ SigningPolicy) *Registry {
 // entry. Same-manifest-SHA re-puts are idempotent — they update the
 // candidate list but don't change the winner.
 func (r *Registry) Put(skill *Skill) {
+	// The capability floor, enforced here as well as at the parse
+	// entry point. Put is reachable from anywhere, and a rule that
+	// only one caller applies is a rule that a second caller silently
+	// does not — so an agent-tier skill asking to widen the
+	// deployment's surface is refused whatever route it took.
+	if skill.Tier == TierAgent {
+		if err := checkAgentFloor(&skill.Manifest); err != nil {
+			r.log.Error("skills: refusing an agent-authored skill",
+				"skill", skill.Manifest.Name, "err", err)
+			return
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	name := skill.Manifest.Name

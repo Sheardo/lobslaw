@@ -529,3 +529,46 @@ The escape hatch for an operator who wants to override a signed skill
 locally is a dev source that wins outright — **not** bumping a version.
 A rule that can be beaten by editing a number is not a rule.
 
+---
+
+## What an agent-authored skill may not do
+
+Tier-first precedence stops an agent taking a name it should not have.
+It says nothing about what an agent-authored skill may *do* once it has
+a name of its own — and a manifest is a capability request.
+
+Without a floor, a skill the agent wrote for itself could declare a
+credential grant, an egress allowlist, or a binary to fetch and
+execute. Each would be granted by the same machinery that grants them
+to an operator, on the strength of a document the agent wrote.
+
+| Declaration | At the agent tier |
+|---|---|
+| `credentials` | refused |
+| `binaries` | refused |
+| `network` | refused |
+| `requires_binary` | refused |
+| `storage` | **allowed** |
+
+Storage is allowed deliberately: it is scoped to mounts the operator
+already configured, so it cannot reach past what they permitted — and
+refusing it would stop the agent writing a skill that reads a file,
+which is most of them.
+
+Refused at **load**, not at invoke, and loudly. A skill that silently
+lost half its manifest would fail later in a way nobody can trace back
+to this decision; and a skill that asked for a credential and did not
+get one is not a working skill with a smaller blast radius, it is a
+broken one pretending.
+
+The refusal names every capability asked for — reporting the first and
+stopping means fixing a manifest one round trip per declaration — and
+says how an operator can grant them: **adopt the skill**. Copy it into
+the skills directory and it loads at the operator tier, where those
+declarations are legitimate. The floor caps the *agent*, not the
+capability.
+
+Enforced at `ParseAgentSkill` **and** at `Registry.Put`. A rule applied
+by one entry point is a rule a second entry point silently does not
+apply.
+

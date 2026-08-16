@@ -293,6 +293,31 @@ func Parse(dir string) (*Skill, error) {
 	return ParseWithPolicy(dir, SigningOff, nil)
 }
 
+// ParseAgentSkill parses a skill the agent wrote for itself.
+//
+// The door for materialised self-taught artefacts. Two things it does
+// that Parse does not: it tags the skill TierAgent, because a parsed
+// manifest carries no trace of having been machine-written and
+// provenance-by-location is what establishes it; and it applies the
+// capability floor, so a skill that asks to widen the deployment's
+// surface fails to load with the reason rather than loading with less
+// than it declared.
+//
+// Signing is off for this path by construction — an agent-authored
+// manifest has no publisher, and pretending to verify one would be
+// theatre.
+func ParseAgentSkill(dir string) (*Skill, error) {
+	skill, err := ParseWithPolicy(dir, SigningOff, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkAgentFloor(&skill.Manifest); err != nil {
+		return nil, err
+	}
+	skill.Tier = TierAgent
+	return skill, nil
+}
+
 // ParseWithPolicy is the production entry point. SigningOff ignores
 // signatures. SigningPrefer verifies when present — missing is
 // fine, invalid rejects (indicates tampering / broken publish).
