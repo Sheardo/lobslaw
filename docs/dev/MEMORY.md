@@ -860,3 +860,78 @@ for each is the obvious way to make this worse than the file it
 replaces. Losing a handful of counts to a crash is acceptable; losing
 the write path to contention is not.
 
+---
+
+## Staging what the agent writes
+
+```toml
+[memory]
+write_approval = true    # off by default
+```
+
+Memory that silently self-modifies and cannot be inspected is a trust
+problem. `lobslaw memory list` and the consolidation log answer *what
+happened*; neither answers *may this happen*, and the write lands
+either way.
+
+With the flag on, every `memory_write` the agent makes is staged for
+approval before it runs:
+
+```
+The agent wants to write a memory.
+  remember: john prefers terse replies (tags ["preference"])
+
+  [ once ]  [ this conversation ]  [ always ]  [ no ]
+```
+
+**Everything the agent writes**, not a guessed-at subset. A boundary
+drawn around "facts about the user" has to be inferred, and inference
+gets it wrong in both directions — missing the thing you cared about,
+and asking about a working note you did not.
+
+### It is a policy rule, not a branch
+
+The flag installs a low-priority rule:
+
+| | |
+|---|---|
+| action | `memory:write` |
+| effect | `require_confirmation` |
+| priority | lowest expressible |
+| id | `config:memory.write_approval` |
+
+That is what makes the answer reusable. **"This conversation"** becomes
+a session grant; **"always"** mints a visible, revocable policy rule;
+and an operator wanting something narrower writes an ordinary rule that
+outranks the default. A branch consulting a boolean would have needed
+its own notion of "already approved", and grown a second, subtly
+different approval system beside the one R2 built.
+
+The rule is held **in memory**, not written to the rule bucket. That
+bucket is raft-replicated operator intent; a rule derived from one
+node's config file is neither, and every node writing its own copy at
+boot would turn a local setting into contested cluster state.
+
+### Its own action
+
+`memory:write`, not `tool:exec`.
+
+Every deployment allows `tool:exec` on `memory_write` — otherwise the
+tool could not run at all — so reusing that action would mean the allow
+rule already in place silently satisfied the gate. `RequireApproval`
+takes no action parameter, so passing the wrong one is not expressible.
+
+### The prompt carries the content
+
+Unlike a trace span, which carries no content ever, the confirmation
+shows what is about to be written. The audience is the difference: a
+span goes to whatever telemetry the operator runs, while this goes to
+the person being asked to decide. A prompt that withholds the content
+cannot be answered on its merits, so it gets answered reflexively —
+which is worse than not asking.
+
+Truncated at 200 characters, because a confirmation three screens long
+is one nobody reads to the end.
+
+A **denial** carries no content. It is not a question, and the person
+seeing it is not deciding anything.

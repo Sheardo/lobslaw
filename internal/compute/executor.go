@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -104,6 +105,12 @@ type Executor struct {
 	// dispatch path — builtins, skills, MCP — honours a grant the
 	// user already gave. Nil grants nothing.
 	approvals *SessionApprovals
+
+	// gated maps a tool name to an EXTRA approval check run before it
+	// executes. Empty by default: a deployment that never opted in
+	// carries no additional check at all. See write_approval.go.
+	gateMu sync.RWMutex
+	gated  map[string]gatedTool
 }
 
 // SetSessionApprovals wires the session-scoped approval store. The
@@ -182,6 +189,13 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// confirmation. After policyAllow, so a path the operator's rules
 	// already deny is refused rather than prompted about.
 	if err := hardlineConfirm(req.Params); err != nil {
+		return nil, err
+	}
+	// The write gate, for the same reason and in the same place: a
+	// tool the operator's rules already deny is refused rather than
+	// prompted about. Only tools explicitly marked have one, so a
+	// deployment that never opted in pays a map lookup.
+	if err := e.checkWriteApproval(ctx, req.Claims, tool.Name, req.Params); err != nil {
 		return nil, err
 	}
 	if e.hooks != nil {

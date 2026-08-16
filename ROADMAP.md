@@ -54,7 +54,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ✅ | 🟠 P1 | S | — |
 | **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ✅ | 🟡 P2 | M | R11 |
 | **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
-| **R12** | [Memory transparency](#r12--memory-transparency) | 🟨 | 🟡 P2 | M | — |
+| **R12** | [Memory transparency](#r12--memory-transparency) | ✅ | 🟡 P2 | M | — |
 | **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ✅ | 🟠 P1 | M | R15, R16 |
 | **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟡 | 🟠 P1 | S | — |
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
@@ -1684,8 +1684,28 @@ Proposed, mostly falling out of R6's surfaces:
       often as the opposite and a log of changes cannot answer it. A decision that failed to apply
       is recorded as attempted, with the error, because that is exactly when somebody goes looking.
       Bounded at 90 days / 5000 entries, pruned by Dream itself.
-- [ ] Optional `memory.write_approval` (hermes's key name) staging agent-initiated writes for
+- [x] Optional `memory.write_approval` (hermes's key name) staging agent-initiated writes for
       approval, reusing R2's prompt machinery.
+      **Everything the agent writes is gated, not a guessed-at subset.** A boundary drawn around
+      "facts about the user" has to be inferred, and inference gets it wrong in both directions.
+
+      Built as a low-priority POLICY rule rather than a branch inside the tool, and that is what
+      makes the answer reusable: "for this conversation" is a session grant, "always" mints a
+      visible and revocable rule, and an operator wanting something narrower writes an ordinary
+      rule that outranks the config default. A branch consulting a bool would have needed its own
+      notion of "already approved" and grown a second, subtly different approval system beside R2.
+
+      Two things this needed. `policy.Engine.SetDefaults` holds config-derived rules IN MEMORY —
+      the rule bucket is raft-replicated operator intent, and every node writing its own copy at
+      boot would turn a local setting into contested cluster state. And the gate uses its own
+      action (`memory:write`), because reusing `tool:exec` would mean the allow rule that lets
+      memory_write run at all silently satisfied it. `RequireApproval` does not take an action
+      parameter, so that mistake is not expressible.
+
+      The prompt carries the content being written. Unlike a trace span, the audience here is the
+      person deciding — a confirmation that says only "the agent wants to write a memory" is one
+      nobody can answer usefully, so they answer it reflexively, which is worse than not asking.
+      A DENIAL carries no content: it is not a question, and the person seeing it is not deciding.
 
 ---
 

@@ -438,6 +438,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		MemoryDream:      cfg.Memory.Dream,
 		MemorySession:    cfg.Memory.Session,
 
+		MemoryWriteApproval:       cfg.Memory.WriteApproval,
 		MemoryPinnedProfileChars:  cfg.Memory.PinnedProfileChars,
 		MemoryPinnedNotesChars:    cfg.Memory.PinnedNotesChars,
 		SelfLearningMode:          cfg.SelfLearning.Mode,

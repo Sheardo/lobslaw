@@ -89,6 +89,10 @@ type Config struct {
 	// the auto-seeded session retention pruner.
 	MemorySession config.SessionConfig
 
+	// MemoryWriteApproval stages agent-initiated memory writes for
+	// approval. Off by default.
+	MemoryWriteApproval bool
+
 	// MemoryPinnedProfileChars / MemoryPinnedNotesChars cap the
 	// always-on blocks. Zero takes the defaults.
 	MemoryPinnedProfileChars int
