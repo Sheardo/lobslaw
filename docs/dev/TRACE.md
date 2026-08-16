@@ -226,9 +226,9 @@ harness already knows.
 ## What has landed
 
 The span model, the recorder, the local file sink, OTLP export,
-`lobslaw trace`, and provider-attempt instrumentation. The webhook
-sink and the non-LLM spans (retrieval, compaction, ingest) are not
-built yet, nor is tool context attribution.
+`lobslaw trace`, provider-attempt instrumentation, and tool context
+attribution. The webhook sink and the non-LLM spans (retrieval,
+compaction, ingest) are not built yet.
 
 ### Stored locally, contrary to the design above
 
@@ -374,3 +374,64 @@ A failed attempt is `ERROR` so a collector's own filters find it. A
 **skipped** candidate is `UNSET`: it did not fail, it was never tried,
 and colouring a protective decision red is how a working trust floor
 gets reported as an outage.
+
+---
+
+## Tool context attribution, as built
+
+```console
+$ lobslaw trace t-2
+turn t-2 — 4 spans, 2.6s, $0.0374
+  of which $0.0240 (64%) is re-sent tool output
+
+KIND           PROVIDER   NAME    TRY  OUTCOME  DURATION  TOKENS                      COST
+llm_call       anthropic  claude  0    ok       900ms     2000/60                     $0.0062
+tool_call                 fetch   0    ok       300ms     8000/0
+llm_call       anthropic  claude  0    ok       1.4s      10200/120                   $0.0312
+context_carry             fetch   1    ok                 8000 over 1 prompt_resends  $0.0240
+```
+
+`context_carry` is its **own kind**, not an attribute on the tool span.
+It is a different event at a different time: the tool ran once, and the
+cost accrued across every prompt afterwards. Folding them together
+would make a tool look expensive to *run* when what was expensive was
+carrying its output.
+
+Each carry span parents to its `tool_call`, so a collector nests the
+cost under the thing that caused it.
+
+### Stated as a share, never added
+
+The carried tokens were **already billed** on the `llm_call` spans.
+`lobslaw trace` reports them as a percentage of the turn rather than
+adding them to the total — summing both would double the token count
+and roughly double the cost, which would make the one command whose job
+is *"why did this cost what it did"* answer it wrongly.
+
+### Flushed on every exit path
+
+Attribution cannot be known until the turn ends, so it is emitted from
+a `defer` covering every exit: normal, budget-exceeded, confirmation,
+hard timeout, loop exhausted. A turn that ended unusually is the one
+whose cost somebody is asking about.
+
+The `tool_call` span itself is emitted **immediately**, not buffered —
+a turn that times out still has one.
+
+A tool carried in zero later prompts still gets a span, with zero cost.
+Omitting it would make "this tool was free" indistinguishable from
+"this tool was not recorded", and the first is a real answer: a tool
+called on the final round-trip is paid for once, in the reply, and
+never re-sent.
+
+### The one estimate, labelled
+
+Providers report usage for the prompt as a whole and never per message,
+so the share belonging to one tool result has to be approximated from
+its text. That uses the same chars/4 heuristic the context budget
+already applies — being *consistently* wrong with the budget is worth
+more than being *differently* wrong from it.
+
+Everything else is bookkeeping rather than estimation: the agent builds
+the message list, so it knows exactly which tool results are in each
+prompt and how many prompts followed.

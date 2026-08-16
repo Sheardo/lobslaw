@@ -695,11 +695,22 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	ctx, artifacts := WithArtifactCollector(ctx)
 	defer func() { resp.Attachments = artifacts.Collected() }()
 
+	// Attribution is flushed on EVERY exit — normal, budget-exceeded,
+	// confirmation, hard timeout, loop exhausted. A turn that ended
+	// unusually is the one whose cost somebody is asking about, so
+	// buffering it behind the happy path would lose it precisely where
+	// it is wanted.
+	attribution := newToolAttributor(a.cfg.Traces, req.TurnID)
+	defer attribution.flush()
+
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
 			"turn_id", req.TurnID, "loop", loop, "messages", len(messages))
 
 		chatResp, err := a.callLLM(ctx, req, messages)
+		if err == nil {
+			attribution.noteLLMCall(chatResp.pricing)
+		}
 		if err != nil {
 			// Context deadline / cancellation (e.g. gateway
 			// hard-timeout) → produce a graceful user-visible reply
@@ -765,10 +776,12 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		// Dispatch each tool call through the Executor. Results come
 		// back as tool-role messages for the next LLM round-trip.
 		for _, tc := range chatResp.ToolCalls {
+			toolStart := time.Now()
 			inv, confirmation, err := a.runToolCall(ctx, req, tc)
 			if err != nil {
 				return nil, fmt.Errorf("tool call %q: %w", tc.Name, err)
 			}
+			attribution.noteTool(inv, time.Since(toolStart), toolStart)
 			resp.ToolCalls = append(resp.ToolCalls, inv)
 			if confirmation != nil {
 				resp.NeedsConfirmation = true
@@ -994,6 +1007,10 @@ func decorateWithAttachments(text string, attachments []types.Attachment) string
 type chatWithCost struct {
 	*ChatResponse
 	cost CostRecord
+	// pricing is the winning provider's rate card, carried so the
+	// context-carry attribution can price re-sent tokens at the same
+	// rate the turn was actually billed at.
+	pricing types.ProviderPricing
 }
 
 // callLLM dispatches the LLM round-trip, fires PreLLMCall /
@@ -1054,7 +1071,7 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 		})
 	}
 
-	return &chatWithCost{ChatResponse: chatResp, cost: cost}, nil
+	return &chatWithCost{ChatResponse: chatResp, cost: cost, pricing: dispatched.entry.Pricing}, nil
 }
 
 // dispatchWithBackup calls the primary LLM provider; on a hard
