@@ -1584,11 +1584,16 @@ one place where both references are ahead on *product* rather than plumbing:
 
 Proposed, mostly falling out of R6's surfaces:
 
-- `lobslaw memory ls | show | forget`, with `--quarantined` from R5.
-- A consolidation log: what Dream merged, superseded or pruned, and why — the `MergeDecision`
-  verdict and reason are already computed and then discarded.
-- Optional `memory.write_approval` (hermes's key name) staging agent-initiated writes for approval,
-  reusing R2's prompt machinery.
+- [x] `lobslaw memory show | list | forget | share | unshare` — shipped earlier.
+- [x] A consolidation log: what Dream merged, superseded or left alone, and why. The verdict and
+      reason were already computed and then written to a log line and discarded; they are now a
+      durable owner-scoped record, readable with `lobslaw memory consolidations`.
+      Every verdict is kept, including `keep_distinct` — "why did it NOT merge these" is asked as
+      often as the opposite and a log of changes cannot answer it. A decision that failed to apply
+      is recorded as attempted, with the error, because that is exactly when somebody goes looking.
+      Bounded at 90 days / 5000 entries, pruned by Dream itself.
+- [ ] Optional `memory.write_approval` (hermes's key name) staging agent-initiated writes for
+      approval, reusing R2's prompt machinery.
 
 ---
 

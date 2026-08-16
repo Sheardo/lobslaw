@@ -32,6 +32,7 @@ subcommands:
   forget <filter>  delete records AND the consolidations built from them
   share <id>...    make owned records readable cluster-wide
   unshare <id>...  return shared records to their owner only
+  consolidations   what Dream merged, superseded or left alone, and why
 
 forget, share and unshare are DRY RUN unless --apply is given.
 
@@ -59,6 +60,8 @@ func dispatchMemory(args []string) bool {
 		runOffline("memory forget", memoryForget, sub[1:])
 	case "share":
 		runOffline("memory share", memoryShare, sub[1:])
+	case "consolidations":
+		runOffline("memory consolidations", memoryConsolidations, sub[1:])
 	case "unshare":
 		runOffline("memory unshare", memoryUnshare, sub[1:])
 	default:

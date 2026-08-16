@@ -145,7 +145,45 @@ systemPrompt := promptgen.BuildContext(top)
 
 Agent composes cheap retrieval + expensive semantic filtering. Memory service sees only the Search call.
 
-### Dream-time merge (Phase 3.4, landed)
+### Consolidation log
+
+Dream merges, supersedes and prunes memories on its own schedule. The
+verdict and the reason were computed on every run and then written to a
+log line and forgotten, so "why did it merge those two notes" had no
+answer and "what has it been doing to my memory" had none either.
+
+Memory that silently rewrites itself and cannot be inspected is a trust
+problem for a privacy-first product, so every adjudication is now a
+durable record (`BucketConsolidations`):
+
+```
+lobslaw memory consolidations
+lobslaw memory consolidations --verdict merge --since 168h
+lobslaw memory consolidations --owner user:alice --full
+```
+
+Offline, like the rest of `lobslaw memory`.
+
+**Every verdict is recorded, including `keep_distinct`.** "Why did it
+*not* merge these" gets asked as often as the opposite, and a log of
+changes alone cannot answer it.
+
+**A decision that failed to apply is recorded as attempted**, with the
+error. That is precisely when a user notices something is wrong, and a
+log that showed nothing would hide the case it exists for.
+
+**Source ids outlive the originals.** After a merge the log is the only
+remaining record of what went into the consolidation.
+
+**Owner-scoped**, like the records themselves — a consolidation log
+that leaked across owners would describe one person's memories to
+another.
+
+Bounded by 90 days or 5000 entries, whichever bites first, pruned by
+Dream itself. A second scheduled task to tidy after the first is one
+more thing to misconfigure.
+
+## Dream-time merge (Phase 3.4, landed)
 
 ```go
 // DreamRunner.Run → after summarise → after prune:

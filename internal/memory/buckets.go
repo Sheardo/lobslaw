@@ -58,6 +58,13 @@ const (
 	// prompt issued by another, and so a restart does not lose the
 	// turn the user was answering. See R2.
 	BucketPrompts = "prompts"
+
+	// BucketConsolidations holds Dream's adjudication log: what it
+	// decided about each cluster of near-duplicate memories and why.
+	// Read by `lobslaw memory consolidations`; pruned by Dream itself
+	// so a long-lived cluster does not accumulate a record per cluster
+	// per night forever.
+	BucketConsolidations = "consolidations"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -81,4 +88,5 @@ var allBuckets = []string{
 	BucketSessionMessages,
 	BucketSessionLeases,
 	BucketPrompts,
+	BucketConsolidations,
 }

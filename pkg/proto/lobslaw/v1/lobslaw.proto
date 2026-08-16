@@ -323,6 +323,52 @@ message Cluster {
   float avg_similarity = 4;
 }
 
+// ConsolidationRecord is one adjudication Dream made about a cluster
+// of near-duplicate memories: what it decided, why, and to what.
+//
+// Memory that silently rewrites itself and cannot be inspected is a
+// trust problem for a privacy-first product. The verdict and reason
+// were already computed on every run and then written to a log line
+// and forgotten — so a user asking "why did it merge those two notes"
+// had no answer, and one asking "what has it been doing" had none
+// either.
+//
+// Kept even for KEEP_DISTINCT. "Why did it NOT merge these" is asked
+// as often as the opposite, and a log that only records changes
+// cannot answer it.
+message ConsolidationRecord {
+  string id = 1;
+  string cluster_id = 2;
+  // verdict mirrors MergeVerdict: "merge" | "keep_distinct" |
+  // "conflict" | "supersedes". A string rather than an enum because
+  // the adjudicator is pluggable and a new implementation adding a
+  // verdict should not need a proto change to be able to explain
+  // itself.
+  string verdict = 3;
+  string reason = 4;
+  // source_ids are the records the decision was about. Retained even
+  // when they were merged away, so the log still names what went into
+  // a consolidation after the originals are gone.
+  repeated string source_ids = 5;
+  // result_id is the consolidated record for a merge, or the tag
+  // applied for conflict/supersedes. Empty for keep_distinct.
+  string result_id = 6;
+  int32 member_count = 7;
+  float avg_similarity = 8;
+  // owner scopes reads the same way the records themselves are
+  // scoped. A consolidation log that leaked across owners would
+  // describe one person's memories to another.
+  string owner = 9;
+  google.protobuf.Timestamp created_at = 10;
+  // applied is false when the verdict was decided but the write
+  // failed. Recording the attempt matters: a merge that was chosen
+  // and then errored is exactly the case where a user notices
+  // something is wrong and needs the log to say so.
+  bool applied = 11;
+  // error carries why, when applied is false.
+  string error = 12;
+}
+
 // -----------------------------------------------------------------------------
 // PolicyService — RBAC, risk tiers, confirmation
 // -----------------------------------------------------------------------------
@@ -969,6 +1015,7 @@ message LogEntry {
     SessionRecord session = 23;
     SessionLease session_lease = 25;
     PromptRecord prompt = 26;
+    ConsolidationRecord consolidation = 27;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
