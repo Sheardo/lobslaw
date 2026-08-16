@@ -221,6 +221,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.PinnedMemory:
 		return p.Revision, true
+	case *lobslawv1.SelfTaughtRecord:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -237,6 +239,8 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.PromptRecord:
 		p.Revision = rev
 	case *lobslawv1.PinnedMemory:
+		p.Revision = rev
+	case *lobslawv1.SelfTaughtRecord:
 		p.Revision = rev
 	}
 }
@@ -478,6 +482,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketSelfTaught:
+		var r lobslawv1.SelfTaughtRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
@@ -489,7 +499,7 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 // mid-apply.
 func claimableBucket(bucket string) bool {
 	switch bucket {
-	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned:
+	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned, BucketSelfTaught:
 		return true
 	default:
 		return false
@@ -538,6 +548,18 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketConsolidations, p.Consolidation, nil
 	case *lobslawv1.LogEntry_Pinned:
 		return BucketPinned, p.Pinned, nil
+	case *lobslawv1.LogEntry_SelfTaught:
+		// State decides the bucket, because "archived" has to be a
+		// place things move TO rather than a filter over the live set
+		// — that is what makes "show me what it stopped using" a scan
+		// rather than a predicate, and what stops an archived artefact
+		// being one bad filter away from loading again.
+		if p.SelfTaught.GetState() == lobslawv1.SelfTaughtState_SELF_TAUGHT_STATE_ARCHIVED {
+			return BucketSelfTaughtArchive, p.SelfTaught, nil
+		}
+		return BucketSelfTaught, p.SelfTaught, nil
+	case *lobslawv1.LogEntry_SelfTaughtUsage:
+		return BucketSelfTaughtUsage, p.SelfTaughtUsage, nil
 	case nil:
 		return "", nil, fmt.Errorf("log entry has no payload")
 	default:

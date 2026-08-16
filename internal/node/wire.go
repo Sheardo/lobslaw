@@ -138,6 +138,7 @@ func nodeWireStages() []WireStage {
 		// write to it, and a store constructed later would leave them
 		// silently unregistered.
 		{Name: "pinned-memory", Gate: gateRaft, Wire: (*Node).wirePinnedMemory},
+		{Name: "self-taught", Gate: gateRaft, Wire: (*Node).wireSelfTaught},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},

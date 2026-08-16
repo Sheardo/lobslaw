@@ -93,6 +93,9 @@ type Config struct {
 	MemoryPinnedProfileChars int
 	MemoryPinnedNotesChars   int
 
+	// SelfLearningMode is "off" | "propose" | "auto". Empty is off.
+	SelfLearningMode string
+
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
 	Policy config.PolicyConfig
@@ -253,6 +256,11 @@ type Node struct {
 	// approvals is shared between the executor (which spends session
 	// approvals) and the channels (which record them).
 	approvals *compute.SessionApprovals
+
+	// selfTaught holds artefacts the agent authored for itself. Nil
+	// when self-learning is off, and nil is the enforcement: there is
+	// no write path to guard because there is no store.
+	selfTaught *memory.SelfTaughtStore
 
 	// pinnedStore holds the always-on memory blocks rendered into
 	// every system prompt. Nil on a node without raft — there is

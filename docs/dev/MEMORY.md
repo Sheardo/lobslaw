@@ -647,3 +647,86 @@ user id the model can supply is one a prompt injection can supply, and
 writing into somebody else's always-on block would put attacker text in
 their system prompt forever.
 
+---
+
+## The self-taught store
+
+Provenance by **location**, not by tag. If a record is in
+`BucketSelfTaught`, the agent authored it — there is no marker to
+forget, forge, or lose.
+
+| Property | Why the separate store buys it |
+|---|---|
+| Provenance | structural, not remembered |
+| Disable | a capability boundary, not a branch |
+| Blast radius | "forget everything you taught yourself" is one operation |
+| Audit | "show me what it decided on its own" is one namespace scan |
+| Curator scope | the curator's domain *is* the store |
+
+The boundary is behaviour: an episodic record is data the model *may*
+retrieve and weigh; a skill or a pinned entry is an instruction it
+*follows*. Those deserve different custody.
+
+### The switch
+
+```toml
+[self_learning]
+mode = "propose"   # "off" | "propose" | "auto"
+```
+
+Three states because "on/off" is the wrong shape here — it leaves no
+room for *"write it down but do not act on it until I have looked"*,
+which is the setting most people want and the default.
+
+**`off` is enforced at wiring.** `wireSelfTaught` builds nothing and
+every dependent is *absent*. "The capability is not present" is a
+different and stronger claim than "the call sites check a flag", and
+the second is not what an operator disabling this is asking for. An
+unrecognised mode is off: a typo must never be the reason an agent
+started following its own instructions.
+
+The mode decides an artefact's initial state, **not the caller** — a
+caller that could choose would eventually choose ACTIVE somewhere and
+the operator's setting would stop meaning what it says.
+
+### Archive, never delete
+
+Deletion is not a lifecycle transition. For a product whose pitch is
+trust, an agent that can silently erase evidence of what it taught
+itself is the wrong default.
+
+```
+lobslaw learned list
+lobslaw learned list --archived
+lobslaw learned discard --apply       # archives everything unpinned
+lobslaw learned restore <id> --apply  # comes back PROPOSED, not ACTIVE
+```
+
+Restoring returns something as a proposal because archiving implied a
+decision, and putting it straight back in force skips it.
+
+Pinned artefacts resist archiving and `discard` both: somebody who
+decided an artefact is worth keeping should not have to defend it every
+fortnight.
+
+Archiving is two writes (the FSM routes by state, and a record cannot
+be in two buckets atomically). A crash between them leaves a copy in
+both; the live listing filters `ARCHIVED` out, so the duplicate is
+invisible and the next archive clears it. The failure mode is a stale
+copy nobody reads — the right side to err on for a store whose promise
+is that nothing is lost.
+
+### Usage counters
+
+A bucket, not a sidecar file, for reasons stronger than tidiness:
+counters inside a manifest would invalidate its digest and break
+verification; a per-node file is invisible to peers, so every node but
+one would compute staleness from partial data; and the FSM already
+provides the atomicity a sidecar needs `fcntl` locking for.
+
+**Batched in-process and flushed**, never one `raft.Apply` per use.
+Counter bumps are high-frequency and low-value, and paying consensus
+for each is the obvious way to make this worse than the file it
+replaces. Losing a handful of counts to a crash is acceptable; losing
+the write path to contention is not.
+

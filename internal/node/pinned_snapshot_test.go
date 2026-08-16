@@ -48,7 +48,14 @@ func pinnedNode(t *testing.T) (*Node, *memory.PinnedStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Node{pinnedStore: ps, log: slog.New(slog.DiscardHandler)}, ps
+	// raft and store are set too, so a test that wires another
+	// raft-backed subsystem onto this fixture does not need its own.
+	return &Node{
+		pinnedStore: ps,
+		raft:        node,
+		store:       store,
+		log:         slog.New(slog.DiscardHandler),
+	}, ps
 }
 
 // The acceptance criterion: the prefix is byte-identical across turns

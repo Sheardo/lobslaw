@@ -28,8 +28,12 @@ type Config struct {
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
 	Identity  IdentityConfig   `koanf:"identity"`
-	Users     []UserConfig     `koanf:"user"`
-	Binaries  []BinaryConfig   `koanf:"binary"`
+	// SelfLearning defaults to off — the zero value of Mode parses to
+	// off, so a config that does not mention it has the capability
+	// absent rather than merely unused.
+	SelfLearning SelfLearningConfig `koanf:"self_learning"`
+	Users        []UserConfig       `koanf:"user"`
+	Binaries     []BinaryConfig     `koanf:"binary"`
 
 	// resolvedPath is the filesystem path Load resolved via
 	// findConfigPath. Empty when no config.toml was found (env-only
@@ -73,6 +77,20 @@ type MemoryConfig struct {
 	// operator can reason about. Zero takes the defaults.
 	PinnedProfileChars int `koanf:"pinned_profile_chars"`
 	PinnedNotesChars   int `koanf:"pinned_notes_chars"`
+}
+
+// SelfLearningConfig governs whether the agent may write instructions
+// for itself, and what happens when it does.
+//
+// Three states rather than a boolean. "On" and "off" leaves no room
+// for "write it down but do not act on it until I have looked", which
+// is the setting most people actually want — and it is the default
+// here for that reason.
+type SelfLearningConfig struct {
+	// Mode is "off" | "propose" | "auto". Anything unrecognised,
+	// including empty, is off: a typo must never be the reason an
+	// agent started following its own instructions.
+	Mode string `koanf:"mode"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

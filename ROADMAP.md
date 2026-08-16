@@ -1868,13 +1868,25 @@ present", and the second is what an operator disabling self-learning is asking f
 
 ### Acceptance
 
-- [ ] With `mode = "off"`, no self-taught bucket is opened and no self-taught artefact can load.
-      Asserted by wiring, not by mocking a flag.
-- [ ] A self-taught skill never shadows a signed or operator skill of the same name.
+- [x] With `mode = "off"`, no store is constructed. Asserted by calling `wireSelfTaught` and
+      checking the field is nil — not by mocking a flag. An unrecognised mode is off too.
+- [ ] A self-taught skill never shadows a signed or operator skill of the same name. **R18 owns
+      this** — the store-to-cache contract and the tier-first winner rule are its scope, and this
+      item contributes the `BucketSelfTaught` source it arbitrates over.
 - [ ] An `agent`-tier skill declaring a new binary or MCP server fails to load, with the reason.
-- [ ] `propose` mode artefacts are inert until approved.
-- [ ] One command lists, and one command discards, everything self-taught.
-- [ ] Usage counters survive a leader change and aggregate across nodes.
+      Also R18: the loader that would enforce it is the one R18 builds.
+- [x] `propose` mode artefacts are inert until approved — `Active()` excludes them, and the mode
+      decides the initial state rather than the caller, so a caller cannot smuggle ACTIVE past it.
+- [x] One command lists (`lobslaw learned list`) and one discards (`learned discard`) everything
+      self-taught. Nothing deletes: archived artefacts stay readable with `--archived` and come
+      back with `learned restore`, as proposals rather than active.
+- [x] Usage counters aggregate in raft rather than in a per-node file, so they survive a leader
+      change and every node computes staleness from the same data. Batched in-process and flushed,
+      because paying consensus per `skill_view` is the obvious way to make this worse than the
+      sidecar it replaces.
+
+Pinned artefacts resist both archiving and `discard` — somebody who decided an artefact is worth
+keeping should not have to defend it from the curator every fortnight.
 
 ---
 
