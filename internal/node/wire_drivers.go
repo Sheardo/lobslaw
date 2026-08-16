@@ -8,6 +8,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/elevenlabs"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/veo"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -42,6 +43,7 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
+		s.RegisterJob(veo.DriverName, veoJobFactory)
 		driverSet = s
 	})
 	return driverSet
@@ -105,6 +107,16 @@ func elevenlabsSpeakFactory(cfg compute.SpeakDriverConfig) (compute.SpeakDriver,
 		Model:      cfg.Model,
 		Voice:      cfg.Voice,
 		Format:     cfg.Format,
+		Credential: cfg.Credential,
+		HTTPClient: cfg.HTTPClient,
+	})
+}
+
+// veoJobFactory adapts the Vertex AI Veo driver.
+func veoJobFactory(cfg compute.JobDriverConfig) (compute.JobDriver, error) {
+	return veo.New(veo.Config{
+		Endpoint:   cfg.Endpoint,
+		Model:      cfg.Model,
 		Credential: cfg.Credential,
 		HTTPClient: cfg.HTTPClient,
 	})
