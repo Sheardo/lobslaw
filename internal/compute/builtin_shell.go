@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmylchreest/lobslaw/internal/policy"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -83,6 +84,17 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	if cmd == "" {
 		return nil, 2, errors.New("shell_command: command is required")
 	}
+	// The compiled-in floor first. shellDenylist below is the
+	// operator-facing layer and its own comment anticipates being
+	// relaxed by config; this one never is, and checking it here as
+	// well as in the executor means a future caller reaching the
+	// builtin directly still hits it.
+	if err := policy.CheckCommand(cmd); err != nil {
+		return nil, 2, err
+	}
+	if err := policy.CheckCommandPaths(cmd); err != nil {
+		return nil, 2, err
+	}
 	for _, bad := range shellDenylist {
 		if strings.Contains(cmd, bad) {
 			return nil, 2, fmt.Errorf("shell_command: rejected — matches denylist %q", bad)
@@ -123,8 +135,8 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	// shell_command call can't escape mount-defined boundaries. On
 	// non-Linux platforms sandbox.Apply is a no-op; we log once at
 	// boot in that case so the operator knows shell runs unsandboxed.
-	if policy := buildShellPolicy(); policy != nil {
-		if err := sandbox.Apply(c, policy); err != nil {
+	if sbPolicy := buildShellPolicy(); sbPolicy != nil {
+		if err := sandbox.Apply(c, sbPolicy); err != nil {
 			return nil, 1, fmt.Errorf("shell_command: sandbox apply: %w", err)
 		}
 	}
