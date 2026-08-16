@@ -131,6 +131,57 @@ func (o *OfflineSelfTaught) RejectPending(rec *lobslawv1.SelfTaughtRecord) error
 	return o.write(BucketSelfTaught, updated)
 }
 
+// History lists an artefact's prior versions, newest first.
+func (o *OfflineSelfTaught) History(id string) ([]*lobslawv1.SelfTaughtRecord, error) {
+	var out []*lobslawv1.SelfTaughtRecord
+	err := o.store.ForEachPrefix(BucketSelfTaughtHistory, historyPrefix(id),
+		func(_ string, raw []byte) error {
+			var rec lobslawv1.SelfTaughtRecord
+			if err := proto.Unmarshal(raw, &rec); err != nil {
+				return nil //nolint:nilerr // one unreadable version must not hide the rest
+			}
+			out = append(out, &rec)
+			return nil
+		})
+	if err != nil {
+		return nil, fmt.Errorf("learned: history %s: %w", id, err)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Version > out[j].Version })
+	return out, nil
+}
+
+// Rollback restores a prior version, offline.
+//
+// The current version is snapshotted first, so a rollback to the wrong
+// version has not destroyed the one you were on.
+func (o *OfflineSelfTaught) Rollback(current *lobslawv1.SelfTaughtRecord, version uint32) error {
+	raw, err := o.store.Get(BucketSelfTaughtHistory, historyKey(current.Id, version))
+	if err != nil {
+		return fmt.Errorf("learned: %s has no version %d in history", current.Id, version)
+	}
+	var target lobslawv1.SelfTaughtRecord
+	if err := proto.Unmarshal(raw, &target); err != nil {
+		return fmt.Errorf("learned: decode version %d: %w", version, err)
+	}
+
+	snapshot := proto.Clone(current).(*lobslawv1.SelfTaughtRecord)
+	snapshot.Pending = nil
+	snapshot.Id = historyKey(current.Id, current.Version)
+	if err := o.write(BucketSelfTaughtHistory, snapshot); err != nil {
+		return err
+	}
+
+	restored := proto.Clone(current).(*lobslawv1.SelfTaughtRecord)
+	restored.Body = target.Body
+	restored.Files = target.Files
+	restored.Description = target.Description
+	restored.Embedding = target.Embedding
+	restored.Version = current.Version + 1
+	restored.Pending = nil
+	restored.UpdatedAt = timestamppb.Now()
+	return o.write(BucketSelfTaught, restored)
+}
+
 // Usage reads the aggregated counters.
 func (o *OfflineSelfTaught) Usage(id string) *lobslawv1.SelfTaughtUsage {
 	raw, err := o.store.Get(BucketSelfTaughtUsage, id)

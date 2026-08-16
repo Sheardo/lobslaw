@@ -102,6 +102,12 @@ type Config struct {
 	ReviewSkillToolIterations int
 	ReviewMemoryTurnInterval  int
 
+	// SelfTaughtHistoryDepth bounds retained prior versions; the two
+	// size fields bound one artefact. Zero takes the defaults.
+	SelfTaughtHistoryDepth  int
+	SelfTaughtMaxFileBytes  int
+	SelfTaughtMaxTotalBytes int
+
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
 	Policy config.PolicyConfig

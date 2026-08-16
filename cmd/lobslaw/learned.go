@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/memory"
@@ -29,6 +30,8 @@ subcommands:
   pending              refinements staged against a live artefact
   accept <id>...       apply a staged refinement
   reject <id>...       discard a staged refinement, leaving the live one
+  history <id>         prior versions kept for rollback
+  rollback <id> <ver>  restore a prior version as the current one
 
 Nothing here deletes. Archived artefacts stay readable with
 --archived — an agent that can silently erase evidence of what it
@@ -63,6 +66,10 @@ func dispatchLearned(args []string) bool {
 		err = learnedAccept(sub[1:])
 	case "reject":
 		err = learnedReject(sub[1:])
+	case "history":
+		err = learnedHistory(sub[1:])
+	case "rollback":
+		err = learnedRollback(sub[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
 		os.Exit(2)
@@ -328,6 +335,97 @@ func decidePending(st *memory.OfflineSelfTaught, ids []string, apply, accept boo
 		}
 	}
 	return nil
+}
+
+func learnedHistory(args []string) error {
+	fs := flag.NewFlagSet("learned history", flag.ExitOnError)
+	var store offlineStore
+	store.bind(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: lobslaw learned history <id>")
+	}
+	s, path, err := store.open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	st := memory.NewOfflineSelfTaught(s)
+	current, _, err := st.Find(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	versions, err := st.History(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s\n", path)
+	fmt.Printf("  v%-4d %-9s (current)  %s\n", current.Version,
+		stateLabel(current.State), firstLine(current.Description))
+	for _, v := range versions {
+		fmt.Printf("  v%-4d %-9s            %s\n", v.Version,
+			stateLabel(v.State), firstLine(v.Description))
+	}
+	if len(versions) == 0 {
+		fmt.Println("\nno prior versions retained.")
+		return nil
+	}
+	fmt.Printf("\nRestore with: lobslaw learned rollback %s <version> --apply\n", fs.Arg(0))
+	return nil
+}
+
+func learnedRollback(args []string) error {
+	fs := flag.NewFlagSet("learned rollback", flag.ExitOnError)
+	var store offlineStore
+	store.bind(fs)
+	apply := fs.Bool("apply", false, "actually write (default is a dry run)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 2 {
+		return fmt.Errorf("usage: lobslaw learned rollback <id> <version> [--apply]")
+	}
+	version, err := strconv.ParseUint(fs.Arg(1), 10, 32)
+	if err != nil {
+		return fmt.Errorf("version must be a number: %w", err)
+	}
+
+	s, path, err := store.open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	st := memory.NewOfflineSelfTaught(s)
+	current, _, err := st.Find(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", path)
+	fmt.Printf("  %-36s v%d -> restore v%d as v%d\n",
+		fs.Arg(0), current.Version, version, current.Version+1)
+	if !*apply {
+		fmt.Println("\nDRY RUN — nothing was written. Re-run with --apply.")
+		return nil
+	}
+	if err := st.Rollback(current, uint32(version)); err != nil {
+		return err
+	}
+	fmt.Println("\nRolled back. The version you were on is still in history.")
+	return nil
+}
+
+// firstLine keeps a listing to one row per version even when a
+// description slipped past its single-line rule.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 func learnedJSON(r *lobslawv1.SelfTaughtRecord, st *memory.OfflineSelfTaught) map[string]any {

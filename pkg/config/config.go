@@ -101,6 +101,24 @@ type SelfLearningConfig struct {
 	// axis.
 	ReviewSkillToolIterations int `koanf:"review_skill_tool_iterations"`
 	ReviewMemoryTurnInterval  int `koanf:"review_memory_turn_interval"`
+
+	// HistoryDepth is how many PRIOR versions of an artefact are kept
+	// for rollback. Named for what it bounds: "keep_versions" does not
+	// say whether the active version counts, which is the first thing
+	// anybody asks. The active version is always kept and does not
+	// count toward this. Zero takes the default of 10.
+	//
+	// Bounded because it is not free: every version lives in the log
+	// and in every snapshot thereafter, on every node.
+	HistoryDepth int `koanf:"history_depth"`
+
+	// Size limits per artefact, in bytes. Text-sized on purpose — the
+	// store holds instructions, not payloads, and anything genuinely
+	// large belongs in storage with only its digest in the log.
+	// Exceeding either fails the write and names the offending path.
+	// Zero takes the defaults (256 KiB per file, 1 MiB per artefact).
+	MaxArtefactFileBytes  int `koanf:"max_artefact_file_bytes"`
+	MaxArtefactTotalBytes int `koanf:"max_artefact_total_bytes"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

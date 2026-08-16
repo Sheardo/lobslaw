@@ -7290,6 +7290,7 @@ type LogEntry struct {
 	//	*LogEntry_Pinned
 	//	*LogEntry_SelfTaught
 	//	*LogEntry_SelfTaughtUsage
+	//	*LogEntry_SelfTaughtHistory
 	Payload isLogEntry_Payload `protobuf_oneof:"payload"`
 	// LOG_OP_CLAIM only: the value we expect on the current record's
 	// claimed_by field before we write. Used to enforce CAS semantics.
@@ -7536,6 +7537,15 @@ func (x *LogEntry) GetSelfTaughtUsage() *SelfTaughtUsage {
 	return nil
 }
 
+func (x *LogEntry) GetSelfTaughtHistory() *SelfTaughtRecord {
+	if x != nil {
+		if x, ok := x.Payload.(*LogEntry_SelfTaughtHistory); ok {
+			return x.SelfTaughtHistory
+		}
+	}
+	return nil
+}
+
 func (x *LogEntry) GetExpectedClaimer() string {
 	if x != nil {
 		return x.ExpectedClaimer
@@ -7633,6 +7643,12 @@ type LogEntry_SelfTaughtUsage struct {
 	SelfTaughtUsage *SelfTaughtUsage `protobuf:"bytes,30,opt,name=self_taught_usage,json=selfTaughtUsage,proto3,oneof"`
 }
 
+type LogEntry_SelfTaughtHistory struct {
+	// A history entry is the same message in a different bucket: a
+	// prior version is a record, not a different kind of thing.
+	SelfTaughtHistory *SelfTaughtRecord `protobuf:"bytes,31,opt,name=self_taught_history,json=selfTaughtHistory,proto3,oneof"`
+}
+
 func (*LogEntry_PolicyRule) isLogEntry_Payload() {}
 
 func (*LogEntry_ScheduledTask) isLogEntry_Payload() {}
@@ -7670,6 +7686,8 @@ func (*LogEntry_Pinned) isLogEntry_Payload() {}
 func (*LogEntry_SelfTaught) isLogEntry_Payload() {}
 
 func (*LogEntry_SelfTaughtUsage) isLogEntry_Payload() {}
+
+func (*LogEntry_SelfTaughtHistory) isLogEntry_Payload() {}
 
 // Continuation is everything needed to resume a turn on a different
 // node. The in-memory registry stashed a live []Message and a
@@ -8613,7 +8631,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"claimed_by\x18\x02 \x01(\tR\tclaimedBy\x12D\n" +
 	"\x10claim_expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\x0eclaimExpiresAt\x12\x17\n" +
 	"\aturn_id\x18\x04 \x01(\tR\x06turnId\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x04R\brevision\"\x82\v\n" +
+	"\brevision\x18\x05 \x01(\x04R\brevision\"\xd2\v\n" +
 	"\bLogEntry\x12!\n" +
 	"\x02op\x18\x01 \x01(\x0e2\x11.lobslaw.v1.LogOpR\x02op\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x129\n" +
@@ -8644,7 +8662,8 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x06pinned\x18\x1c \x01(\v2\x18.lobslaw.v1.PinnedMemoryH\x00R\x06pinned\x12?\n" +
 	"\vself_taught\x18\x1d \x01(\v2\x1c.lobslaw.v1.SelfTaughtRecordH\x00R\n" +
 	"selfTaught\x12I\n" +
-	"\x11self_taught_usage\x18\x1e \x01(\v2\x1b.lobslaw.v1.SelfTaughtUsageH\x00R\x0fselfTaughtUsage\x12)\n" +
+	"\x11self_taught_usage\x18\x1e \x01(\v2\x1b.lobslaw.v1.SelfTaughtUsageH\x00R\x0fselfTaughtUsage\x12N\n" +
+	"\x13self_taught_history\x18\x1f \x01(\v2\x1c.lobslaw.v1.SelfTaughtRecordH\x00R\x11selfTaughtHistory\x12)\n" +
 	"\x10expected_claimer\x18\x14 \x01(\tR\x0fexpectedClaimer\x120\n" +
 	"\x11expected_revision\x18\x18 \x01(\x04H\x01R\x10expectedRevision\x88\x01\x01B\t\n" +
 	"\apayloadB\x14\n" +
@@ -9043,84 +9062,85 @@ var file_lobslaw_v1_lobslaw_proto_depIdxs = []int32{
 	97,  // 119: lobslaw.v1.LogEntry.pinned:type_name -> lobslaw.v1.PinnedMemory
 	98,  // 120: lobslaw.v1.LogEntry.self_taught:type_name -> lobslaw.v1.SelfTaughtRecord
 	100, // 121: lobslaw.v1.LogEntry.self_taught_usage:type_name -> lobslaw.v1.SelfTaughtUsage
-	103, // 122: lobslaw.v1.Continuation.messages:type_name -> lobslaw.v1.SessionMessage
-	46,  // 123: lobslaw.v1.Continuation.claims:type_name -> lobslaw.v1.Claims
-	6,   // 124: lobslaw.v1.PromptRecord.decision:type_name -> lobslaw.v1.PromptDecision
-	7,   // 125: lobslaw.v1.PromptRecord.scope:type_name -> lobslaw.v1.PromptScope
-	122, // 126: lobslaw.v1.PromptRecord.created_at:type_name -> google.protobuf.Timestamp
-	122, // 127: lobslaw.v1.PromptRecord.expires_at:type_name -> google.protobuf.Timestamp
-	108, // 128: lobslaw.v1.PromptRecord.continuation:type_name -> lobslaw.v1.Continuation
-	122, // 129: lobslaw.v1.PromptRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
-	95,  // 130: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry.value:type_name -> lobslaw.v1.AllowedScopes
-	13,  // 131: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
-	15,  // 132: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
-	17,  // 133: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
-	19,  // 134: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
-	21,  // 135: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
-	23,  // 136: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
-	11,  // 137: lobslaw.v1.NodeService.Propose:input_type -> lobslaw.v1.ProposeRequest
-	28,  // 138: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
-	30,  // 139: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
-	32,  // 140: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
-	34,  // 141: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
-	36,  // 142: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
-	38,  // 143: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
-	40,  // 144: lobslaw.v1.MemoryService.FindClusters:input_type -> lobslaw.v1.FindClustersRequest
-	47,  // 145: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
-	49,  // 146: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
-	51,  // 147: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
-	53,  // 148: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
-	56,  // 149: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
-	58,  // 150: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
-	60,  // 151: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
-	62,  // 152: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
-	64,  // 153: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
-	70,  // 154: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
-	72,  // 155: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
-	74,  // 156: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
-	77,  // 157: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
-	79,  // 158: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
-	81,  // 159: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
-	84,  // 160: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
-	86,  // 161: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
-	88,  // 162: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
-	14,  // 163: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
-	16,  // 164: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
-	18,  // 165: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
-	20,  // 166: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
-	22,  // 167: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
-	24,  // 168: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
-	12,  // 169: lobslaw.v1.NodeService.Propose:output_type -> lobslaw.v1.ProposeResponse
-	29,  // 170: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
-	31,  // 171: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
-	33,  // 172: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
-	35,  // 173: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
-	37,  // 174: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
-	39,  // 175: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
-	41,  // 176: lobslaw.v1.MemoryService.FindClusters:output_type -> lobslaw.v1.FindClustersResponse
-	48,  // 177: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
-	50,  // 178: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
-	52,  // 179: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
-	54,  // 180: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
-	57,  // 181: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
-	59,  // 182: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
-	61,  // 183: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
-	63,  // 184: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
-	65,  // 185: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
-	71,  // 186: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
-	73,  // 187: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
-	75,  // 188: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
-	78,  // 189: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
-	80,  // 190: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
-	82,  // 191: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
-	85,  // 192: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
-	87,  // 193: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
-	89,  // 194: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
-	163, // [163:195] is the sub-list for method output_type
-	131, // [131:163] is the sub-list for method input_type
-	131, // [131:131] is the sub-list for extension type_name
-	131, // [131:131] is the sub-list for extension extendee
-	0,   // [0:131] is the sub-list for field type_name
+	98,  // 122: lobslaw.v1.LogEntry.self_taught_history:type_name -> lobslaw.v1.SelfTaughtRecord
+	103, // 123: lobslaw.v1.Continuation.messages:type_name -> lobslaw.v1.SessionMessage
+	46,  // 124: lobslaw.v1.Continuation.claims:type_name -> lobslaw.v1.Claims
+	6,   // 125: lobslaw.v1.PromptRecord.decision:type_name -> lobslaw.v1.PromptDecision
+	7,   // 126: lobslaw.v1.PromptRecord.scope:type_name -> lobslaw.v1.PromptScope
+	122, // 127: lobslaw.v1.PromptRecord.created_at:type_name -> google.protobuf.Timestamp
+	122, // 128: lobslaw.v1.PromptRecord.expires_at:type_name -> google.protobuf.Timestamp
+	108, // 129: lobslaw.v1.PromptRecord.continuation:type_name -> lobslaw.v1.Continuation
+	122, // 130: lobslaw.v1.PromptRecord.claim_expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 131: lobslaw.v1.CredentialRecord.AllowedScopesPerSkillEntry.value:type_name -> lobslaw.v1.AllowedScopes
+	13,  // 132: lobslaw.v1.NodeService.Register:input_type -> lobslaw.v1.RegisterRequest
+	15,  // 133: lobslaw.v1.NodeService.Deregister:input_type -> lobslaw.v1.DeregisterRequest
+	17,  // 134: lobslaw.v1.NodeService.Heartbeat:input_type -> lobslaw.v1.HeartbeatRequest
+	19,  // 135: lobslaw.v1.NodeService.GetPeers:input_type -> lobslaw.v1.GetPeersRequest
+	21,  // 136: lobslaw.v1.NodeService.Reload:input_type -> lobslaw.v1.ReloadRequest
+	23,  // 137: lobslaw.v1.NodeService.AddMember:input_type -> lobslaw.v1.AddMemberRequest
+	11,  // 138: lobslaw.v1.NodeService.Propose:input_type -> lobslaw.v1.ProposeRequest
+	28,  // 139: lobslaw.v1.MemoryService.Store:input_type -> lobslaw.v1.StoreRequest
+	30,  // 140: lobslaw.v1.MemoryService.Recall:input_type -> lobslaw.v1.RecallRequest
+	32,  // 141: lobslaw.v1.MemoryService.Search:input_type -> lobslaw.v1.SearchRequest
+	34,  // 142: lobslaw.v1.MemoryService.EpisodicAdd:input_type -> lobslaw.v1.EpisodicAddRequest
+	36,  // 143: lobslaw.v1.MemoryService.Dream:input_type -> lobslaw.v1.DreamRequest
+	38,  // 144: lobslaw.v1.MemoryService.Forget:input_type -> lobslaw.v1.ForgetRequest
+	40,  // 145: lobslaw.v1.MemoryService.FindClusters:input_type -> lobslaw.v1.FindClustersRequest
+	47,  // 146: lobslaw.v1.PolicyService.Evaluate:input_type -> lobslaw.v1.EvaluateRequest
+	49,  // 147: lobslaw.v1.PolicyService.SyncRules:input_type -> lobslaw.v1.SyncRulesRequest
+	51,  // 148: lobslaw.v1.PolicyService.AddRule:input_type -> lobslaw.v1.AddRuleRequest
+	53,  // 149: lobslaw.v1.PolicyService.RequestConfirmation:input_type -> lobslaw.v1.RequestConfirmationRequest
+	56,  // 150: lobslaw.v1.AgentService.InvokeTool:input_type -> lobslaw.v1.InvokeToolRequest
+	58,  // 151: lobslaw.v1.AgentService.ListTools:input_type -> lobslaw.v1.ListToolsRequest
+	60,  // 152: lobslaw.v1.AgentService.ProcessMessage:input_type -> lobslaw.v1.ProcessMessageRequest
+	62,  // 153: lobslaw.v1.ChannelService.HandleUpdate:input_type -> lobslaw.v1.HandleUpdateRequest
+	64,  // 154: lobslaw.v1.ChannelService.Prompt:input_type -> lobslaw.v1.PromptRequest
+	70,  // 155: lobslaw.v1.PlanService.GetPlan:input_type -> lobslaw.v1.GetPlanRequest
+	72,  // 156: lobslaw.v1.PlanService.AddCommitment:input_type -> lobslaw.v1.AddCommitmentRequest
+	74,  // 157: lobslaw.v1.PlanService.CancelCommitment:input_type -> lobslaw.v1.CancelCommitmentRequest
+	77,  // 158: lobslaw.v1.AuditService.Append:input_type -> lobslaw.v1.AppendRequest
+	79,  // 159: lobslaw.v1.AuditService.Query:input_type -> lobslaw.v1.QueryRequest
+	81,  // 160: lobslaw.v1.AuditService.VerifyChain:input_type -> lobslaw.v1.VerifyChainRequest
+	84,  // 161: lobslaw.v1.StorageService.AddMount:input_type -> lobslaw.v1.AddMountRequest
+	86,  // 162: lobslaw.v1.StorageService.RemoveMount:input_type -> lobslaw.v1.RemoveMountRequest
+	88,  // 163: lobslaw.v1.StorageService.ListMounts:input_type -> lobslaw.v1.ListMountsRequest
+	14,  // 164: lobslaw.v1.NodeService.Register:output_type -> lobslaw.v1.RegisterResponse
+	16,  // 165: lobslaw.v1.NodeService.Deregister:output_type -> lobslaw.v1.DeregisterResponse
+	18,  // 166: lobslaw.v1.NodeService.Heartbeat:output_type -> lobslaw.v1.HeartbeatResponse
+	20,  // 167: lobslaw.v1.NodeService.GetPeers:output_type -> lobslaw.v1.GetPeersResponse
+	22,  // 168: lobslaw.v1.NodeService.Reload:output_type -> lobslaw.v1.ReloadResponse
+	24,  // 169: lobslaw.v1.NodeService.AddMember:output_type -> lobslaw.v1.AddMemberResponse
+	12,  // 170: lobslaw.v1.NodeService.Propose:output_type -> lobslaw.v1.ProposeResponse
+	29,  // 171: lobslaw.v1.MemoryService.Store:output_type -> lobslaw.v1.StoreResponse
+	31,  // 172: lobslaw.v1.MemoryService.Recall:output_type -> lobslaw.v1.RecallResponse
+	33,  // 173: lobslaw.v1.MemoryService.Search:output_type -> lobslaw.v1.SearchResponse
+	35,  // 174: lobslaw.v1.MemoryService.EpisodicAdd:output_type -> lobslaw.v1.EpisodicAddResponse
+	37,  // 175: lobslaw.v1.MemoryService.Dream:output_type -> lobslaw.v1.DreamResponse
+	39,  // 176: lobslaw.v1.MemoryService.Forget:output_type -> lobslaw.v1.ForgetResponse
+	41,  // 177: lobslaw.v1.MemoryService.FindClusters:output_type -> lobslaw.v1.FindClustersResponse
+	48,  // 178: lobslaw.v1.PolicyService.Evaluate:output_type -> lobslaw.v1.EvaluateResponse
+	50,  // 179: lobslaw.v1.PolicyService.SyncRules:output_type -> lobslaw.v1.SyncRulesResponse
+	52,  // 180: lobslaw.v1.PolicyService.AddRule:output_type -> lobslaw.v1.AddRuleResponse
+	54,  // 181: lobslaw.v1.PolicyService.RequestConfirmation:output_type -> lobslaw.v1.RequestConfirmationResponse
+	57,  // 182: lobslaw.v1.AgentService.InvokeTool:output_type -> lobslaw.v1.InvokeToolResponse
+	59,  // 183: lobslaw.v1.AgentService.ListTools:output_type -> lobslaw.v1.ListToolsResponse
+	61,  // 184: lobslaw.v1.AgentService.ProcessMessage:output_type -> lobslaw.v1.ProcessMessageResponse
+	63,  // 185: lobslaw.v1.ChannelService.HandleUpdate:output_type -> lobslaw.v1.HandleUpdateResponse
+	65,  // 186: lobslaw.v1.ChannelService.Prompt:output_type -> lobslaw.v1.PromptResponse
+	71,  // 187: lobslaw.v1.PlanService.GetPlan:output_type -> lobslaw.v1.GetPlanResponse
+	73,  // 188: lobslaw.v1.PlanService.AddCommitment:output_type -> lobslaw.v1.AddCommitmentResponse
+	75,  // 189: lobslaw.v1.PlanService.CancelCommitment:output_type -> lobslaw.v1.CancelCommitmentResponse
+	78,  // 190: lobslaw.v1.AuditService.Append:output_type -> lobslaw.v1.AppendResponse
+	80,  // 191: lobslaw.v1.AuditService.Query:output_type -> lobslaw.v1.QueryResponse
+	82,  // 192: lobslaw.v1.AuditService.VerifyChain:output_type -> lobslaw.v1.VerifyChainResponse
+	85,  // 193: lobslaw.v1.StorageService.AddMount:output_type -> lobslaw.v1.AddMountResponse
+	87,  // 194: lobslaw.v1.StorageService.RemoveMount:output_type -> lobslaw.v1.RemoveMountResponse
+	89,  // 195: lobslaw.v1.StorageService.ListMounts:output_type -> lobslaw.v1.ListMountsResponse
+	164, // [164:196] is the sub-list for method output_type
+	132, // [132:164] is the sub-list for method input_type
+	132, // [132:132] is the sub-list for extension type_name
+	132, // [132:132] is the sub-list for extension extendee
+	0,   // [0:132] is the sub-list for field type_name
 }
 
 func init() { file_lobslaw_v1_lobslaw_proto_init() }
@@ -9150,6 +9170,7 @@ func file_lobslaw_v1_lobslaw_proto_init() {
 		(*LogEntry_Pinned)(nil),
 		(*LogEntry_SelfTaught)(nil),
 		(*LogEntry_SelfTaughtUsage)(nil),
+		(*LogEntry_SelfTaughtHistory)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
