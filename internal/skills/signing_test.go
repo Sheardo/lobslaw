@@ -352,12 +352,21 @@ func TestRegistryPreferSignedBreaksTies(t *testing.T) {
 	}
 }
 
-func TestRegistryNoPreferFallsBackToLexicographic(t *testing.T) {
+// Under SigningOff nothing is ever verified, so every candidate is
+// operator tier and the tie falls through to the directory exactly as
+// it always did.
+//
+// This test used to set IsSigned on one candidate while the policy was
+// Off — a state ParseWithPolicy cannot produce, since Off returns
+// before verification. Asserting against an impossible input made it
+// look as though tier-first had changed SigningOff behaviour, when the
+// only thing that changed was the test's fiction.
+func TestSigningOffStillFallsBackToLexicographic(t *testing.T) {
 	t.Parallel()
 	r := NewRegistryWithPolicy(nil, SigningOff)
 
 	a := &Skill{Manifest: Manifest{Name: "s", Version: "1.0.0"}, ManifestDir: "/mnt/a"}
-	z := &Skill{Manifest: Manifest{Name: "s", Version: "1.0.0"}, ManifestDir: "/mnt/z", IsSigned: true}
+	z := &Skill{Manifest: Manifest{Name: "s", Version: "1.0.0"}, ManifestDir: "/mnt/z"}
 
 	r.Put(a)
 	r.Put(z)
@@ -368,10 +377,17 @@ func TestRegistryNoPreferFallsBackToLexicographic(t *testing.T) {
 	}
 }
 
-// TestRegistryHigherSemverStillBeatsSignedOlder — even under
-// preferSigned, a higher-version unsigned candidate wins. Signing
-// is only a TIE-breaker, not an override.
-func TestRegistryHigherSemverStillBeatsSignedOlder(t *testing.T) {
+// BEHAVIOUR CHANGE, and the reason for the whole tier-first rule.
+//
+// This test used to assert the opposite — "Signing is only a
+// TIE-breaker, not an override", with a higher-version unsigned
+// candidate winning. That was defensible while nothing but an operator
+// could write a skill. It became a privilege-escalation path the
+// moment the agent could author one: name your skill after a signed
+// one, set version 99.0.0, and take the name.
+//
+// A version bump can no longer promote a skill past its provenance.
+func TestAHigherVersionCannotBeatABetterTier(t *testing.T) {
 	t.Parallel()
 	r := NewRegistryWithPolicy(nil, SigningPrefer)
 	signedOld := &Skill{
@@ -379,15 +395,66 @@ func TestRegistryHigherSemverStillBeatsSignedOlder(t *testing.T) {
 		ManifestDir: "/mnt/a", IsSigned: true,
 	}
 	unsignedNew := &Skill{
-		Manifest:    Manifest{Name: "s", Version: "2.0.0"},
+		Manifest:    Manifest{Name: "s", Version: "99.0.0"},
 		ManifestDir: "/mnt/b",
 	}
 	r.Put(signedOld)
 	r.Put(unsignedNew)
 
 	got, _ := r.Get("s")
+	if !got.IsSigned {
+		t.Errorf("an unsigned v99 took the name from a signed v1: %+v", got)
+	}
+
+	// And the same for the tier that actually matters now: an
+	// agent-authored skill must not take a name from an operator's,
+	// however high it numbers itself.
+	r2 := NewRegistryWithPolicy(nil, SigningOff)
+	operator := &Skill{
+		Manifest:    Manifest{Name: "deploy", Version: "1.0.0"},
+		ManifestDir: "/mnt/skills", Tier: TierOperator,
+	}
+	agent := &Skill{
+		Manifest:    Manifest{Name: "deploy", Version: "99.0.0"},
+		ManifestDir: "/cache/self-taught", Tier: TierAgent,
+	}
+	r2.Put(operator)
+	r2.Put(agent)
+
+	won, _ := r2.Get("deploy")
+	if won.Tier != TierOperator {
+		t.Errorf("an agent-authored v99 took an operator's name: %+v", won)
+	}
+}
+
+// Within a tier, the version still decides — tier-first must not have
+// frozen the library at whatever was installed first.
+func TestVersionStillWinsWithinATier(t *testing.T) {
+	t.Parallel()
+	r := NewRegistryWithPolicy(nil, SigningPrefer)
+	r.Put(&Skill{Manifest: Manifest{Name: "s", Version: "1.0.0"}, ManifestDir: "/mnt/a", IsSigned: true})
+	r.Put(&Skill{Manifest: Manifest{Name: "s", Version: "2.0.0"}, ManifestDir: "/mnt/b", IsSigned: true})
+
+	got, _ := r.Get("s")
 	if got.Manifest.Version != "2.0.0" {
-		t.Errorf("higher semver should win even if older is signed; got %+v", got)
+		t.Errorf("a newer signed version did not win within its tier: %+v", got)
+	}
+}
+
+// A skill built as a struct literal must derive its tier rather than
+// defaulting to the lowest one. The zero value is "underived" for
+// exactly this reason — making TierAgent the zero value looked tidier
+// and silently demoted every hand-constructed skill.
+func TestUnsetTierDerivesRatherThanDemoting(t *testing.T) {
+	t.Parallel()
+	if got := tierOf(&Skill{IsSigned: true}); got != TierSigned {
+		t.Errorf("an unset tier on a signed skill derived %v, want signed", got)
+	}
+	if got := tierOf(&Skill{}); got != TierOperator {
+		t.Errorf("an unset tier derived %v, want operator", got)
+	}
+	if got := tierOf(&Skill{Tier: TierAgent}); got != TierAgent {
+		t.Errorf("an explicit agent tier was overridden: %v", got)
 	}
 }
 

@@ -31,10 +31,6 @@ type Registry struct {
 	// candidates tracks every version from every source so removal
 	// can fall back to the next-highest rather than losing the name.
 	candidates map[string][]*Skill
-	// preferSigned flips winner-selection to break version ties in
-	// favour of signed manifests. Set by NewRegistryWithPolicy under
-	// SigningPrefer.
-	preferSigned bool
 	// policySink receives any policy.d/ files shipped alongside a
 	// skill's manifest. When nil the policy-loading path is skipped
 	// entirely — useful for tests that don't care about the
@@ -62,20 +58,26 @@ func (r *Registry) SetPolicySink(sink sandbox.PolicySink) {
 	r.policySink = sink
 }
 
-// NewRegistryWithPolicy wires the signing policy into the registry
-// so winner-selection can break version ties in favour of signed
-// candidates when the operator wants it. SigningOff and
-// SigningRequire both leave the tiebreaker unchanged (under Require
-// every candidate is signed; under Off signatures are decoration).
-func NewRegistryWithPolicy(log *slog.Logger, policy SigningPolicy) *Registry {
+// NewRegistryWithPolicy exists for callers that pass a signing policy.
+//
+// The policy no longer affects winner-selection, and the parameter is
+// kept only so existing call sites need not change. Precedence is
+// tier-first now: a verified signature is a fact about provenance, so
+// it outranks an unsigned skill whatever the policy says to DO about
+// signatures. Under SigningOff nothing is verified, so nothing reaches
+// the signed tier and the order is what it always was.
+//
+// The old preferSigned field is gone rather than left set-and-unread —
+// a field that implies behaviour it no longer has is worse than no
+// field.
+func NewRegistryWithPolicy(log *slog.Logger, _ SigningPolicy) *Registry {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Registry{
-		byName:       make(map[string]*Skill),
-		candidates:   make(map[string][]*Skill),
-		preferSigned: policy == SigningPrefer,
-		log:          log,
+		byName:     make(map[string]*Skill),
+		candidates: make(map[string][]*Skill),
+		log:        log,
 	}
 }
 
@@ -155,11 +157,10 @@ func (r *Registry) List() []*Skill {
 	return out
 }
 
-// recomputeWinnerLocked picks the highest-semver candidate for
-// name. Ties (same semver) broken by: signed-beats-unsigned when
-// preferSigned is on, else lexicographic ManifestDir. Either
-// tiebreaker is deterministic so two replicas with identical config
-// pick the same winner. Caller must hold r.mu.
+// recomputeWinnerLocked picks the winning candidate for name under
+// candidateBeats: tier, then version, then directory. Every stage is
+// deterministic, so two replicas holding the same candidates pick the
+// same winner. Caller must hold r.mu.
 func (r *Registry) recomputeWinnerLocked(name string) {
 	list := r.candidates[name]
 	if len(list) == 0 {
@@ -175,21 +176,35 @@ func (r *Registry) recomputeWinnerLocked(name string) {
 	r.byName[name] = best
 }
 
-// candidateBeats returns true when c should replace best under the
-// registry's current policy. Order of preference:
-//  1. Higher semver wins.
-//  2. When semver ties AND preferSigned is on, signed beats unsigned.
-//  3. Same-signing, same-version: lexicographic ManifestDir.
+// candidateBeats returns true when c should replace best.
+//
+// Order of preference:
+//  1. Higher TIER wins: signed > operator > agent.
+//  2. Within a tier, higher semver wins.
+//  3. Same tier and version: lexicographic ManifestDir.
+//
+// Tier first is a change from version-first, and it is the point. The
+// old order let an unsigned v2 beat a signed v1, which was defensible
+// while only an operator could write a skill and became a
+// privilege-escalation path the moment the agent could author one:
+// name your skill after a signed one, set version 99.0.0, win.
+//
+// A version bump can no longer promote a skill past its provenance.
+//
+// The escape hatch for an operator who wants to override a signed
+// skill locally is a dev source that wins outright, NOT bumping a
+// version — because a rule that can be beaten by editing a number is
+// not a rule.
 func (r *Registry) candidateBeats(c, best *Skill) bool {
+	if ct, bt := tierOf(c), tierOf(best); ct != bt {
+		return ct > bt
+	}
 	cmp := compareVersion(c.Manifest.Version, best.Manifest.Version)
 	if cmp > 0 {
 		return true
 	}
 	if cmp < 0 {
 		return false
-	}
-	if r.preferSigned && c.IsSigned != best.IsSigned {
-		return c.IsSigned
 	}
 	return c.ManifestDir < best.ManifestDir
 }

@@ -1870,9 +1870,9 @@ present", and the second is what an operator disabling self-learning is asking f
 
 - [x] With `mode = "off"`, no store is constructed. Asserted by calling `wireSelfTaught` and
       checking the field is nil — not by mocking a flag. An unrecognised mode is off too.
-- [ ] A self-taught skill never shadows a signed or operator skill of the same name. **R18 owns
-      this** — the store-to-cache contract and the tier-first winner rule are its scope, and this
-      item contributes the `BucketSelfTaught` source it arbitrates over.
+- [x] A self-taught skill never shadows a signed or operator skill of the same name. The
+      tier-first winner rule shipped separately under R18; this item contributes the
+      `BucketSelfTaught` source it arbitrates over.
 - [ ] An `agent`-tier skill declaring a new binary or MCP server fails to load, with the reason.
       Also R18: the loader that would enforce it is the one R18 builds.
 - [x] `propose` mode artefacts are inert until approved — `Active()` excludes them, and the mode
@@ -2115,6 +2115,28 @@ The implementation insight that keeps this small: **`Registry.Scan` / `Registry.
 They point at the cache directory instead of a storage mount. This is a change of *source*, not a
 change of registry, invoker, sandbox or policy derivation.
 
+### Precedence must become tier-first — ✅ **SHIPPED AHEAD OF THE REST**
+
+Landed on its own, because it stopped being theoretical the moment R15 and R16 shipped: an agent
+can now author a skill, so "bump the version, win the name" is a live path rather than a future
+one. It needs none of the open questions below answered.
+
+Order is now **tier → version → directory**, with `signed > operator > agent`. A version bump
+cannot promote a skill past its provenance.
+
+Two things found while doing it:
+
+- `preferSigned` only applied under `SigningPrefer`, so under `SigningOff` signing did not factor
+  at all. Precedence now derives from the verified fact rather than the policy — a signature that
+  was checked is a fact about provenance whatever the policy says to *do* about signatures. Under
+  `SigningOff` nothing is verified, so nothing reaches the signed tier and the order is unchanged.
+  The field is deleted rather than left set-and-unread.
+- `TierAgent` as the zero value silently demoted every `Skill` built as a struct literal. The zero
+  value is "underived" instead, so a hand-constructed skill derives its tier from how it arrived.
+
+The escape hatch for an operator overriding a signed skill locally is the dev source below, **not**
+a version bump — a rule that can be beaten by editing a number is not a rule.
+
 ### Precedence must become tier-first
 
 `candidateBeats` currently orders by version, then `preferSigned` only as a tie-break at equal
@@ -2169,7 +2191,8 @@ Not decided here; they need a call before implementation:
 - [ ] Deleting the cache and restarting restores every skill byte-identically.
 - [ ] `import → export → diff` is empty for a signed skill, and the export still verifies.
 - [ ] `SigningRequired` behaviour is unchanged after the move.
-- [ ] A self-taught skill cannot win a name against a signed or operator skill at any version.
+- [x] A self-taught skill cannot win a name against a signed or operator skill at any version.
+      Shipped ahead of the rest — see above.
 - [ ] `skills rollback` restores a prior version across the cluster.
 - [ ] An oversized payload fails at import, naming the path.
 
