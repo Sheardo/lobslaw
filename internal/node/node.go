@@ -281,7 +281,13 @@ type Node struct {
 	// misconfigures itself.
 	gatewaySrv      *gateway.Server
 	telegramHandler *gateway.TelegramHandler
-	promptRegistry  *gateway.PromptRegistry
+	promptRegistry  gateway.Prompts
+
+	// promptStore is the raft-backed confirmation store behind
+	// promptRegistry, kept separately because the sweeper needs the
+	// concrete type. Nil on a gateway node that does not host raft —
+	// there, confirmations stay process-local.
+	promptStore *memory.PromptStore
 
 	// leaderGate fans raft leadership transitions out to leader-pinned
 	// singleton workloads (currently just the telegram long-poller).
@@ -483,6 +489,8 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 		}()
 	}
+
+	n.startPromptSweeper(ctx)
 
 	// Initial storage reconcile. Catches the case where the cluster
 	// already has storage_mounts entries from prior sessions — the

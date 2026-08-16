@@ -958,6 +958,7 @@ message LogEntry {
     SessionAppendRecord session_append = 22;
     SessionRecord session = 23;
     SessionLease session_lease = 25;
+    PromptRecord prompt = 26;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -979,4 +980,73 @@ message LogEntry {
   // prevent. LOG_OP_CLAIM requires it and is rejected without it;
   // PUT / DELETE ignore it, since a create has no prior revision.
   optional uint64 expected_revision = 24;
+}
+
+// PromptDecision is the resolution state of a confirmation.
+enum PromptDecision {
+  PROMPT_DECISION_UNSPECIFIED = 0;
+  PROMPT_DECISION_PENDING = 1;
+  PROMPT_DECISION_APPROVED = 2;
+  PROMPT_DECISION_DENIED = 3;
+  PROMPT_DECISION_TIMED_OUT = 4;
+}
+
+// PromptScope is how far an approval reaches. See R2.
+enum PromptScope {
+  PROMPT_SCOPE_UNSPECIFIED = 0;
+  // This turn only — the behaviour every confirmation had before.
+  PROMPT_SCOPE_ONCE = 1;
+  // The rest of this conversation; expires with the session.
+  PROMPT_SCOPE_SESSION = 2;
+  // Mints a policy rule, so it is visible and revocable rather than
+  // an invisible forever-grant.
+  PROMPT_SCOPE_ALWAYS = 3;
+}
+
+// Continuation is everything needed to resume a turn on a different
+// node. The in-memory registry stashed a live []Message and a
+// *TurnBudget in a Go map, which is precisely what stopped an
+// approval from being answerable anywhere but the node that asked.
+message Continuation {
+  repeated SessionMessage messages = 1;
+  // Budget counters, so a resumed turn does not restart its spend.
+  double spent_usd = 2;
+  int32 tool_calls = 3;
+  int32 llm_calls = 4;
+  bool relaxed = 5;
+  string system_prompt = 6;
+}
+
+// PromptRecord is one pending confirmation, in Raft rather than in a
+// process. Replaces the in-memory PromptRegistry: an approval tapped
+// on one node resolves a prompt issued by another, and survives a
+// restart instead of telling the user to resend.
+message PromptRecord {
+  string id = 1;
+  string turn_id = 2;
+  string session_id = 3;
+  string reason = 4;
+  string channel = 5;
+  // Where to deliver the resolution — the node that resumes the turn
+  // need not be the node that asked.
+  string channel_id = 6;
+  PromptDecision decision = 7;
+  PromptScope scope = 8;
+  // The principal who answered, for audit.
+  string resolved_by = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  Continuation continuation = 12;
+  // Policy action and resource, carried so PROMPT_SCOPE_ALWAYS can
+  // mint a rule that names what was actually approved.
+  string action = 13;
+  string resource = 14;
+  string owner = 15;
+
+  // Resolution is a CAS from PENDING, reusing the claim primitive the
+  // scheduler already has: claimed_by holds the resolver and revision
+  // guards the transition, so first writer wins cluster-wide.
+  string claimed_by = 16;
+  google.protobuf.Timestamp claim_expires_at = 17;
+  uint64 revision = 18;
 }

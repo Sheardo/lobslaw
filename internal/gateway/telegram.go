@@ -115,7 +115,7 @@ type TelegramConfig struct {
 	// as plain text (Phase 6e fallback). When set, the bot sends an
 	// inline keyboard with Approve / Deny buttons; the button's
 	// callback_data carries the prompt ID.
-	Prompts *PromptRegistry
+	Prompts Prompts
 
 	// ConfirmationTTL mirrors RESTConfig.ConfirmationTTL. 0 → 5min.
 	ConfirmationTTL time.Duration

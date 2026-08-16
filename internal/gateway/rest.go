@@ -87,7 +87,7 @@ type RESTConfig struct {
 	// return NeedsConfirmation register a prompt here; UIs poll
 	// and resolve. Nil = no prompt flow (NeedsConfirmation returns
 	// as plain text like Phase 6e).
-	Prompts *PromptRegistry
+	Prompts Prompts
 
 	// ConfirmationTTL is how long a pending prompt waits before
 	// auto-denying on timeout. 0 → 5 minutes default.
