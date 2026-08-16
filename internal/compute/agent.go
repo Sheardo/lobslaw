@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/promptguard"
+	"github.com/jmylchreest/lobslaw/internal/trace"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -104,6 +106,10 @@ type AgentConfig struct {
 	// a different model than the primary turn. Nil → every role
 	// falls through to Provider.
 	Roles *RoleMap
+
+	// Traces records what this turn did. Nil turns tracing off, and a
+	// nil recorder is usable, so no call site branches on it.
+	Traces *trace.Recorder
 
 	// PrimaryLabel names the provider that maps to Provider above
 	// in the registry. Used as the starting point for backup-chain
@@ -489,6 +495,11 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
 	ctx = WithTurnIdentity(ctx, a.turnIdentityFor(req))
+	// Attached once, at the top, so anything downstream can emit a
+	// span without every intermediate signature growing a parameter.
+	// A nil recorder leaves the context untouched, which is what a
+	// deployment with tracing off gets.
+	ctx = trace.WithTurn(ctx, a.cfg.Traces, req.TurnID)
 	a.fillDefaults(ctx, &req)
 	seeded := a.seedMessages(req)
 	// The user message is the last thing seedMessages appends, so
@@ -1006,23 +1017,28 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 		Model:    req.Model,
 		Tools:    req.Tools,
 	}
-	chatResp, err := a.dispatchWithBackup(ctx, chatReq)
+	dispatched, err := a.dispatchWithBackup(ctx, chatReq)
 	if err != nil {
 		return nil, err
 	}
+	chatResp := dispatched.resp
 
-	// For cost accounting the agent needs pricing; Phase 5's agent
-	// loop passes it opaquely from the resolver decision. For now,
-	// a zero CostRecord is fine: the budget treats zero as "no
-	// spend" and no-ops. Phase 5.4 integration (wiring resolver →
-	// pricing → agent) will fill this in once the full compose
-	// site exists.
-	cost := CostRecord{
-		ProviderLabel: "",
-		Model:         req.Model,
-		Usage:         chatResp.Usage,
-		CostUSD:       0,
+	// The cost of a turn is a function of the provider that served it,
+	// and until dispatchWithBackup returned the winning entry the
+	// caller had no way to know which one that was — so this was built
+	// with an empty label and a hardcoded zero. Every turn to date has
+	// reported a spend of nothing, and the budget's spend cap has
+	// therefore never fired.
+	//
+	// The model comes from the entry rather than from req.Model,
+	// because a failover means the reply came from a different model
+	// than the one asked for, and attributing the cost to the requested
+	// one would misprice exactly the turns worth auditing.
+	model := dispatched.entry.Model
+	if model == "" {
+		model = req.Model
 	}
+	cost := RecordCost(dispatched.entry.Label, model, chatResp.Usage, dispatched.entry.Pricing)
 
 	if a.cfg.Hooks != nil {
 		// Hooks are best-effort observability; their own pipeline
@@ -1060,6 +1076,53 @@ func errText(err error) string {
 	return err.Error()
 }
 
+// bareDispatch is the no-registry path: one injected provider, no
+// chain, no label to attribute a cost to.
+func (a *Agent) bareDispatch(ctx context.Context, req ChatRequest) (*dispatchResult, error) {
+	resp, err := a.cfg.Provider.Chat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &dispatchResult{resp: resp}, nil
+}
+
+// attemptSpan records one provider attempt.
+//
+// Every attempt, not just the winning one. "My primary is never used"
+// and "the chain failed over twice before succeeding" are the two
+// questions failover makes unanswerable, and both need the losers.
+//
+// Carries no content: a provider label, a model name, a duration, token
+// counts and a classified error. The error text comes from the driver's
+// own classification rather than a response body, because a body is
+// where a provider echoes the prompt back.
+func attemptSpan(turnID string, entry ProviderEntry, elapsed time.Duration, started time.Time,
+	attempt int, outcome trace.Outcome, resp *ChatResponse, err error) trace.Span {
+	span := trace.Span{
+		TurnID:    turnID,
+		SpanID:    ids.New(),
+		Kind:      trace.KindLLMCall,
+		Name:      entry.Model,
+		Provider:  entry.Label,
+		StartedAt: started,
+		Duration:  elapsed,
+		Outcome:   outcome,
+		Attempt:   attempt,
+	}
+	if err != nil {
+		span.Error = err.Error()
+	}
+	if resp != nil {
+		span.Usage = trace.Usage{
+			PromptTokens:     resp.Usage.PromptTokens,
+			CompletionTokens: resp.Usage.CompletionTokens,
+			CachedTokens:     resp.Usage.CachedTokens,
+		}
+		span.CostUSD = EstimateCost(resp.Usage, entry.Pricing)
+	}
+	return span
+}
+
 // reportBelowFloor names a provider the floor excluded, once per
 // label per process.
 //
@@ -1077,20 +1140,32 @@ func (a *Agent) reportBelowFloor(label string, tier, floor types.TrustTier) {
 		"label", label, "trust_tier", tier, "min_trust_tier", floor)
 }
 
-func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+// dispatchResult is the response plus WHICH provider produced it.
+//
+// The winning entry has to come back, because the cost of a turn is a
+// function of the provider that served it and the caller had no way to
+// know which one that was. That is why CostRecord has been built with
+// an empty label and a zero cost since it was written.
+type dispatchResult struct {
+	resp  *ChatResponse
+	entry ProviderEntry
+}
+
+func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispatchResult, error) {
 	// Single-provider mode: no registry wired, no chain to walk. The
 	// floor cannot be enforced here — there is no tier to read, only a
 	// bare LLMProvider — so boot-time validation is what covers this
 	// path, and it refuses to start rather than letting a turn run
 	// unchecked.
 	if a.cfg.Providers == nil || a.cfg.PrimaryLabel == "" {
-		return a.cfg.Provider.Chat(ctx, req)
+		return a.bareDispatch(ctx, req)
 	}
 
 	chain := a.cfg.Providers.Chain(a.cfg.PrimaryLabel)
 	if len(chain) == 0 {
-		return a.cfg.Provider.Chat(ctx, req)
+		return a.bareDispatch(ctx, req)
 	}
+	rec, turnID := trace.FromContext(ctx)
 
 	// Read once per dispatch rather than once per candidate, so a
 	// soul tuned mid-chain cannot let one turn use two different
@@ -1102,6 +1177,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 		skipped    int
 		considered []TrustCandidate
 		belowFloor int
+		attempt    int
 	)
 	for _, entry := range chain {
 		// The floor, at EVERY candidate.
@@ -1117,6 +1193,9 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 		if !MeetsFloor(floor, entry.TrustTier) {
 			belowFloor++
 			a.reportBelowFloor(entry.Label, entry.TrustTier, floor)
+			rec.Record(trace.SkippedSpan(turnID, ids.New(), entry.Label,
+				"below the trust floor", attempt))
+			attempt++
 			continue
 		}
 		// A provider that failed recently is skipped rather than
@@ -1128,24 +1207,36 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*ChatR
 			a.cfg.Logger.Debug("agent: skipping demoted provider",
 				"label", entry.Label,
 				"cooldown_remaining", a.cfg.Health.CooldownRemaining(entry.Label))
+			rec.Record(trace.SkippedSpan(turnID, ids.New(), entry.Label,
+				"in cooldown", attempt))
+			attempt++
 			continue
 		}
+		started := time.Now()
 		resp, err := entry.Client.Chat(ctx, req)
+		elapsed := time.Since(started)
 		if err == nil {
 			a.cfg.Health.RecordSuccess(entry.Label)
+			rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
+				trace.OutcomeOK, resp, nil))
 			if lastErr != nil || skipped > 0 {
 				a.cfg.Logger.Info("agent: provider backup succeeded",
 					"used_label", entry.Label,
 					"skipped_demoted", skipped,
 					"prior_error", errText(lastErr))
 			}
-			return resp, nil
+			return &dispatchResult{resp: resp, entry: entry}, nil
 		}
 		if !isRetryableProviderError(ctx, err) {
+			rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
+				trace.OutcomeAborted, nil, err))
 			return nil, err
 		}
 		a.cfg.Health.RecordFailure(entry.Label, ClassifyFailure(err))
 		logProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
+		rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
+			trace.OutcomeAdvanced, nil, err))
+		attempt++
 		lastErr = err
 	}
 	// The floor beat the chain, and that is not an outage. Reported as

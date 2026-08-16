@@ -64,7 +64,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
-| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | ⬜ | 🟠 P1 | M | — |
+| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | 🟨 | 🟠 P1 | M | — |
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -1512,7 +1512,20 @@ so the existing resolver/capability/roles tests stay green throughout.
       it warned for backups, implying a leniency the real check does not offer.
 
 - [ ] `hint = "deep"` resolves through a chain an operator can inspect and override.
-- [ ] Per-attempt audit entries (provider, latency, outcome, cost).
+- [x] Per-attempt audit entries (provider, latency, outcome, cost).
+      Landed as R24's span model rather than as a separate mechanism — a per-attempt record and a
+      turn trace are the same data, and building both would have produced two accounts of one turn
+      that eventually disagree. Every candidate emits a span: the winner, the ones that failed and
+      advanced, and the ones never tried (demoted by health, or refused by the trust floor). The
+      skipped ones matter most — "the chain skipped three providers before succeeding" is the shape
+      of a developing outage and is invisible if only attempts are recorded.
+
+      **Found while doing it: `CostRecord` was hardcoded to `CostUSD: 0` with an empty provider
+      label.** R24's problem statement says the cost is "computed and then discarded"; it was never
+      computed. `dispatchWithBackup` did not return which provider won, so the caller had nothing to
+      price against, and a `// Phase 5.4 will fill this in` comment had been standing in for it.
+      Every turn to date reported a spend of nothing — which also means the budget's spend cap has
+      never fired. The winning entry now comes back, carrying its model and pricing.
 
 ---
 
@@ -2624,12 +2637,14 @@ never be dropped becomes a reliability problem on the reply path.
 
 ### Acceptance
 
-- [ ] Off by default.
+- [x] Off by default. Absence, not a flag: with tracing off the recorder is nil, and a nil recorder is usable, so no instrumented path branches on whether tracing exists.
 - [ ] A turn's spans nest correctly in an OTel backend, with tokens and
       cost as attributes.
-- [ ] No span carries message text, tool arguments or tool output.
-- [ ] A collector that hangs neither slows nor fails a turn; dropped
-      spans are counted.
+- [x] No span carries message text, tool arguments or tool output. Asserted against the SERIALISED bytes rather than the struct, because the bytes are what leaves the process.
+- [x] A collector that hangs neither slows nor fails a turn; dropped spans are counted. Record
+      never blocks — a full buffer drops and counts. A trace with a hole that says "4 dropped" is
+      usable; one that silently omits the interesting span is worse than no trace, because it is
+      read as evidence of absence.
 - [ ] Tool attribution reflects re-sent context, not just the
       producing call — verifiable on a scripted multi-tool turn.
 - [ ] Cached tokens are priced as cached, not fresh.

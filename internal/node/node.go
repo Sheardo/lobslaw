@@ -35,6 +35,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/skills"
 	"github.com/jmylchreest/lobslaw/internal/soul"
 	"github.com/jmylchreest/lobslaw/internal/storage"
+	"github.com/jmylchreest/lobslaw/internal/trace"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
@@ -120,6 +121,9 @@ type Config struct {
 	NotifyChannels []string
 	NotifySubjects []string
 	NotifyInterval time.Duration
+
+	// Trace is turn tracing. Off by default.
+	Trace config.TraceConfig
 
 	// SessionGrantTTL bounds a conversation-scoped approval. Zero
 	// takes the default of 24h.
@@ -329,7 +333,12 @@ type Node struct {
 
 	// notices appends the review-queue nudge to outbound replies. Nil
 	// when self-learning is off or nobody opted in.
-	notices  *gateway.Notices
+	notices *gateway.Notices
+
+	// traces records what each turn did. Nil when tracing is off, and
+	// a nil recorder is usable — so instrumented paths record
+	// unconditionally rather than branching.
+	traces   *trace.Recorder
 	agent    *compute.Agent
 	embedder compute.EmbeddingProvider
 	roleMap  *compute.RoleMap
@@ -483,6 +492,16 @@ func New(cfg Config) (*Node, error) {
 		shutdownOnce: make(chan struct{}),
 	}
 	n.soul.Store(loadedSoul)
+
+	// Before the wire stages, because wireCompute reads n.traces when
+	// it constructs the agent. Starting the recorder afterwards would
+	// hand the agent a nil one and record nothing — the same
+	// registration-order hazard the health tracker and trust floor have
+	// on the builtins registry.
+	if err := n.startTracing(); err != nil {
+		n.closePartial()
+		return nil, err
+	}
 
 	// Walk the assembly order in wire.go. Each stage gates on a
 	// predicate (raft, compute, gateway, etc.) and reads cross-stage
@@ -699,6 +718,11 @@ func (n *Node) Shutdown(ctx context.Context) error {
 	}
 	close(n.shutdownOnce)
 
+	// Drained first, before the gRPC stop. A shutdown that discards the
+	// buffer loses precisely the spans from the turn that was in flight
+	// when the operator hit stop, which is usually the one they wanted.
+	n.stopTracing()
+
 	// Graceful gRPC shutdown with a hard timeout.
 	stopped := make(chan struct{})
 	go func() {
@@ -839,6 +863,7 @@ func (n *Node) dialer() discovery.Dialer {
 // resources but hit an error. Best-effort cleanup; errors swallowed
 // because we're already returning a failure.
 func (n *Node) closePartial() {
+	n.stopTracing()
 	if n.store != nil {
 		_ = n.store.Close()
 	}

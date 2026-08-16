@@ -245,6 +245,8 @@ func (n *Node) wireLLMProviders() (map[string]compute.LLMProvider, error) {
 				Capabilities: p.Capabilities,
 				Backup:       p.Backup,
 				Client:       client,
+				Model:        p.Model,
+				Pricing:      p.Pricing,
 			})
 			if i == 0 {
 				n.llmProvider = client
@@ -323,6 +325,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 	a, err := compute.NewAgent(compute.AgentConfig{
 		Provider:     n.llmProvider,
 		PrimaryLabel: primaryLabel,
+		Traces:       n.traces,
 		Providers:    n.providerRegistry,
 		Health:       n.providerHealth,
 		Executor:     n.executor,
