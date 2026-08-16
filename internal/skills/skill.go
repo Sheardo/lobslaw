@@ -257,6 +257,13 @@ type Skill struct {
 	// SignedBy is the operator-assigned name of the key that signed
 	// this manifest. Empty when IsSigned is false.
 	SignedBy string
+
+	// Tier is where this skill came from, and decides who wins a
+	// contested name. Left unset by Parse and derived from IsSigned;
+	// set explicitly to TierAgent by whatever materialises the
+	// self-taught store, because a parsed manifest carries no trace of
+	// having been machine-written.
+	Tier SkillTier
 }
 
 // Name returns the skill's name. Convenience for registry callers.
@@ -341,6 +348,9 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 	}
 
 	skill := &Skill{
+		// Underived, not TierAgent — the zero value is the lowest tier
+		// and would make every parsed skill lose to everything.
+		Tier:        tierUnset,
 		Manifest:    m,
 		ManifestDir: dir,
 		HandlerPath: handler,

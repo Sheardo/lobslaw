@@ -491,3 +491,41 @@ window zero — something could swap a file between the read and the
 exec — but it reduces it from hours to microseconds and catches the
 realistic case: a file edited after the node started.
 
+---
+
+## Which skill wins a contested name
+
+Precedence is **tier → version → directory**:
+
+| Tier | Source |
+|---|---|
+| `signed` | manifest verified against a trusted publisher key |
+| `operator` | on-disk, operator-authored |
+| `agent` | written by the review fork |
+
+**A version bump cannot promote a skill past its provenance.** That is
+the whole point of the ordering. Precedence used to be version-first,
+with signing as a tie-break only at equal version — defensible while
+nothing but an operator could write a skill, and a
+privilege-escalation path the moment the agent could author one: name
+your skill after a signed one, set `version: 99.0.0`, take the name.
+
+Within a tier the version still decides, so a newer signed release
+still supersedes an older one.
+
+Tier is derived from how a skill arrived: verified signature → signed,
+anything else off a disk an operator controls → operator. `agent` is
+never derived — it is set explicitly by whatever materialises the
+self-taught store, because provenance-by-location is what establishes
+it and a parsed manifest carries no trace of having been
+machine-written.
+
+The signing *policy* no longer affects precedence. A signature that was
+checked is a fact about provenance whatever the policy says to do about
+signatures; and under `SigningOff` nothing is verified, so nothing
+reaches the signed tier and the order is exactly what it was.
+
+The escape hatch for an operator who wants to override a signed skill
+locally is a dev source that wins outright — **not** bumping a version.
+A rule that can be beaten by editing a number is not a rule.
+
