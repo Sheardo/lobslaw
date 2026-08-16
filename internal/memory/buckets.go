@@ -70,6 +70,19 @@ const (
 	// every system prompt: the user profile and the agent's notes.
 	// Small and capped by design — it is a fixed tax on every request.
 	BucketPinned = "pinned"
+
+	// The self-taught store. Provenance by location: if a record is
+	// here, the agent authored it — there is no marker to forget,
+	// forge, or lose.
+	//
+	// Three buckets rather than a state field alone, because "show me
+	// everything it decided on its own" and "show me what it has
+	// stopped using" are different questions asked at different times,
+	// and the archive must be a place things move TO rather than a
+	// filter over the live set.
+	BucketSelfTaught        = "self_taught"
+	BucketSelfTaughtUsage   = "self_taught_usage"
+	BucketSelfTaughtArchive = "self_taught_archive"
 )
 
 // SoulTuneRecordID is the constant key under BucketSoulTune. There
@@ -95,4 +108,7 @@ var allBuckets = []string{
 	BucketPrompts,
 	BucketConsolidations,
 	BucketPinned,
+	BucketSelfTaught,
+	BucketSelfTaughtUsage,
+	BucketSelfTaughtArchive,
 }

@@ -206,6 +206,9 @@ func main() {
 	if dispatchAudit(os.Args[1:]) {
 		return
 	}
+	if dispatchLearned(os.Args[1:]) {
+		return
+	}
 	if dispatchIdentity(os.Args[1:]) {
 		return
 	}
@@ -434,6 +437,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 
 		MemoryPinnedProfileChars: cfg.Memory.PinnedProfileChars,
 		MemoryPinnedNotesChars:   cfg.Memory.PinnedNotesChars,
+		SelfLearningMode:         cfg.SelfLearning.Mode,
 		Identity:                 cfg.Identity,
 		Policy:                   cfg.Policy,
 		BroadcastEnabled:         cfg.Discovery.Broadcast,
