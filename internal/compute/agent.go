@@ -318,6 +318,12 @@ type ProcessMessageRequest struct {
 	// to survive trimming.
 	ConversationSummary string
 
+	// RecalledContext is memory recall for this turn, already wrapped
+	// by promptgen. Populated by fillDefaults, not by callers, and
+	// delivered as a user-role message rather than in the system
+	// prompt — recalled episodes are untrusted content.
+	RecalledContext string
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -470,14 +476,17 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 			})
 		}
 	}
-	// Context engine runs after the base prompt is assembled —
-	// its addition is appended, not prepended. Recall is purely
-	// additive; the model still gets identity + operating
-	// principles at the top.
+	// Recall is carried on the request rather than folded into the
+	// system prompt. Recalled episodes are untrusted — ingest stores
+	// user messages verbatim, and fetched pages can be summarised into
+	// memory — so the system prompt, the most privileged position in
+	// the request, is the wrong place for them. seedMessages puts them
+	// in a user-role message, which is the position promptgen's
+	// deliberate no-escaping decision reasoned about.
 	if a.cfg.ContextEngine != nil {
 		assembly := a.cfg.ContextEngine.Assemble(ctx, req.Message)
-		if assembly.SystemPromptAddition != "" {
-			req.SystemPrompt += assembly.SystemPromptAddition
+		if rendered := assembly.Rendered(); rendered != "" {
+			req.RecalledContext = rendered
 			a.cfg.Logger.Debug("agent: context-engine recall injected",
 				"turn_id", req.TurnID,
 				"recall_count", len(assembly.RecallIDs))
@@ -758,6 +767,16 @@ func (a *Agent) seedMessages(req ProcessMessageRequest) []Message {
 		})
 	}
 	out = append(out, history...)
+
+	// Recall sits immediately before the user's message rather than at
+	// the head of the list. R5 calls it a "leading" context message and
+	// gives prompt-prefix caching as one motivation; placing it here is
+	// what delivers that, because everything above stays byte-identical
+	// between turns while recall changes every turn.
+	if r := strings.TrimSpace(req.RecalledContext); r != "" {
+		out = append(out, Message{Role: "user", Content: r})
+	}
+
 	userText := decorateWithAttachments(req.Message, req.Attachments)
 	if userText != "" {
 		out = append(out, Message{Role: "user", Content: userText})

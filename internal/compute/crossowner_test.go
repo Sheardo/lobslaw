@@ -249,11 +249,11 @@ func TestContextEngineWideningFollowsPolicy(t *testing.T) {
 			e := NewContextEngine(ContextEngineConfig{
 				Store: store, Embedder: fixedEmbedder{}, CrossOwner: tc.authz,
 			})
-			got := e.Assemble(operatorTurn(context.Background()), "what is on my plate")
-			if !strings.Contains(got.SystemPromptAddition, "sourdough") {
-				t.Errorf("caller's own record missing from recall: %q", got.SystemPromptAddition)
+			got := e.Assemble(operatorTurn(context.Background()), "what is on my plate").Rendered()
+			if !strings.Contains(got, "sourdough") {
+				t.Errorf("caller's own record missing from recall: %q", got)
 			}
-			leaked := strings.Contains(got.SystemPromptAddition, "cardiology")
+			leaked := strings.Contains(got, "cardiology")
 			if leaked != tc.wantBob {
 				t.Errorf("bob's record in prompt = %v; want %v", leaked, tc.wantBob)
 			}
