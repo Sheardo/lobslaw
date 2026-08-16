@@ -42,7 +42,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 |---|---|---|---|---|---|
 | **R0** | [Leader-forwarding write path](#r0--leader-forwarding-write-path) | ✅ | 🔴 P0 | S | R1, R2, R3 |
 | **R1** | [Session layer](#r1--session-layer) | ✅ | 🔴 P0 | L | R2, R3, R4 |
-| **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ⬜ | 🔴 P0 | M | — |
+| **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ✅ | 🔴 P0 | M | — |
 | **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | 🟨 | 🔴 P0 | M | — |
 | **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | ✅ | 🔴 P0 | XS | — |
 | **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ⬜ | 🔴 P0 | M | — |
@@ -95,7 +95,7 @@ table wins — and the section says so at its head.
 | R6 | **Partial, deliberately deferred (2026-08-16).** `builtin_memory.go` does tokenised BM25-ish substring matching. The Raft-replicated inverted index, hybrid fusion and temporal decay are not in. Deferred because current performance is tolerable to ~100k records and an inverted index is a large architecture commitment for a personal store — revisit as the corpus approaches that. Note the open correctness issue tracked under R21, which is independent of the index |
 | R7 | **Partial** — see the status note on the section itself |
 | R0 | **Done.** `RaftNode.ApplyOrForward` + `NodeService.Propose`. Sessions, prefs, credentials, soul tune, channel state and memory writes forward from a follower to the leader; Dream, session pruning and the scheduler stay leader-gated singletons, and `Forget` stays leader-only on purpose. See the section for the two deviations from the design below |
-| R2 | Not started. `require_confirmation` exists as a policy effect and an in-process `ErrRequireConfirm` with no durable record |
+| R2 | **Done.** Durable prompts in `BucketPrompts` with a CAS resolve, serialisable continuations, a leader-gated expiry sweeper, and all three scopes. `once` is the turn; `always` mints a revocable policy rule with `approval:` provenance; `session` is now replicated too — see below for why the in-process version was only half right |
 | R3 | **Done.** Turn serialisation (all four queue modes, `internal/gateway/turnqueue.go`), the cluster-wide per-conversation lease (`internal/memory/session_lease.go`), and restart-safe delivery. The pending queue in the proposal was deliberately not built — the transports already provide the guarantee, and the real gap was duplicate processing on restart, now fixed by acknowledging the poll offset per update. See the section |
 | R5 | **Partial.** The trust-contract half is done: `ContextEngine` returns `promptgen.ContextBlock`s rather than a rendered string, recall goes through `WrapContext` so `BuildSafety` covers it, and it is delivered as a user-role message immediately before the user's own — out of the system prompt, and positioned so the cached prefix survives. Ingest-time scanning landed too: `internal/promptguard` scans on episodic ingest and quarantines rather than drops, and recall skips quarantined records. Deviation: the marker is a `promptguard:<detector>` tag rather than `metadata["promptguard"]`, because `EpisodicRecord` carries no metadata map and a tag needs no schema change. `memory_write` is scanned too, and tool output and errors are routed through `promptguard.Redact` before the model sees them. SOUL load and skill-manifest load are scanned too, but they WARN rather than quarantine — a SOUL is the agent's identity and refusing it on a heuristic would take the assistant down over a false positive. `NeutraliseCloseTags` has no caller left now that recall is out of the system prompt, so it is wanted only if something system-bound reappears. R5 is otherwise complete |
 | R20 | **20a/20b/20c done** (#21) plus the decrypt work the measurement turned up (#25). Latency −73% and allocation −99% geomean versus the starting point; allocation no longer scales with corpus size. **20d (the band prefilter) is open**, and its case is weaker than written — decrypt fell from ~71% to ~32% of a query, so the cosine arithmetic is now the largest share. The minimum score floor is also still open |
@@ -402,6 +402,40 @@ renders four buttons instead of two; REST takes `{"approve": true, "scope": "ses
 **Hardline interaction:** `always` can never grant anything the R9 floor denies. Assert this in a
 test rather than trusting call ordering.
 
+### The half that was still in-process
+
+`session` scope was recorded on the prompt record and then honoured out of a `map[string]struct{}`
+in `compute`. The comment defending that was not wrong, exactly — *"a grant that outlives what the
+user was looking at is one they did not knowingly give"* — but it only ever covered the **restart**
+axis. On the **cluster** axis it never held: same conversation, same continuity the user was
+reasoning about, and they were re-prompted anyway because the next message happened to land on a
+different node. That is not the continuity ending. That is routing.
+
+So grants replicate, keyed `<session_id>\x00<action>\x00<resource>` in `BucketSessionGrants`, and
+the bound the dying process used to supply becomes an explicit `expires_at`. **A process exiting is
+a terrible TTL** — it made the lifetime of a security grant a function of deploy cadence, weeks on
+a stable cluster and ninety seconds during a rollout, and neither of those is a decision anybody
+made. Configurable via `security.session_grant_ttl`, default 24h, because the unit the user was
+reasoning about is a conversation and conversations are a day-shaped thing.
+
+Three things worth naming:
+
+- **Expiry is enforced on read, not by the sweeper.** A grant revoked only when a background pass
+  gets round to it is live for however long that pass is behind, and "how stale is the sweeper" must
+  not be a question a permission check has an answer to. The sweeper is bucket hygiene.
+- **A grant with no `expires_at` is treated as expired, not as eternal.** Every path that creates
+  one writes the field, so a record without it is one this code did not write — and the safe reading
+  of "I do not know when this stops" is that it already has.
+- **The in-process map is kept alongside, not replaced.** A raft apply can fail and the user has
+  already tapped the button; falling back to a local grant means the conversation they are in the
+  middle of continues, degraded to what it was before rather than broken. It also means a node with
+  no local raft keeps exactly its old behaviour rather than silently losing the feature.
+
+`RevokeSession` closes the NOTE the in-process version left for whoever added a "forget this
+conversation" command: a cleared conversation must not keep privileges the user believes they
+revoked. Keyed by session id, it is now a prefix scan — and it removes expired grants too, so
+"forget" is a statement about what is stored rather than about what is enforceable.
+
 ### Acceptance
 
 - [x] Approve on node B a prompt issued by node A.
@@ -411,6 +445,7 @@ test rather than trusting call ordering.
 - [x] Concurrent resolves cluster-wide: exactly one winner, everyone else `ErrPromptResolved`.
 - [x] `always` produces a visible, revocable policy rule (`lobslaw policy approvals` /
       `revoke-approvals`).
+- [x] A `session` grant given on node A is honoured on node B, and survives a restart.
 - [x] `always` cannot escalate past the hardline floor — the floor is evaluated before policy, so
       no allow rule can reach past it (`TestSessionGrantCannotReachTheFloor`).
 

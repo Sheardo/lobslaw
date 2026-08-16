@@ -111,6 +111,14 @@ type Config struct {
 	SelfTaughtStaleAfterDays   int
 	SelfTaughtArchiveAfterDays int
 
+	// SessionGrantTTL bounds a conversation-scoped approval. Zero
+	// takes the default of 24h.
+	//
+	// It exists because the previous bound was the process exiting,
+	// which made the lifetime of a security grant a function of deploy
+	// cadence rather than of anything anybody decided.
+	SessionGrantTTL time.Duration
+
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
 	Policy config.PolicyConfig
@@ -303,6 +311,11 @@ type Node struct {
 	// nowhere to record a lasting grant, so the channels hide the
 	// button rather than offering one that does nothing.
 	approvalRules *policy.ApprovalRules
+
+	// sessionGrants is the replicated backing for "approved for the
+	// rest of this conversation". Nil on a node with no local raft,
+	// where approvals stay process-local exactly as they were.
+	sessionGrants *memory.SessionGrantStore
 	agent         *compute.Agent
 	embedder      compute.EmbeddingProvider
 	roleMap       *compute.RoleMap
@@ -607,6 +620,7 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// materialiser below, which every node must run because a cache is
 	// per-node and a lifecycle is not.
 	n.startCurator(ctx)
+	n.startGrantSweeper(ctx)
 
 	if err := n.startMaterialiser(ctx); err != nil {
 		n.log.Error("skills: materialiser failed to start", "err", err)

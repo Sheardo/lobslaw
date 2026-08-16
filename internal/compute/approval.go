@@ -34,22 +34,57 @@ import (
 // the user across every conversation would grant more than the button
 // appeared to offer.
 //
-// Grants live only in this process, deliberately. A restart ends the
-// continuity the user was reasoning about, and a grant that outlives
-// what they were looking at is one they did not knowingly give.
+// Grants used to live only in this process, and the argument for that
+// was real: a grant outliving what the user was looking at is one they
+// did not knowingly give. But that argument only ever covered the
+// RESTART axis. On the cluster axis it never held — same conversation,
+// same continuity the user was reasoning about, and they were asked
+// again because the next message landed on a different node. That is
+// not the continuity ending; that is routing.
 //
-// NOTE for whoever adds a "forget this conversation" command: it must
-// drop that conversation's grants too, or a cleared conversation keeps
-// privileges the user believes they revoked. There is no such command
-// today, which is why there is no hook for it here.
+// So a durable backing store can be wired in, and the bound the dying
+// process used to provide becomes an explicit TTL on the grant. A
+// process exiting is a terrible TTL: it made the lifetime of a
+// security grant a function of deploy cadence, which is not a decision
+// anybody made.
+//
+// Without a backing store it stays a process-local map, which is what
+// a node with no raft gets — the same behaviour as before, confined to
+// one process, rather than a silent absence of the feature.
 type SessionApprovals struct {
 	mu      sync.RWMutex
 	granted map[string]struct{}
+
+	// durable is the replicated store, when there is one.
+	durable DurableGrants
+}
+
+// DurableGrants is the slice of the replicated grant store that
+// compute needs. An interface so this package does not import memory —
+// and so a test can substitute one without a raft.
+type DurableGrants interface {
+	Grant(ctx context.Context, sessionID, action, resource, grantedBy string) error
+	Granted(sessionID, action, resource string) bool
 }
 
 // NewSessionApprovals builds an empty store.
 func NewSessionApprovals() *SessionApprovals {
 	return &SessionApprovals{granted: make(map[string]struct{})}
+}
+
+// SetDurable wires the replicated store. Once set, grants go to raft
+// and reads consult it, so an approval given on one node is honoured
+// on every other.
+//
+// The in-process map is kept as well, not replaced. A raft apply can
+// fail — a lost leader, a timeout — and the user has already tapped
+// the button: falling back to a local grant means the conversation
+// they are in the middle of continues, degraded to what it was before
+// rather than broken. The failure is logged by the caller.
+func (s *SessionApprovals) SetDurable(d DurableGrants) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.durable = d
 }
 
 // Grant records an approval for the conversation identified by the
@@ -63,9 +98,50 @@ func (s *SessionApprovals) Grant(ctx context.Context, action, resource string) b
 		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.granted[key] = struct{}{}
+	durable := s.durable
+	s.mu.Unlock()
+
+	if durable != nil {
+		id, _ := TurnIdentityFrom(ctx)
+		// Best-effort, and the local grant above is why that is
+		// acceptable: a failed replication degrades this to the
+		// process-local behaviour it had before rather than losing the
+		// answer the user already gave. The error is the caller's to
+		// report — this returns whether a grant was recorded, and one
+		// was.
+		_ = durable.Grant(ctx, sessionKeyOf(id), action, resource, id.Principal.String())
+	}
 	return true
+}
+
+// DurableGrantErr records an approval and returns the replication
+// error, for callers that want to say something about it.
+func (s *SessionApprovals) DurableGrantErr(ctx context.Context, action, resource string) error {
+	s.mu.RLock()
+	durable := s.durable
+	s.mu.RUnlock()
+	if durable == nil {
+		return nil
+	}
+	id, ok := TurnIdentityFrom(ctx)
+	if !ok {
+		return nil
+	}
+	return durable.Grant(ctx, sessionKeyOf(id), action, resource, id.Principal.String())
+}
+
+// sessionKeyOf is the conversation identifier a grant is scoped to.
+//
+// "<channel>:<channel_id>" — deliberately the same key SessionRecord
+// uses, so a conversation's grants can be dropped alongside its
+// transcript rather than by a second convention somebody has to
+// remember to keep in step.
+func sessionKeyOf(id TurnIdentity) string {
+	if id.Channel == "" || id.ChannelID == "" {
+		return ""
+	}
+	return id.Channel + ":" + id.ChannelID
 }
 
 // Granted reports whether this conversation has already approved this
@@ -81,9 +157,20 @@ func (s *SessionApprovals) Granted(ctx context.Context, action, resource string)
 		return false
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	_, found := s.granted[key]
-	return found
+	durable := s.durable
+	s.mu.RUnlock()
+	if found {
+		return true
+	}
+	// The replicated store is consulted only when the local map misses,
+	// which is the case this whole change exists for: the grant was
+	// given on another node, or before this process started.
+	if durable == nil {
+		return false
+	}
+	id, _ := TurnIdentityFrom(ctx)
+	return durable.Granted(sessionKeyOf(id), action, resource)
 }
 
 // approvalKey derives the grant key from the turn identity on ctx.

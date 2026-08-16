@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -49,6 +50,23 @@ func (n *Node) wirePrompts() error {
 		return fmt.Errorf("approval rules: %w", err)
 	}
 	n.approvalRules = rules
+
+	grants, err := memory.NewSessionGrantStore(n.raft, n.store, n.cfg.SessionGrantTTL)
+	if err != nil {
+		return fmt.Errorf("session grants: %w", err)
+	}
+	n.sessionGrants = grants
+	// The executor's approval store is built in the compute stage,
+	// which runs BEFORE this one — so the durable half is attached
+	// here rather than passed in at construction. Attaching is the
+	// right shape anyway: a node with no local raft reaches this
+	// function's early return and keeps a process-local map, which is
+	// the behaviour it had before rather than a silently missing
+	// feature.
+	if n.approvals != nil {
+		n.approvals.SetDurable(grantsAdapter{inner: grants})
+		n.log.Info("session grants: replicated", "ttl", grants.TTL())
+	}
 	return nil
 }
 
@@ -67,6 +85,36 @@ func (n *Node) startPromptSweeper(ctx context.Context) {
 			})
 		if err != nil && ctx.Err() == nil {
 			n.log.Warn("prompt sweeper stopped", "err", err)
+		}
+	}()
+}
+
+// grantSweeperName is the singleton key for the expired-grant sweep.
+const grantSweeperName = "session-grant-sweeper"
+
+// startGrantSweeper removes expired conversation grants on whichever
+// node holds leadership.
+//
+// Hygiene rather than enforcement: Granted checks expiry on every
+// read, so a grant is dead the moment it expires whether or not this
+// has run. What it buys is a bucket that does not accumulate one dead
+// record per confirmation ever answered — which over a year is the
+// difference between a snapshot and a problem.
+//
+// Hourly, because nothing depends on its promptness. A sweep whose
+// lateness could make a grant live longer would need to be much more
+// frequent, and would still be the wrong design.
+func (n *Node) startGrantSweeper(ctx context.Context) {
+	if n.sessionGrants == nil || n.leaderGate == nil {
+		return
+	}
+	go func() {
+		err := singleton.Run(ctx, n.leaderGate, grantSweeperName, n.log,
+			func(ctx context.Context) error {
+				return n.sessionGrants.SweepLoop(ctx, time.Hour, n.log)
+			})
+		if err != nil && ctx.Err() == nil {
+			n.log.Warn("session grant sweeper stopped", "err", err)
 		}
 	}()
 }
