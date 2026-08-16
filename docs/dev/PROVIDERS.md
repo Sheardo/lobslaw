@@ -888,3 +888,34 @@ The floor governs where content goes among *configured providers*. It
 says nothing about what a provider does with it after receiving it, and
 it cannot: `trust_tier` is your assertion about a contract, not
 something lobslaw can verify.
+
+---
+
+## Chains do not route yet
+
+`[[compute.chains]]` is parsed, validated for coherence, and **inert**.
+`Resolver.Resolve` has no callers: `ResolveRequest` is constructed
+nowhere and `Node.Resolver()` is never read.
+
+What actually selects a provider for a turn:
+
+```
+roles.main  →  the primary provider
+            →  its `backup` link
+            →  that provider's `backup` link
+            →  …
+```
+
+`ProviderRegistry.Chain` walks those links. It knows nothing about
+chain triggers, multi-step chains, or per-chain `min_trust_tier`.
+
+An operator who writes a chain and sees it accepted is entitled to
+think it does something, so a node with chains configured logs a
+warning at boot naming them and saying what routes instead. Warn rather
+than refuse: a config accepted yesterday must not stop a node booting
+today, and a chain is inert rather than dangerous — the turn still runs,
+on the provider it would have run on anyway.
+
+The resolver is kept for its validation. A chain naming a provider that
+does not exist still fails to wire, and deleting the resolver would
+silently start accepting broken chains before the routing lands.

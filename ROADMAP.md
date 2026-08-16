@@ -1475,8 +1475,23 @@ so the existing resolver/capability/roles tests stay green throughout.
       why that was defensible and why the ERROR-level log is what makes advancing safe now.
 - [x] Health tracking: a provider that failed recently is skipped rather than re-tried every turn.
       Per-node, not Raft; no half-open probe state — the chain is the probe.
-- [ ] A chain step falls through without abandoning the chain. *Chat and modality chains both
-      fail over; a multi-step chain's individual STEP still resolves to one provider.*
+- [ ] A chain step falls through without abandoning the chain.
+      **Blocked on something larger: chains do not route at all.** `Resolver.Resolve` has no
+      callers — verified exhaustively, `ResolveRequest` is constructed nowhere and
+      `Node.Resolver()` is never read. The turn path is `ProviderRegistry.Chain`, which walks
+      `backup` links and knows nothing about triggers, multi-step chains or per-chain trust floors.
+      So `[[compute.chains]]` is parsed, validated for coherence, logged at boot, and inert.
+
+      Building step-level fallthrough for a resolver nothing calls would be building on sand, so
+      the first move was to stop the config lying: an operator with chains configured now gets a
+      boot warning naming them and saying what routes instead. The resolver is kept for its
+      validation — deleting it would silently start accepting broken chains before the routing
+      lands.
+
+      What remains is R8's actual premise: one selection pipeline, with `Resolver.Resolve` on the
+      turn path and multi-step execution (reviewer handoff, prompt templates) in the agent. That
+      execution half does not exist either, which is why this is L-sized rather than the small
+      change the box implies.
 - [x] Trust-tier floor is honoured at every candidate, not just the first.
       Enforced on the chat backup chain and on every modality chain — a vision provider is handed
       the user's image and a speak provider the text of the reply, so they are not lesser
