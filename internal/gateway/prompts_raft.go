@@ -3,10 +3,12 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
@@ -22,27 +24,37 @@ type RaftPrompts struct {
 	// coarsest true answer to "who closed this" — better in the audit
 	// trail than an empty string that reads like nobody did.
 	nodeID string
+	// caps are this node's current budget limits, applied when a
+	// paused turn is rebuilt. Read from config rather than from the
+	// record, so an operator lowering a limit is not overridden by a
+	// turn that started before the change.
+	caps compute.BudgetCaps
 }
 
 // NewRaftPrompts wraps a raft-backed store as the gateway registry.
-func NewRaftPrompts(store *memory.PromptStore, nodeID string) *RaftPrompts {
-	return &RaftPrompts{store: store, nodeID: nodeID}
+func NewRaftPrompts(store *memory.PromptStore, nodeID string, caps compute.BudgetCaps) *RaftPrompts {
+	return &RaftPrompts{store: store, nodeID: nodeID, caps: caps}
 }
 
-func (r *RaftPrompts) Create(turnID, reason, channel string, ttl time.Duration) (*Prompt, error) {
+func (r *RaftPrompts) Create(np NewPrompt) (*Prompt, error) {
 	rec := &lobslawv1.PromptRecord{
-		TurnId:  turnID,
-		Reason:  reason,
-		Channel: channel,
+		TurnId:       np.TurnID,
+		SessionId:    np.SessionID,
+		Reason:       np.Reason,
+		Channel:      np.Channel,
+		ChannelId:    np.ChannelID,
+		Action:       np.Action,
+		Resource:     np.Resource,
+		Continuation: continuationToProto(np.Continuation),
 	}
-	if ttl > 0 {
-		rec.ExpiresAt = timestamppb.New(time.Now().Add(ttl))
+	if np.TTL > 0 {
+		rec.ExpiresAt = timestamppb.New(time.Now().Add(np.TTL))
 	}
 	out, err := r.store.Create(rec)
 	if err != nil {
 		return nil, err
 	}
-	return fromRecord(out), nil
+	return r.fromRecord(out)
 }
 
 func (r *RaftPrompts) Get(id string) (*Prompt, error) {
@@ -50,18 +62,20 @@ func (r *RaftPrompts) Get(id string) (*Prompt, error) {
 	if err != nil {
 		return nil, translatePromptErr(err)
 	}
-	return fromRecord(rec), nil
+	return r.fromRecord(rec)
 }
 
-func (r *RaftPrompts) Resolve(id string, decision PromptDecision) error {
+func (r *RaftPrompts) Resolve(id string, decision PromptDecision, scope PromptScope) error {
 	if decision != PromptApproved && decision != PromptDenied {
 		return errors.New("prompt: Resolve accepts only Approved or Denied")
 	}
-	// Scope is set here, not carried through: the button that records
-	// a lasting grant does that separately, and conflating the two
-	// would make every approval a standing one.
-	_, err := r.store.Resolve(id, toDecision(decision),
-		lobslawv1.PromptScope_PROMPT_SCOPE_ONCE, r.nodeID)
+	// A denial has no scope worth recording: "no, and never again" is
+	// not something any button offers, and storing one would read as
+	// a standing refusal nobody asked for.
+	if decision == PromptDenied {
+		scope = PromptScopeOnce
+	}
+	_, err := r.store.Resolve(id, toDecision(decision), toScope(scope), r.nodeID)
 	return translatePromptErr(err)
 }
 
@@ -73,13 +87,18 @@ func (r *RaftPrompts) Wait(ctx context.Context, id string) (PromptDecision, erro
 	return fromDecision(rec.Decision), nil
 }
 
-func fromRecord(rec *lobslawv1.PromptRecord) *Prompt {
+func (r *RaftPrompts) fromRecord(rec *lobslawv1.PromptRecord) (*Prompt, error) {
 	p := &Prompt{
-		ID:       rec.Id,
-		TurnID:   rec.TurnId,
-		Reason:   rec.Reason,
-		Channel:  rec.Channel,
-		Decision: fromDecision(rec.Decision),
+		ID:        rec.Id,
+		TurnID:    rec.TurnId,
+		SessionID: rec.SessionId,
+		Reason:    rec.Reason,
+		Channel:   rec.Channel,
+		ChannelID: rec.ChannelId,
+		Action:    rec.Action,
+		Resource:  rec.Resource,
+		Decision:  fromDecision(rec.Decision),
+		Scope:     fromScope(rec.Scope),
 	}
 	if rec.CreatedAt != nil {
 		p.CreatedAt = rec.CreatedAt.AsTime()
@@ -87,7 +106,34 @@ func fromRecord(rec *lobslawv1.PromptRecord) *Prompt {
 	if rec.ExpiresAt != nil {
 		p.ExpiresAt = rec.ExpiresAt.AsTime()
 	}
-	return p
+	cont, err := continuationFromProto(rec.Continuation, r.caps)
+	if err != nil {
+		return nil, fmt.Errorf("prompt %q: rebuild continuation: %w", rec.Id, err)
+	}
+	p.Continuation = cont
+	return p, nil
+}
+
+func toScope(s PromptScope) lobslawv1.PromptScope {
+	switch s {
+	case PromptScopeSession:
+		return lobslawv1.PromptScope_PROMPT_SCOPE_SESSION
+	case PromptScopeAlways:
+		return lobslawv1.PromptScope_PROMPT_SCOPE_ALWAYS
+	default:
+		return lobslawv1.PromptScope_PROMPT_SCOPE_ONCE
+	}
+}
+
+func fromScope(s lobslawv1.PromptScope) PromptScope {
+	switch s {
+	case lobslawv1.PromptScope_PROMPT_SCOPE_SESSION:
+		return PromptScopeSession
+	case lobslawv1.PromptScope_PROMPT_SCOPE_ALWAYS:
+		return PromptScopeAlways
+	default:
+		return PromptScopeOnce
+	}
 }
 
 func toDecision(d PromptDecision) lobslawv1.PromptDecision {

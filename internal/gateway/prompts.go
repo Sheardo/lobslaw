@@ -49,10 +49,79 @@ func (d PromptDecision) String() string {
 // what lets a gateway on a compute-only node keep working — it has no
 // local raft, so there is nothing durable for it to write to.
 type Prompts interface {
-	Create(turnID, reason, channel string, ttl time.Duration) (*Prompt, error)
+	Create(NewPrompt) (*Prompt, error)
 	Get(id string) (*Prompt, error)
-	Resolve(id string, decision PromptDecision) error
+	// Resolve records the user's answer. scope is what the button they
+	// tapped offered; PromptScopeOnce is the plain "yes, this time".
+	Resolve(id string, decision PromptDecision, scope PromptScope) error
 	Wait(ctx context.Context, id string) (PromptDecision, error)
+}
+
+// PromptScope is how far an approval reaches.
+type PromptScope int
+
+const (
+	// PromptScopeOnce covers this turn and nothing else.
+	PromptScopeOnce PromptScope = iota
+	// PromptScopeSession covers the rest of the conversation.
+	PromptScopeSession
+	// PromptScopeAlways mints a revocable policy rule.
+	PromptScopeAlways
+)
+
+func (s PromptScope) String() string {
+	switch s {
+	case PromptScopeSession:
+		return "session"
+	case PromptScopeAlways:
+		return "always"
+	default:
+		return "once"
+	}
+}
+
+// ParsePromptScope reads a scope off the wire. Anything unrecognised —
+// including the empty string — is "once": a typo in a REST body must
+// narrow the grant, never widen it.
+func ParsePromptScope(s string) PromptScope {
+	switch s {
+	case "session":
+		return PromptScopeSession
+	case "always":
+		return PromptScopeAlways
+	default:
+		return PromptScopeOnce
+	}
+}
+
+// NewPrompt is everything a confirmation needs to be answered
+// somewhere other than where it was asked.
+//
+// A struct rather than positional arguments because the list grew past
+// the point where `Create(a, b, c, ttl)` says anything at a call site,
+// and because the next field to be added should not be a signature
+// change in four places.
+type NewPrompt struct {
+	TurnID    string
+	SessionID string
+	Reason    string
+	Channel   string
+	// ChannelID is where the resolution gets delivered. Without it a
+	// node that did not ask the question has no way to reply to it.
+	ChannelID string
+	TTL       time.Duration
+
+	// Action and Resource name the operation being confirmed, so a
+	// "session" or "always" answer records a grant that matches. Empty
+	// for a budget confirmation — spend is not an operation, and a
+	// button that silenced future budget warnings is the last thing an
+	// operator wants on that prompt.
+	Action   string
+	Resource string
+
+	// Continuation is the paused turn. Nil where the channel resumes
+	// in-process and has no need to move it.
+	Continuation *Continuation
 }
 
 // Prompt is one pending confirmation. Created by the channel when
@@ -82,9 +151,27 @@ type Prompt struct {
 	// ExpiresAt is when the registry will auto-deny this prompt.
 	ExpiresAt time.Time
 
+	// SessionID is the conversation this turn belongs to, so a
+	// resumed leg is appended to the right transcript.
+	SessionID string
+
+	// ChannelID is where the resolution gets delivered.
+	ChannelID string
+
+	// Action and Resource name the operation, for a scoped answer.
+	Action   string
+	Resource string
+
+	// Continuation is the paused turn, when the channel stored one.
+	Continuation *Continuation
+
 	// Decision holds the resolution once the user answers (or the
 	// timeout fires).
 	Decision PromptDecision
+
+	// Scope is how far the answer reaches. Meaningless until Decision
+	// leaves Pending.
+	Scope PromptScope
 
 	// resolved is closed when Decision transitions out of Pending.
 	// Wait() blocks on it.
@@ -101,6 +188,10 @@ type PromptRegistry struct {
 	prompts map[string]*Prompt
 }
 
+// defaultPromptTTL bounds a confirmation that arrives with no TTL of
+// its own. A prompt with no expiry is a turn that waits forever.
+const defaultPromptTTL = 5 * time.Minute
+
 // NewPromptRegistry constructs an empty registry.
 func NewPromptRegistry() *PromptRegistry {
 	return &PromptRegistry{prompts: make(map[string]*Prompt)}
@@ -112,21 +203,30 @@ func NewPromptRegistry() *PromptRegistry {
 //
 // The returned ID is a random 32-hex-char string — long enough to
 // be unguessable across a realistic number of in-flight prompts.
-func (r *PromptRegistry) Create(turnID, reason, channel string, ttl time.Duration) (*Prompt, error) {
+func (r *PromptRegistry) Create(np NewPrompt) (*Prompt, error) {
 	id, err := randomHexID()
 	if err != nil {
 		return nil, err
 	}
+	ttl := np.TTL
+	if ttl <= 0 {
+		ttl = defaultPromptTTL
+	}
 	now := time.Now()
 	p := &Prompt{
-		ID:        id,
-		TurnID:    turnID,
-		Reason:    reason,
-		Channel:   channel,
-		CreatedAt: now,
-		ExpiresAt: now.Add(ttl),
-		Decision:  PromptPending,
-		resolved:  make(chan struct{}),
+		ID:           id,
+		TurnID:       np.TurnID,
+		SessionID:    np.SessionID,
+		Reason:       np.Reason,
+		Channel:      np.Channel,
+		ChannelID:    np.ChannelID,
+		Action:       np.Action,
+		Resource:     np.Resource,
+		Continuation: np.Continuation,
+		CreatedAt:    now,
+		ExpiresAt:    now.Add(ttl),
+		Decision:     PromptPending,
+		resolved:     make(chan struct{}),
 	}
 	r.mu.Lock()
 	r.prompts[id] = p
@@ -165,7 +265,7 @@ func (r *PromptRegistry) Get(id string) (*Prompt, error) {
 // ErrPromptResolved. A split lock would let multiple callers pass
 // the Pending check and both return nil even though only one
 // actually mutated state — caught by the concurrent-resolve test.
-func (r *PromptRegistry) Resolve(id string, decision PromptDecision) error {
+func (r *PromptRegistry) Resolve(id string, decision PromptDecision, scope PromptScope) error {
 	if decision != PromptApproved && decision != PromptDenied {
 		return errors.New("prompt: Resolve accepts only Approved or Denied")
 	}
@@ -178,6 +278,7 @@ func (r *PromptRegistry) Resolve(id string, decision PromptDecision) error {
 	if p.Decision != PromptPending {
 		return ErrPromptResolved
 	}
+	p.Scope = scope
 	r.transitionLocked(p, decision)
 	return nil
 }

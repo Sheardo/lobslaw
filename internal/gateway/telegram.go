@@ -229,35 +229,10 @@ type TelegramHandler struct {
 	inflightMu sync.Mutex
 	seenUpdate map[int64]time.Time // update_id → first-seen time
 
-	// continuations hold the agent-turn state needed to resume a
-	// turn after the user taps Approve on a confirmation keyboard.
-	// Keyed by prompt ID (same ID that appears in callback_data).
-	// Populated by sendConfirmationKeyboard; drained by
-	// handleCallbackQuery. Entries aren't persisted — a restart
-	// loses in-flight continuations (the user's tap becomes a no-op
-	// with a "no longer exists" reply from the registry).
-	continuationsMu sync.Mutex
-	continuations   map[string]*telegramContinuation
-
 	// conv is the per-chat conversation transcript feeding
 	// ProcessMessageRequest.ConversationHistory: durable when a
 	// session store is wired, in-memory otherwise.
 	conv *conversationLog
-}
-
-// telegramContinuation captures everything handleCallbackQuery
-// needs to resume an in-flight turn on approval.
-type telegramContinuation struct {
-	req      compute.ProcessMessageRequest
-	messages []compute.Message
-	chatID   int64
-	reason   string
-	// session identifies the conversation to append the resumed
-	// half of the turn to. The messages up to the confirmation were
-	// already recorded when the turn stopped; without this the
-	// approved tool calls and final reply would never be, leaving a
-	// stored transcript that ends mid-turn forever.
-	session SessionRef
 }
 
 // Telegram Update / Message types — minimal subset we consume. The
@@ -369,16 +344,15 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		logger = slog.Default()
 	}
 	return &TelegramHandler{
-		cfg:           cfg,
-		agent:         agent,
-		log:           logger,
-		client:        client,
-		base:          base,
-		gate:          NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0),
-		pendingScope:  make(map[string]scopedOperation),
-		seenUpdate:    make(map[int64]time.Time),
-		continuations: make(map[string]*telegramContinuation),
-		conv:          newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
+		cfg:          cfg,
+		agent:        agent,
+		log:          logger,
+		client:       client,
+		base:         base,
+		gate:         NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, logger).WithLeaser(cfg.Leaser, 0),
+		pendingScope: make(map[string]scopedOperation),
+		seenUpdate:   make(map[int64]time.Time),
+		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
 	}, nil
 }
 
@@ -591,27 +565,26 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
 	}
-	p, err := h.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "telegram", ttl)
+	// The paused turn rides on the prompt itself. It used to live in a
+	// Go map on this handler, which is why an approval after a restart
+	// could only tell the user to send it again, and why a tap that
+	// reached a different node did nothing at all.
+	p, err := h.cfg.Prompts.Create(NewPrompt{
+		TurnID:       req.TurnID,
+		SessionID:    session.ChannelID,
+		Reason:       resp.ConfirmationReason,
+		Channel:      "telegram",
+		ChannelID:    strconv.FormatInt(chatID, 10),
+		TTL:          ttl,
+		Action:       resp.ConfirmationAction,
+		Resource:     resp.ConfirmationResource,
+		Continuation: &Continuation{Request: req, Messages: resp.Messages},
+	})
 	if err != nil {
 		h.log.Error("telegram: prompt registration failed", "err", err)
 		h.sendText(chatID, "Confirmation required: "+resp.ConfirmationReason)
 		return
 	}
-
-	// Stash resume state so handleCallbackQuery can re-enter the
-	// agent loop on approval. Dropped if the user denies or the
-	// prompt times out — nothing periodically reaps entries because
-	// every code path that reads this map also deletes on the way
-	// out (approve, deny, or missing on re-tap).
-	h.continuationsMu.Lock()
-	h.continuations[p.ID] = &telegramContinuation{
-		req:      req,
-		messages: resp.Messages,
-		chatID:   chatID,
-		reason:   resp.ConfirmationReason,
-		session:  session,
-	}
-	h.continuationsMu.Unlock()
 
 	buttons := []map[string]string{
 		{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
@@ -653,21 +626,6 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	})
 }
 
-// takeContinuation pops and returns the stored continuation for the
-// given prompt ID. Returns (nil, false) when no entry exists — the
-// prompt may have been resolved on a different channel, reaped, or
-// never existed. Callers surface a "no longer exists" message in
-// that case.
-func (h *TelegramHandler) takeContinuation(promptID string) (*telegramContinuation, bool) {
-	h.continuationsMu.Lock()
-	defer h.continuationsMu.Unlock()
-	c, ok := h.continuations[promptID]
-	if ok {
-		delete(h.continuations, promptID)
-	}
-	return c, ok
-}
-
 // handleCallbackQuery resolves a pending prompt based on the
 // callback_data tag format "prompt:<verb>:<id>" produced by
 // sendConfirmationKeyboard. Any other callback_data shape is
@@ -689,43 +647,51 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	}
 	verb, promptID := parts[1], parts[2]
 
+	if h.cfg.Prompts == nil {
+		h.log.Warn("telegram: callback arrived but no prompt registry configured")
+		return
+	}
+
 	var decision PromptDecision
+	var scope PromptScope
 	var reply string
 	switch verb {
 	case "approve":
-		decision = PromptApproved
+		decision, scope = PromptApproved, PromptScopeOnce
 		reply = "Approved."
 	case "approve-session":
-		decision = PromptApproved
+		decision, scope = PromptApproved, PromptScopeSession
 		reply = "Approved — I won't ask again for this in this chat."
 		// Recorded before Resolve, so the resumed turn already sees
 		// the grant. Resolving first would let the resume race the
 		// grant and prompt a second time for the same operation.
 		if !h.grantForSession(ctx, promptID, q) {
+			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
 		}
 	case "approve-always":
-		decision = PromptApproved
-		reply = "Approved — I won't ask about this again. Revoke it with `policy revoke-approvals`."
+		decision, scope = PromptApproved, PromptScopeAlways
+		reply = "Approved — I won't ask about this again. Revoke it with `lobslaw policy revoke-approvals`."
 		// Recorded before Resolve, for the same reason as the session
 		// grant: resolving first lets the resumed turn race the rule
 		// and prompt a second time for the same operation.
 		if !h.grantAlways(ctx, promptID, q) {
+			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
 		}
 	case "deny":
-		decision = PromptDenied
+		decision, scope = PromptDenied, PromptScopeOnce
 		reply = "Denied."
 	default:
 		h.log.Debug("telegram: unknown prompt verb", "verb", verb, "data", q.Data)
 		return
 	}
 
-	if h.cfg.Prompts == nil {
-		h.log.Warn("telegram: callback arrived but no prompt registry configured")
-		return
-	}
-	if err := h.cfg.Prompts.Resolve(promptID, decision); err != nil {
+	// Read before resolving. Resolve is a CAS that can lose to another
+	// node, and the loser must not consume the turn it did not win.
+	prompt, getErr := h.cfg.Prompts.Get(promptID)
+
+	if err := h.cfg.Prompts.Resolve(promptID, decision, scope); err != nil {
 		switch {
 		case errors.Is(err, ErrPromptNotFound):
 			reply = "That prompt no longer exists."
@@ -735,51 +701,61 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 			h.log.Error("telegram: resolve failed", "err", err, "id", promptID)
 			reply = "Couldn't process the response."
 		}
-		// Resolution failed or was redundant — drop any stored
-		// continuation to avoid leaking memory on repeat taps.
-		_, _ = h.takeContinuation(promptID)
 		if q.Message != nil {
 			h.sendText(q.Message.Chat.ID, reply)
 		}
 		return
 	}
 
-	if decision == PromptDenied {
-		_, _ = h.takeContinuation(promptID) // drop state, nothing to resume
-		if q.Message != nil {
-			h.sendText(q.Message.Chat.ID, reply)
-		}
-		return
-	}
-
-	// Approved — acknowledge + resume the turn.
 	if q.Message != nil {
 		h.sendText(q.Message.Chat.ID, reply)
 	}
-	cont, ok := h.takeContinuation(promptID)
-	if !ok {
-		// Approval with no stored state — probably a bot restart
-		// after the keyboard was sent. Nothing to resume.
-		h.log.Warn("telegram: approve with no continuation state", "prompt_id", promptID)
+	if decision == PromptDenied {
+		return
+	}
+
+	if getErr != nil || prompt == nil || prompt.Continuation == nil {
+		// Approved, but there is no turn to resume. Under the old
+		// in-process map this was the ordinary outcome of a restart;
+		// now it means the prompt was raised without one, or the
+		// record was purged between the read and the resolve.
+		h.log.Warn("telegram: approve with no continuation",
+			"prompt_id", promptID, "err", getErr)
 		if q.Message != nil {
 			h.sendText(q.Message.Chat.ID, "I've lost track of that turn — send it again.")
 		}
 		return
 	}
-	h.resumeAfterApproval(ctx, cont)
+	h.resumeAfterApproval(ctx, prompt)
 }
 
 // resumeAfterApproval re-enters the agent loop with a relaxed
 // budget and sends the final reply (or a new keyboard if another
 // confirmation is needed) back to the originating chat. Kept as a
 // method so callers can also invoke it from tests.
-func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegramContinuation) {
-	cont.req.Budget.Relax()
-	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.req, cont.messages)
+func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, p *Prompt) {
+	cont := p.Continuation
+	chatID, err := strconv.ParseInt(p.ChannelID, 10, 64)
+	if err != nil {
+		h.log.Error("telegram: prompt carries no usable chat id",
+			"prompt_id", p.ID, "channel_id", p.ChannelID)
+		return
+	}
+	session := SessionRef{Channel: "telegram", ChannelID: p.SessionID}
+
+	// Tools stay nil: fillDefaults populates them from the resuming
+	// node's own registry. Serialising them onto the record would let
+	// a definition outlive the redeploy that changed it.
+	cont.Request.TurnID = p.TurnID
+	cont.Request.Channel = "telegram"
+	cont.Request.ChannelID = p.ChannelID
+
+	cont.Request.Budget.Relax()
+	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("telegram: resume failed",
-			"turn_id", cont.req.TurnID, "err", err)
-		h.sendText(cont.chatID, classifyAgentError(err))
+			"turn_id", cont.Request.TurnID, "err", err)
+		h.sendText(chatID, classifyAgentError(err))
 		return
 	}
 
@@ -788,18 +764,18 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, cont *telegra
 	// ResumeFromConfirmation sets TurnStartIndex to the end of what
 	// it was handed — so this appends exactly the new tail.
 	if newTurn := newTurnMessages(resp.Messages, resp.TurnStartIndex); len(newTurn) > 0 {
-		h.conv.Append(ctx, cont.session, cont.req.TurnID, newTurn)
+		h.conv.Append(ctx, session, cont.Request.TurnID, newTurn)
 	}
 
 	switch {
 	case resp.NeedsConfirmation:
-		h.sendConfirmationKeyboard(cont.chatID, cont.req, resp, cont.session)
+		h.sendConfirmationKeyboard(chatID, cont.Request, resp, session)
 	case resp.Reply == "":
-		h.sendText(cont.chatID, "(empty reply)")
+		h.sendText(chatID, "(empty reply)")
 	default:
-		h.sendText(cont.chatID, resp.Reply)
+		h.sendText(chatID, resp.Reply)
 	}
-	h.SendAttachments(cont.chatID, resp.Attachments, h.cfg.ArtifactOpener)
+	h.SendAttachments(chatID, resp.Attachments, h.cfg.ArtifactOpener)
 }
 
 // postJSON POSTs to a bot API method with a JSON body. Shared by

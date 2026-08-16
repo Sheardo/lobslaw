@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/policy"
@@ -36,7 +37,11 @@ func (n *Node) wirePrompts() error {
 	if err != nil {
 		return fmt.Errorf("prompt store: %w", err)
 	}
-	n.promptRegistry = gateway.NewRaftPrompts(store, n.cfg.NodeID)
+	// The caps come from this node's current config, so a turn that
+	// paused before an operator lowered a limit resumes under the new
+	// one rather than the old.
+	n.promptRegistry = gateway.NewRaftPrompts(store, n.cfg.NodeID,
+		compute.FromComputeConfig(n.cfg.Compute))
 	n.promptStore = store
 
 	rules, err := policy.NewApprovalRules(n.raft, n.store)

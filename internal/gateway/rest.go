@@ -483,7 +483,19 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		if ttl <= 0 {
 			ttl = 5 * time.Minute
 		}
-		p, perr := s.cfg.Prompts.Create(req.TurnID, resp.ConfirmationReason, "rest", ttl)
+		// The REST caller holds the connection open, so this handler
+		// resumes the turn itself and does not need the continuation
+		// carried. Action and resource still are: they are what a
+		// "session" or "always" answer records a grant against.
+		p, perr := s.cfg.Prompts.Create(NewPrompt{
+			TurnID:    req.TurnID,
+			Reason:    resp.ConfirmationReason,
+			Channel:   "rest",
+			SessionID: req.SessionID,
+			TTL:       ttl,
+			Action:    resp.ConfirmationAction,
+			Resource:  resp.ConfirmationResource,
+		})
 		if perr != nil {
 			s.log.Warn("rest: prompt registration failed — returning confirmation as-is", "err", perr)
 			break
@@ -706,6 +718,10 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var body struct {
 		Approve bool `json:"approve"`
+		// Scope is "once" | "session" | "always". Absent or
+		// unrecognised is "once" — a typo must narrow the grant,
+		// never widen it.
+		Scope string `json:"scope"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.jsonErr(w, http.StatusBadRequest, "bad JSON body: "+err.Error())
@@ -715,7 +731,8 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	if body.Approve {
 		decision = PromptApproved
 	}
-	if err := s.cfg.Prompts.Resolve(id, decision); err != nil {
+	scope := ParsePromptScope(body.Scope)
+	if err := s.cfg.Prompts.Resolve(id, decision, scope); err != nil {
 		switch {
 		case errors.Is(err, ErrPromptNotFound):
 			s.jsonErr(w, http.StatusNotFound, "prompt not found")
@@ -727,7 +744,10 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"decision": decision.String()})
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"decision": decision.String(),
+		"scope":    scope.String(),
+	})
 }
 
 // handlePlan wraps PlanService.GetPlan. Accepts an optional

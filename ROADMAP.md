@@ -399,8 +399,9 @@ test rather than trusting call ordering.
 ### Acceptance
 
 - [x] Approve on node B a prompt issued by node A.
-- [ ] Approve after a full process restart; the turn resumes rather than asking the user to resend.
-      (The record and its continuation survive; nothing populates the continuation yet.)
+- [x] Approve after a full process restart; the turn resumes rather than asking the user to resend.
+      (Telegram. REST holds the connection open and resumes in-request, so it stores no
+      continuation — noted in docs/dev/GATEWAY.md.)
 - [x] Concurrent resolves cluster-wide: exactly one winner, everyone else `ErrPromptResolved`.
 - [x] `always` produces a visible, revocable policy rule (`lobslaw policy approvals` /
       `revoke-approvals`).

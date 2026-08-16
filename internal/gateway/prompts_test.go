@@ -18,7 +18,7 @@ func TestPromptRegistryCreateReturnsIDAndSnapshot(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
 
-	p, err := r.Create("turn-1", "dangerous thing", "rest", longTTL)
+	p, err := r.Create(NewPrompt{TurnID: "turn-1", Reason: "dangerous thing", Channel: "rest", TTL: longTTL})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestPromptRegistryCreateIDsAreUnique(t *testing.T) {
 	r := NewPromptRegistry()
 	seen := make(map[string]struct{}, 200)
 	for range 200 {
-		p, err := r.Create("t", "r", "rest", longTTL)
+		p, err := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,7 @@ func TestPromptRegistryGetUnknown(t *testing.T) {
 func TestPromptRegistryGetReturnsSnapshot(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	snap, err := r.Get(p.ID)
 	if err != nil {
@@ -83,9 +83,9 @@ func TestPromptRegistryGetReturnsSnapshot(t *testing.T) {
 func TestPromptRegistryResolveApproved(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
-	if err := r.Resolve(p.ID, PromptApproved); err != nil {
+	if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 		t.Fatal(err)
 	}
 	snap, _ := r.Get(p.ID)
@@ -97,9 +97,9 @@ func TestPromptRegistryResolveApproved(t *testing.T) {
 func TestPromptRegistryResolveDenied(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
-	if err := r.Resolve(p.ID, PromptDenied); err != nil {
+	if err := r.Resolve(p.ID, PromptDenied, PromptScopeOnce); err != nil {
 		t.Fatal(err)
 	}
 	snap, _ := r.Get(p.ID)
@@ -114,12 +114,12 @@ func TestPromptRegistryResolveDenied(t *testing.T) {
 func TestPromptRegistryResolveIdempotentFirstWriterWins(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
-	if err := r.Resolve(p.ID, PromptApproved); err != nil {
+	if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 		t.Fatal(err)
 	}
-	err := r.Resolve(p.ID, PromptDenied)
+	err := r.Resolve(p.ID, PromptDenied, PromptScopeOnce)
 	if !errors.Is(err, ErrPromptResolved) {
 		t.Errorf("second Resolve should return ErrPromptResolved; got %v", err)
 	}
@@ -132,7 +132,7 @@ func TestPromptRegistryResolveIdempotentFirstWriterWins(t *testing.T) {
 func TestPromptRegistryResolveUnknown(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	err := r.Resolve("nonexistent", PromptApproved)
+	err := r.Resolve("nonexistent", PromptApproved, PromptScopeOnce)
 	if !errors.Is(err, ErrPromptNotFound) {
 		t.Errorf("unknown id should return ErrPromptNotFound; got %v", err)
 	}
@@ -143,10 +143,10 @@ func TestPromptRegistryResolveUnknown(t *testing.T) {
 func TestPromptRegistryResolveRejectsInvalidDecision(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	for _, bad := range []PromptDecision{PromptPending, PromptTimedOut} {
-		if err := r.Resolve(p.ID, bad); err == nil {
+		if err := r.Resolve(p.ID, bad, PromptScopeOnce); err == nil {
 			t.Errorf("Resolve must reject %s", bad)
 		}
 	}
@@ -155,7 +155,7 @@ func TestPromptRegistryResolveRejectsInvalidDecision(t *testing.T) {
 func TestPromptRegistryWaitReturnsOnResolve(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	var wg sync.WaitGroup
 	var gotDecision PromptDecision
@@ -168,7 +168,7 @@ func TestPromptRegistryWaitReturnsOnResolve(t *testing.T) {
 
 	// Give Wait() a moment to reach the select, then resolve.
 	time.Sleep(10 * time.Millisecond)
-	if err := r.Resolve(p.ID, PromptApproved); err != nil {
+	if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 		t.Fatal(err)
 	}
 	wg.Wait()
@@ -186,8 +186,8 @@ func TestPromptRegistryWaitReturnsOnResolve(t *testing.T) {
 func TestPromptRegistryWaitReturnsImmediatelyWhenAlreadyResolved(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
-	_ = r.Resolve(p.ID, PromptDenied)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
+	_ = r.Resolve(p.ID, PromptDenied, PromptScopeOnce)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -216,7 +216,7 @@ func TestPromptRegistryWaitUnknown(t *testing.T) {
 func TestPromptRegistryWaitContextCancelReturnsPending(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
@@ -235,7 +235,7 @@ func TestPromptRegistryWaitContextCancelReturnsPending(t *testing.T) {
 func TestPromptRegistryAutoTimeoutResolves(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", 50*time.Millisecond)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: 50 * time.Millisecond})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -255,10 +255,10 @@ func TestPromptRegistryAutoTimeoutResolves(t *testing.T) {
 func TestPromptRegistryTimeoutDoesNotOverwriteUserResolution(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", 20*time.Millisecond)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: 20 * time.Millisecond})
 
 	// Resolve BEFORE the timer fires.
-	if err := r.Resolve(p.ID, PromptApproved); err != nil {
+	if err := r.Resolve(p.ID, PromptApproved, PromptScopeOnce); err != nil {
 		t.Fatal(err)
 	}
 	// Give the timer time to tick (and be ignored).
@@ -274,8 +274,8 @@ func TestPromptRegistryReapRemovesResolvedAgedOut(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
 	// Short TTL so ExpiresAt is in the past by the time Reap runs.
-	p1, _ := r.Create("t1", "r", "rest", 10*time.Millisecond)
-	p2, _ := r.Create("t2", "r", "rest", longTTL)
+	p1, _ := r.Create(NewPrompt{TurnID: "t1", Reason: "r", Channel: "rest", TTL: 10 * time.Millisecond})
+	p2, _ := r.Create(NewPrompt{TurnID: "t2", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	// Wait for p1 to auto-timeout.
 	time.Sleep(40 * time.Millisecond)
@@ -299,7 +299,7 @@ func TestPromptRegistryReapRemovesResolvedAgedOut(t *testing.T) {
 func TestPromptRegistryReapSkipsPending(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	removed := r.Reap()
 	if removed != 0 {
@@ -335,7 +335,7 @@ func TestPromptDecisionStrings(t *testing.T) {
 func TestPromptRegistryConcurrentResolveOnlyOneWinner(t *testing.T) {
 	t.Parallel()
 	r := NewPromptRegistry()
-	p, _ := r.Create("t", "r", "rest", longTTL)
+	p, _ := r.Create(NewPrompt{TurnID: "t", Reason: "r", Channel: "rest", TTL: longTTL})
 
 	const goroutines = 32
 	var wins atomic.Int32
@@ -351,7 +351,7 @@ func TestPromptRegistryConcurrentResolveOnlyOneWinner(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			err := r.Resolve(p.ID, d)
+			err := r.Resolve(p.ID, d, PromptScopeOnce)
 			switch {
 			case err == nil:
 				wins.Add(1)
