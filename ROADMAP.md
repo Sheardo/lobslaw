@@ -1873,8 +1873,13 @@ present", and the second is what an operator disabling self-learning is asking f
 - [x] A self-taught skill never shadows a signed or operator skill of the same name. The
       tier-first winner rule shipped separately under R18; this item contributes the
       `BucketSelfTaught` source it arbitrates over.
-- [ ] An `agent`-tier skill declaring a new binary or MCP server fails to load, with the reason.
-      Also R18: the loader that would enforce it is the one R18 builds.
+- [x] An `agent`-tier skill declaring a new binary or MCP server fails to load, with the reason.
+      Enforced at the parse entry point (`ParseAgentSkill`) **and** at `Registry.Put`, because a
+      rule applied by one entry point is one a second entry point silently does not apply.
+      Refused: `credentials`, `binaries`, `network`, `requires_binary`. Allowed: `storage`, which
+      is scoped to mounts the operator already configured and whose absence would stop the agent
+      writing a skill that reads a file. The refusal names every capability asked for, and says how
+      an operator can grant them (adopt the skill into the operator tier).
 - [x] `propose` mode artefacts are inert until approved — `Active()` excludes them, and the mode
       decides the initial state rather than the caller, so a caller cannot smuggle ACTIVE past it.
 - [x] One command lists (`lobslaw learned list`) and one discards (`learned discard`) everything
