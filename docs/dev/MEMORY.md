@@ -716,6 +716,83 @@ invisible and the next archive clears it. The failure mode is a stale
 copy nobody reads — the right side to err on for a store whose promise
 is that nothing is lost.
 
+### New, or a refinement?
+
+Exact-name matching only catches a proposer that reuses the same
+string. "tidy-notes" and "tidying-notes" are two artefacts doing one
+job, and nothing downstream can reconcile them — the curator has no
+basis to merge them, and the model sees two index entries contradicting
+each other about how to do the same task.
+
+So a near-duplicate search runs **before** anything new is accepted,
+and the proposer has to say which it is:
+
+```go
+Propose(ctx, rec, ProposeIntent{Refines: "skill:tidy-notes", Rationale: "..."})
+Propose(ctx, rec, ProposeIntent{Distinct: true})
+```
+
+With neither, a candidate scoring above `SimilarityThreshold` (0.72) is
+**refused** — carrying the candidates in the error, so the proposer can
+decide without a second round trip. Refuse rather than guess, the same
+call the pinned-memory editor makes for an ambiguous match: picking
+wrong produces a second instruction for one job.
+
+Two signals. **Lexical always runs** — no dependency, cannot fail, and
+catches the common case of a near-identical name. **Semantic runs when
+an embedder is wired**, catching what lexical cannot ("tidy-notes"
+against "organise-scratchpad"). The higher of the two wins rather than
+an average: a pair that is lexically identical and semantically distant
+is still a collision, and averaging would hide it.
+
+A configured embedder that *errors* fails the propose rather than
+silently degrading to lexical. The check exists to stop duplicates, and
+quietly skipping half of it produces exactly what it was wired to
+prevent.
+
+Threshold is lower than the 0.88 used to cluster memories, because the
+costs are asymmetric: a false positive costs one extra field on a call,
+a false negative creates a permanent duplicate.
+
+**Not auto-adjudicated**, deliberately. `Adjudicator` decides
+merge/conflict/supersedes for *memories*, and reusing it here would
+look consistent and be wrong — a memory is data the model may weigh, a
+skill is an instruction it follows, and silently merging two
+instructions produces a third nobody wrote.
+
+### Refinements stage; they do not displace
+
+A refinement lands as `record.Pending`. **The active version keeps
+working.**
+
+```
+ACTIVE v1  ──propose refinement──>  ACTIVE v1 + pending
+                                          │
+                                    accept │ reject
+                                          ▼
+                                    ACTIVE v2   /   ACTIVE v1 unchanged
+```
+
+Without this, a skill used successfully for a month stops loading
+because the agent had an idea about improving it. Approving swaps the
+staged body in and bumps the version in one write; rejecting leaves the
+live version byte-identical.
+
+A rationale is **required** on a refinement — a diff with no reasoning
+is one nobody can approve with any confidence.
+
+An exact-name collision routes as a refinement whether or not the
+proposer noticed, rather than overwriting.
+
+In `auto` mode a refinement applies directly, because there is nothing
+to wait for — that is what the operator asked for by choosing auto.
+
+```
+lobslaw learned pending
+lobslaw learned accept <id> --apply
+lobslaw learned reject <id> --apply
+```
+
 ### Usage counters
 
 A bucket, not a sidecar file, for reasons stronger than tidiness:

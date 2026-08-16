@@ -941,6 +941,42 @@ message SelfTaughtRecord {
   string archived_reason = 17;
   uint64 revision = 18;
   string claimed_by = 19;
+
+  // pending is a proposed refinement awaiting approval.
+  //
+  // Separate from the fields above so an approved artefact KEEPS
+  // WORKING while a refinement waits. Overwriting the body and
+  // knocking the state back to PROPOSED would take a skill that has
+  // been used successfully for a month out of service because the
+  // agent had an idea about improving it.
+  PendingRevision pending = 20;
+
+  // embedding indexes name + description + body for the
+  // near-duplicate search that runs before a new artefact is
+  // accepted. Empty when no embedder is wired; the search falls back
+  // to lexical scoring, which still catches the common case of a
+  // near-identical name.
+  repeated float embedding = 21;
+
+  // description is the one-line summary the similarity check and any
+  // future index render. Distinct from body, which is the whole
+  // instruction.
+  string description = 22;
+}
+
+// PendingRevision is a refinement that has been proposed against an
+// existing artefact and not yet approved.
+message PendingRevision {
+  string body = 1;
+  map<string, string> files = 2;
+  string description = 3;
+  // turn_id is what proposed it, for audit correlation.
+  string turn_id = 4;
+  // rationale is why the proposer thinks this is better. Required in
+  // practice: a diff with no reasoning is a diff nobody can approve
+  // with any confidence.
+  string rationale = 5;
+  google.protobuf.Timestamp proposed_at = 6;
 }
 
 // SelfTaughtUsage is the telemetry that R17's staleness transitions

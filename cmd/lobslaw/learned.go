@@ -26,6 +26,9 @@ subcommands:
   archive <id>...      move artefacts out of the live set, recoverably
   discard              archive everything (except pinned artefacts)
   restore <id>...      bring archived artefacts back, as proposals
+  pending              refinements staged against a live artefact
+  accept <id>...       apply a staged refinement
+  reject <id>...       discard a staged refinement, leaving the live one
 
 Nothing here deletes. Archived artefacts stay readable with
 --archived — an agent that can silently erase evidence of what it
@@ -54,6 +57,12 @@ func dispatchLearned(args []string) bool {
 		err = learnedDiscard(sub[1:])
 	case "restore":
 		err = learnedRestore(sub[1:])
+	case "pending":
+		err = learnedPending(sub[1:])
+	case "accept":
+		err = learnedAccept(sub[1:])
+	case "reject":
+		err = learnedReject(sub[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown learned subcommand %q\n\n%s\n", sub[0], learnedUsage)
 		os.Exit(2)
@@ -115,6 +124,9 @@ func learnedList(args []string) error {
 			r.Id, kindLabel(r.Kind), stateLabel(r.State), use.Invocations, pin)
 		if r.ArchivedReason != "" {
 			fmt.Printf("      archived: %s\n", r.ArchivedReason)
+		}
+		if r.Pending != nil {
+			fmt.Printf("      PENDING refinement to v%d: %s\n", r.Version+1, r.Pending.Rationale)
 		}
 		if r.TurnId != "" {
 			fmt.Printf("      taught by turn %s\n", r.TurnId)
@@ -222,6 +234,98 @@ func mutateLearned(name string, args []string, fn func(*memory.OfflineSelfTaught
 	}
 	if !*apply {
 		fmt.Println("\nDRY RUN — nothing was written. Re-run with --apply.")
+	}
+	return nil
+}
+
+// learnedPending lists refinements waiting on a decision.
+//
+// Separate from `list` because they are a different question: `list`
+// asks what the agent has, `pending` asks what it wants to change —
+// and the second is the one somebody has to act on.
+func learnedPending(args []string) error {
+	fs := flag.NewFlagSet("learned pending", flag.ExitOnError)
+	var store offlineStore
+	store.bind(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	s, path, err := store.open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = s.Close() }()
+
+	records, err := memory.NewOfflineSelfTaught(s).List(false, "")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", path)
+	var n int
+	for _, r := range records {
+		if r.Pending == nil {
+			continue
+		}
+		n++
+		fmt.Printf("  %-36s v%d -> v%d\n", r.Id, r.Version, r.Version+1)
+		fmt.Printf("      rationale: %s\n", r.Pending.Rationale)
+		if r.Pending.Description != "" && r.Pending.Description != r.Description {
+			fmt.Printf("      description: %q -> %q\n", r.Description, r.Pending.Description)
+		}
+		if r.Pending.TurnId != "" {
+			fmt.Printf("      proposed by turn %s\n", r.Pending.TurnId)
+		}
+	}
+	if n == 0 {
+		fmt.Println("nothing is waiting on a decision.")
+		return nil
+	}
+	fmt.Printf("\n%d refinement(s). Apply with: lobslaw learned accept <id> --apply\n", n)
+	return nil
+}
+
+func learnedAccept(args []string) error {
+	return mutateLearned("learned accept", args, func(st *memory.OfflineSelfTaught, ids []string, apply bool) error {
+		return decidePending(st, ids, apply, true)
+	})
+}
+
+func learnedReject(args []string) error {
+	return mutateLearned("learned reject", args, func(st *memory.OfflineSelfTaught, ids []string, apply bool) error {
+		return decidePending(st, ids, apply, false)
+	})
+}
+
+func decidePending(st *memory.OfflineSelfTaught, ids []string, apply, accept bool) error {
+	if len(ids) == 0 {
+		return fmt.Errorf("name at least one artefact id (see: lobslaw learned pending)")
+	}
+	verb := "reject"
+	if accept {
+		verb = "accept"
+	}
+	for _, id := range ids {
+		rec, _, err := st.Find(id)
+		if err != nil {
+			fmt.Printf("  NOT FOUND %s\n", id)
+			continue
+		}
+		if rec.Pending == nil {
+			fmt.Printf("  NOTHING PENDING %s\n", id)
+			continue
+		}
+		fmt.Printf("  %-36s %s v%d -> v%d\n", id, verb, rec.Version, rec.Version+1)
+		if !apply {
+			continue
+		}
+		if accept {
+			err = st.ApprovePending(rec, "operator")
+		} else {
+			err = st.RejectPending(rec)
+		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", id, err)
+		}
 	}
 	return nil
 }
