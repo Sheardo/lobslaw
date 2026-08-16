@@ -150,9 +150,20 @@ func (n *Node) wireCompute() error {
 	return nil
 }
 
-// wireResolver builds the provider/chain resolver. Left nil if no
-// providers are configured — Agent stays constructible but LLM calls
-// fail until the operator wires providers.
+// wireResolver builds the provider/chain resolver.
+//
+// The resolver VALIDATES chains and then nothing routes through it.
+// `Resolver.Resolve` has no callers: the turn path is the provider
+// backup chain (ProviderRegistry.Chain), which knows about `backup`
+// links and nothing about triggers, multi-step chains or per-chain
+// trust floors. So `[[compute.chains]]` is parsed, checked for
+// coherence, and inert.
+//
+// Kept, rather than deleted, because the validation is worth having
+// the day the routing lands and deleting it would silently accept
+// broken chains in the meantime. But an operator who writes a chain
+// and sees it accepted is entitled to think it does something, so
+// this says otherwise, loudly, once.
 func (n *Node) wireResolver() error {
 	if len(n.cfg.Compute.Providers) == 0 {
 		return nil
@@ -162,7 +173,33 @@ func (n *Node) wireResolver() error {
 		return fmt.Errorf("resolver: %w", err)
 	}
 	n.resolver = r
+	n.warnChainsAreInert()
 	return nil
+}
+
+// warnChainsAreInert tells an operator their chains do not route.
+//
+// Warn rather than refuse. A config that was accepted yesterday must
+// not stop a node booting today, and a chain is inert rather than
+// dangerous — the turn still runs, on the provider it would have run
+// on anyway. What it is not is what the operator thinks.
+//
+// Only when chains are actually configured. A deployment that never
+// wrote one does not need to be told about a feature it is not using,
+// and a boot warning that fires for everybody is one nobody reads.
+func (n *Node) warnChainsAreInert() {
+	if len(n.cfg.Compute.Chains) == 0 && n.cfg.Compute.DefaultChain == "" {
+		return
+	}
+	labels := make([]string, 0, len(n.cfg.Compute.Chains))
+	for _, ch := range n.cfg.Compute.Chains {
+		labels = append(labels, ch.Label)
+	}
+	n.log.Warn("compute: [[compute.chains]] are validated but do NOT route turns yet; "+
+		"provider selection uses roles.main plus the `backup` links between providers",
+		"chains", labels,
+		"default_chain", n.cfg.Compute.DefaultChain,
+		"routing_in_use", "roles.main + provider.backup")
 }
 
 // wireLLMProviders builds the LLM clients: injection wins for the main
