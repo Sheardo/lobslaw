@@ -151,10 +151,11 @@ func resolveFunctions(f flags, cfg *config.Config) []types.NodeFunction {
 }
 
 func allFunctions() []types.NodeFunction {
+	// The canonical set. policy and gateway are accepted in config and
+	// normalised away, so they are not offered here.
 	return []types.NodeFunction{
 		types.FunctionMemory,
 		types.FunctionCompute,
-		types.FunctionGateway,
 		types.FunctionStorage,
 	}
 }
