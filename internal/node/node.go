@@ -273,6 +273,14 @@ type Node struct {
 	// when self-learning is off, and nil is the enforcement: there is
 	// no write path to guard because there is no store.
 	selfTaught *memory.SelfTaughtStore
+	// materialiser writes ACTIVE self-taught artefacts into this
+	// node's disposable skill cache. Nil when self-learning is off,
+	// for the same absence-not-a-flag reason the store is.
+	materialiser *skills.Materialiser
+	// shadowedSkills remembers which self-taught names already lost to
+	// an operator skill, so the reason is logged once per node rather
+	// than on every reconcile.
+	shadowedSkills sync.Map
 
 	// pinnedStore holds the always-on memory blocks rendered into
 	// every system prompt. Nil on a node without raft — there is
@@ -584,6 +592,16 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// is where that used to hide.
 	if n.policyEngine != nil {
 		n.policyEngine.LogUnevaluableRules()
+	}
+
+	// The self-taught cache. Started before the storage watcher so
+	// an agent-authored skill and an operator one of the same name
+	// are both candidates by the time the first turn is served —
+	// otherwise the winner would depend on scan order for the first
+	// few seconds of uptime, which is exactly the kind of
+	// nondeterminism tier-first precedence exists to remove.
+	if err := n.startMaterialiser(ctx); err != nil {
+		n.log.Error("skills: materialiser failed to start", "err", err)
 	}
 
 	// Skill registry watcher: fsnotify on the skills storage
