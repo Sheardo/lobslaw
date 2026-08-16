@@ -96,6 +96,12 @@ type Config struct {
 	// SelfLearningMode is "off" | "propose" | "auto". Empty is off.
 	SelfLearningMode string
 
+	// Review trigger thresholds. Zero takes the defaults (10 tool
+	// iterations in one turn for skills, 10 conversation turns for
+	// memory); negative disables that axis.
+	ReviewSkillToolIterations int
+	ReviewMemoryTurnInterval  int
+
 	// Policy is the [policy] config sub-block — operator-declared
 	// [[policy.rules]] entries get seeded at boot.
 	Policy config.PolicyConfig
@@ -279,10 +285,15 @@ type Node struct {
 	// "always" approval. Nil on a node without raft — there is
 	// nowhere to record a lasting grant, so the channels hide the
 	// button rather than offering one that does nothing.
-	approvalRules    *policy.ApprovalRules
-	agent            *compute.Agent
-	embedder         compute.EmbeddingProvider
-	roleMap          *compute.RoleMap
+	approvalRules *policy.ApprovalRules
+	agent         *compute.Agent
+	embedder      compute.EmbeddingProvider
+	roleMap       *compute.RoleMap
+
+	// reviewFork decides whether a finished turn taught anything.
+	// Nil when self-learning is off — there is no fork to disable
+	// because there is nowhere for it to write.
+	reviewFork       *compute.ReviewFork
 	providerRegistry *compute.ProviderRegistry
 	mcpLoader        *mcp.Loader
 	webhookHandlers  []*gateway.WebhookHandler

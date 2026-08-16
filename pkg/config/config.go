@@ -91,6 +91,16 @@ type SelfLearningConfig struct {
 	// including empty, is off: a typo must never be the reason an
 	// agent started following its own instructions.
 	Mode string `koanf:"mode"`
+
+	// Review trigger thresholds, measured on deliberately different
+	// axes: a skill answers "was there enough WORK here", which is a
+	// property of one turn, and memory answers "have we learned who
+	// this person is", which only accumulates across turns.
+	//
+	// Zero takes the defaults (10 and 10); negative disables that
+	// axis.
+	ReviewSkillToolIterations int `koanf:"review_skill_tool_iterations"`
+	ReviewMemoryTurnInterval  int `koanf:"review_memory_turn_interval"`
 }
 
 // IdentityConfig maps the per-channel user ids lobslaw receives onto

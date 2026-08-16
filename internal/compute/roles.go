@@ -14,6 +14,17 @@ const (
 	RolePreflight  Role = "preflight"
 	RoleReranker   Role = "reranker"
 	RoleSummariser Role = "summariser"
+
+	// RoleReview is the post-turn review fork — the pass that asks
+	// whether anything about this turn is worth keeping.
+	//
+	// Explicit rather than "just use main", because the choice
+	// determines how the conversation is replayed. On the main model
+	// the fork reads a warm prefix cache and a full replay is mostly
+	// cache reads; a different model cannot reuse that cache, so a
+	// full replay would cold-write the whole transcript. The role is
+	// what makes that derivable rather than guessed.
+	RoleReview Role = "review"
 )
 
 // RoleMap is the resolved mapping from roles to LLM clients.
@@ -47,6 +58,18 @@ func NewRoleMap(main LLMProvider, explicit map[Role]LLMProvider) (*RoleMap, erro
 	return rm, nil
 }
 
+// IsMain reports whether the provider resolved for a role is the same
+// one the turn itself used.
+//
+// This is the whole replay policy: same model means a warm prefix
+// cache and a full replay that is mostly cache reads; a different
+// model cannot reuse that cache, so replaying the full transcript
+// would cold-write all of it and a compact digest is the only
+// affordable option.
+func (rm *RoleMap) IsMain(role Role) bool {
+	return rm.For(role) == rm.main
+}
+
 // For returns the provider for a role, walking the fallback
 // chain. Never returns nil when the RoleMap was constructed with
 // a non-nil main.
@@ -63,6 +86,10 @@ func (rm *RoleMap) For(role Role) LLMProvider {
 		}
 		return rm.main
 	case RoleSummariser:
+		return rm.main
+	case RoleReview:
+		// Falls back to main, which is also the cheap case: same
+		// model, warm cache, full replay.
 		return rm.main
 	default:
 		return rm.main
