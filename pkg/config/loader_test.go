@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -23,7 +22,6 @@ key_ref = "env:LOBSLAW_TEST_MEMORY_KEY"
 
 [memory.snapshot]
 target = "storage:r2-backup"
-cadence = "1h"
 
 [[compute.providers]]
 label = "fast"
@@ -76,8 +74,8 @@ func TestLoadFromExplicitPath(t *testing.T) {
 	if !cfg.Memory.Enabled {
 		t.Error("Memory.Enabled should be true")
 	}
-	if cfg.Memory.Snapshot.Cadence != time.Hour {
-		t.Errorf("Snapshot.Cadence = %v, want 1h", cfg.Memory.Snapshot.Cadence)
+	if cfg.Memory.Snapshot.Target != "storage:r2-backup" {
+		t.Errorf("Snapshot.Target = %q", cfg.Memory.Snapshot.Target)
 	}
 	if len(cfg.Compute.Providers) != 1 {
 		t.Fatalf("want 1 provider, got %d", len(cfg.Compute.Providers))

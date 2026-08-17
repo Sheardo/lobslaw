@@ -349,7 +349,11 @@ w.Start(ctx)  // initial load + fsnotify subscribe
 - Rejected files (perm check fail) log at WARN but don't stop siblings.
 - Only tools the watcher previously loaded are mutated; skill-set policies remain untouched.
 
-Disable via `[sandbox] hot_reload_opt_out = true` when you want load-once-at-boot behaviour (air-gapped deployments, `--read-only` containers where the policy dir can't change).
+Hot reload cannot currently be disabled. `[sandbox] hot_reload_opt_out`
+used to be documented here as the way to get load-once-at-boot behaviour
+for air-gapped deployments and `--read-only` containers — it was parsed,
+and read by nothing, so it never disabled anything. The key has been
+removed rather than left as an option that quietly does not exist.
 
 ### Skill-bundled policies
 

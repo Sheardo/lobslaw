@@ -310,13 +310,16 @@ type EncryptionConfig struct {
 	KeyRef string `koanf:"key_ref"`
 }
 
-// SnapshotConfig is [memory.snapshot], controlling where raft
-// snapshots are shipped and how long they are kept. Target is a
-// storage-mount label; empty disables off-node snapshotting.
+// SnapshotConfig is [memory.snapshot]. Target names a storage mount
+// to ship raft snapshots to.
+//
+// Shipping is not implemented yet — Target's only current effect is
+// on boot validation, where a memory node with neither a snapshot
+// target nor seed nodes is a single point of loss. cadence and
+// retention were removed: they described a schedule and a pruning
+// policy for a job that does not run.
 type SnapshotConfig struct {
-	Target    string        `koanf:"target"`
-	Cadence   time.Duration `koanf:"cadence"`
-	Retention string        `koanf:"retention"`
+	Target string `koanf:"target"`
 }
 
 // DreamConfig is [memory.dream], governing the REM-sleep
@@ -364,17 +367,30 @@ type StorageMountConfig struct {
 	// "node_modules/**") hidden from list/glob/grep/read inside
 	// this mount. Hardcoded internal excludes (.snapshot, state.db,
 	// *.pem) always apply on top of these.
-	Excludes         []string          `koanf:"excludes,omitempty"`
-	Bucket           string            `koanf:"bucket,omitempty"`
-	Endpoint         string            `koanf:"endpoint,omitempty"`
-	Account          string            `koanf:"account,omitempty"`
-	AccessKeyRef     string            `koanf:"access_key_ref,omitempty"`
-	SecretKeyRef     string            `koanf:"secret_key_ref,omitempty"`
-	Env              string            `koanf:"env,omitempty"` // multi-line KEY=VAL pairs
-	Crypt            bool              `koanf:"crypt,omitempty"`
-	CryptPasswordRef string            `koanf:"crypt_password_ref,omitempty"`
-	CryptSaltRef     string            `koanf:"crypt_salt_ref,omitempty"`
-	ExtraOpts        map[string]string `koanf:"extra_opts,omitempty"`
+	Excludes []string `koanf:"excludes,omitempty"`
+	Bucket   string   `koanf:"bucket,omitempty"`
+	// Server and Export address an NFS mount. Required for
+	// type = "nfs" — the backend errors without them, and like Remote
+	// below there was no key to set them with, so an NFS mount
+	// declared in TOML could not start either.
+	Server string `koanf:"server,omitempty"`
+	Export string `koanf:"export,omitempty"`
+	// Remote is the rclone remote name, as configured in rclone's own
+	// config. Required for type = "rclone": the backend errors without
+	// it, which until now made an rclone mount declared in TOML
+	// impossible to start, because there was no key to set it with.
+	Remote string `koanf:"remote,omitempty"`
+	// Options is passed to the backend verbatim. Keys ending in "_ref"
+	// are resolved as secret references before the backend starts;
+	// everything else is handed over as-is.
+	//
+	// One map rather than a field per credential. The previous shape
+	// had endpoint / account / access_key_ref / secret_key_ref /
+	// crypt_password_ref / crypt_salt_ref / env / extra_opts — eight
+	// keys in a vocabulary the backend does not speak, none of which
+	// reached it. A backend that grows an option should not require a
+	// config change to accept one.
+	Options map[string]string `koanf:"options,omitempty"`
 }
 
 // PolicyConfig is the [policy] section: whether this node evaluates
@@ -407,22 +423,20 @@ type PolicyRuleConfig struct {
 // that route between them, per-turn limits, and the plugin and
 // modality settings layered on top.
 type ComputeConfig struct {
-	Enabled             bool             `koanf:"enabled"`
-	Providers           []ProviderConfig `koanf:"providers"`
-	Chains              []ChainConfig    `koanf:"chains"`
-	DefaultChain        string           `koanf:"default_chain"`
-	ComplexityEstimator string           `koanf:"complexity_estimator"`
-	Budgets             BudgetsConfig    `koanf:"budgets"` // deprecated; use Limits
-	Limits              LimitsConfig     `koanf:"limits,omitempty"`
-	Plugins             []PluginConfig   `koanf:"plugins"`
-	WebSearch           WebSearchConfig  `koanf:"web_search,omitempty"`
-	Vision              VisionConfig     `koanf:"vision,omitempty"`
-	Audio               AudioConfig      `koanf:"audio,omitempty"`
-	PDF                 PDFConfig        `koanf:"pdf,omitempty"`
-	Embeddings          EmbeddingsConfig `koanf:"embeddings,omitempty"`
-	Speak               SpeakConfig      `koanf:"speak,omitempty"`
-	Image               ImageGenConfig   `koanf:"image,omitempty"`
-	Video               VideoGenConfig   `koanf:"video,omitempty"`
+	Enabled      bool             `koanf:"enabled"`
+	Providers    []ProviderConfig `koanf:"providers"`
+	Chains       []ChainConfig    `koanf:"chains"`
+	DefaultChain string           `koanf:"default_chain"`
+	Budgets      BudgetsConfig    `koanf:"budgets"` // deprecated; use Limits
+	Limits       LimitsConfig     `koanf:"limits,omitempty"`
+	WebSearch    WebSearchConfig  `koanf:"web_search,omitempty"`
+	Vision       VisionConfig     `koanf:"vision,omitempty"`
+	Audio        AudioConfig      `koanf:"audio,omitempty"`
+	PDF          PDFConfig        `koanf:"pdf,omitempty"`
+	Embeddings   EmbeddingsConfig `koanf:"embeddings,omitempty"`
+	Speak        SpeakConfig      `koanf:"speak,omitempty"`
+	Image        ImageGenConfig   `koanf:"image,omitempty"`
+	Video        VideoGenConfig   `koanf:"video,omitempty"`
 
 	// ArtifactMount names the storage mount that receives generated
 	// files (speech, images, video). Empty falls back to the first
@@ -795,15 +809,11 @@ type LimitsConfig struct {
 	MaxToolCallsPerTurn int `koanf:"max_tool_calls_per_turn"`
 }
 
-// PluginConfig is one [[compute.plugins]] entry. Source is a
-// clawhub reference or a local path; AutoInstallBinary lets the
-// plugin's declared binary dependency be installed on first use.
-type PluginConfig struct {
-	Name              string `koanf:"name"`
-	Source            string `koanf:"source"`
-	AutoInstallBinary bool   `koanf:"auto_install_binary,omitempty"`
-	Enabled           bool   `koanf:"enabled"`
-}
+// [[compute.plugins]] used to live here — name, source, enabled,
+// auto_install_binary — and nothing read any of it. Plugins are
+// installed with `lobslaw plugin install`, which writes into the
+// skills root; declaring them again in TOML was a second authority
+// for the same thing, and the one nobody had wired up.
 
 // HooksConfig is keyed by event name (PreToolUse, PostToolUse, …).
 // Each event may have multiple subprocess hooks.
@@ -814,7 +824,6 @@ type HooksConfig map[string][]types.HookConfig
 // those channels dispatch.
 type GatewayConfig struct {
 	Enabled             bool                   `koanf:"enabled"`
-	GRPCPort            int                    `koanf:"grpc_port"`
 	HTTPPort            int                    `koanf:"http_port"`
 	Channels            []GatewayChannelConfig `koanf:"channels"`
 	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
@@ -945,12 +954,11 @@ type GatewayChannelConfig struct {
 // enables LAN auto-discovery, which suits a home deployment but
 // should stay off anywhere the broadcast domain is untrusted.
 type DiscoveryConfig struct {
-	SeedNodes          []string      `koanf:"seed_nodes"`
-	Broadcast          bool          `koanf:"broadcast"`
-	BroadcastInterface string        `koanf:"broadcast_interface"`
-	BroadcastPort      int           `koanf:"broadcast_port"`     // default 7445
-	BroadcastAddress   string        `koanf:"broadcast_address"`  // default "255.255.255.255"
-	BroadcastInterval  time.Duration `koanf:"broadcast_interval"` // default 30s
+	SeedNodes         []string      `koanf:"seed_nodes"`
+	Broadcast         bool          `koanf:"broadcast"`
+	BroadcastPort     int           `koanf:"broadcast_port"`     // default 7445
+	BroadcastAddress  string        `koanf:"broadcast_address"`  // default "255.255.255.255"
+	BroadcastInterval time.Duration `koanf:"broadcast_interval"` // default 30s
 }
 
 // ClusterConfig is the [cluster] section: this node's identity, the
@@ -1003,8 +1011,7 @@ type MTLSConfig struct {
 // that defines the agent's persona. Scope selects which portion of
 // the file applies when one file serves several deployments.
 type SoulLoaderConfig struct {
-	Path  string `koanf:"path"`
-	Scope string `koanf:"scope"`
+	Path string `koanf:"path"`
 }
 
 // AuthConfig is the [auth] section: JWT validation for inbound
@@ -1030,16 +1037,19 @@ type AuthConfig struct {
 // SandboxConfig is the [sandbox] section: the default Landlock,
 // seccomp and network confinement applied to skills and
 // shell_command. Storage-mount modes layer on top of these.
+// SandboxConfig is the [sandbox] section.
+//
+// It holds ONE key. The sandbox is described by policy.d files, and
+// this section used to declare a parallel vocabulary for the same
+// thing — allowed_paths, read_only_paths, network_allow_cidr,
+// dangerous_cmds_deny/allow, env_whitelist, cpu_quota,
+// memory_limit_mb, skip_perm_checks, hot_reload_opt_out — none of
+// which anything read. An operator setting network_allow_cidr was
+// restricting nothing.
+//
+// They are gone rather than wired up, because two authorities for one
+// sandbox is how they came to disagree in the first place.
 type SandboxConfig struct {
-	AllowedPaths       []string `koanf:"allowed_paths"`
-	ReadOnlyPaths      []string `koanf:"read_only_paths"`
-	NetworkAllowCIDR   []string `koanf:"network_allow_cidr"`
-	DangerousCmdsDeny  []string `koanf:"dangerous_cmds_deny,omitempty"`
-	DangerousCmdsAllow []string `koanf:"dangerous_cmds_allow,omitempty"`
-	EnvWhitelist       []string `koanf:"env_whitelist"`
-	CPUQuota           int      `koanf:"cpu_quota"`
-	MemoryLimitMB      int      `koanf:"memory_limit_mb"`
-
 	// PolicyDirs overrides the default policy.d discovery chain.
 	// Leave empty in almost all cases — the loader derives a sensible
 	// default (user-global → config-dir → cwd). When set, the caller
@@ -1049,19 +1059,6 @@ type SandboxConfig struct {
 	// conflicts. A single string in the array is equivalent to the
 	// old `policy_dir` key.
 	PolicyDirs []string `koanf:"policy_dirs"`
-
-	// SkipPermChecks bypasses the policy-file integrity check. Use
-	// only in environments where Unix mode/UID semantics aren't
-	// reliable (certain k8s volume drivers, non-standard tmpfs).
-	// Default false — on Linux the check is meaningful defence in
-	// depth against a compromised tool writing policy files.
-	SkipPermChecks bool `koanf:"skip_perm_checks"`
-
-	// HotReloadOptOut disables the fsnotify policy-watcher (Phase
-	// 4.5.7a-reload). Named "opt-out" so the zero-value (false)
-	// gives the safe default: reload enabled. Operators setting
-	// this to true want an air-gapped, load-once-at-boot deployment.
-	HotReloadOptOut bool `koanf:"hot_reload_opt_out"`
 }
 
 // AuditConfig is the [audit] section. The two sinks are independent
@@ -1073,24 +1070,22 @@ type AuditConfig struct {
 }
 
 // AuditRaftConfig is [audit.raft], the replicated audit sink.
-// AnchorTarget and AnchorCadence control periodic publication of the
-// hash-chain head so tampering with history is detectable.
+//
+// anchor_target / anchor_cadence used to sit here, described as
+// publishing the hash-chain head so tampering is detectable. Nothing
+// published anything. Removed rather than left as a claim the system
+// does not make — see ROADMAP for the anchoring work itself.
 type AuditRaftConfig struct {
-	Enabled       bool          `koanf:"enabled"`
-	AnchorTarget  string        `koanf:"anchor_target"`
-	AnchorCadence time.Duration `koanf:"anchor_cadence"`
+	Enabled bool `koanf:"enabled"`
 }
 
 // AuditLocalConfig is [audit.local], the on-disk audit sink. Size
-// and file counts bound the rotated set; the anchor fields mirror
-// AuditRaftConfig.
+// and file counts bound the rotated set.
 type AuditLocalConfig struct {
-	Enabled       bool          `koanf:"enabled"`
-	Path          string        `koanf:"path"`
-	MaxSizeMB     int           `koanf:"max_size_mb"`
-	MaxFiles      int           `koanf:"max_files"`
-	AnchorTarget  string        `koanf:"anchor_target,omitempty"`
-	AnchorCadence time.Duration `koanf:"anchor_cadence,omitempty"`
+	Enabled   bool   `koanf:"enabled"`
+	Path      string `koanf:"path"`
+	MaxSizeMB int    `koanf:"max_size_mb"`
+	MaxFiles  int    `koanf:"max_files"`
 }
 
 // SkillsConfig is the [skills] section: where skill manifests are

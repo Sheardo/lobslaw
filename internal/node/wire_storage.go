@@ -3,9 +3,11 @@ package node
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 )
 
@@ -30,14 +32,7 @@ func (n *Node) seedStorageMountsFromConfig(ctx context.Context) error {
 		if _, err := n.store.Get(memory.BucketStorageMounts, m.Label); err == nil {
 			continue
 		}
-		req := &lobslawv1.AddMountRequest{
-			Mount: &lobslawv1.StorageMount{
-				Label:  m.Label,
-				Type:   m.Type,
-				Path:   m.Path,
-				Bucket: m.Bucket,
-			},
-		}
+		req := &lobslawv1.AddMountRequest{Mount: mountToProto(m)}
 		if _, err := n.storageSvc.AddMount(ctx, req); err != nil {
 			return fmt.Errorf("seed mount %q: %w", m.Label, err)
 		}
@@ -89,3 +84,31 @@ func (n *Node) refreshMountResolver() {
 //
 // Only runs on the Raft leader — followers get these entries via
 // replication. No-op on nodes without a Raft stack.
+
+// mountToProto converts one [[storage.mounts]] entry into the
+// replicated form the backends are handed.
+//
+// Everything past label/type/path/bucket used to be dropped here. The
+// consequence was not a degraded mount but an impossible one: the
+// rclone backend refuses a mount whose remote is empty and the NFS
+// backend refuses one with no server or export — and there were no
+// config keys to set any of them with. So a `type = "rclone"` or
+// `type = "nfs"` mount declared in TOML could never start, and the
+// endpoint and credentials written beside it reached nothing.
+func mountToProto(m config.StorageMountConfig) *lobslawv1.StorageMount {
+	return &lobslawv1.StorageMount{
+		Label:   m.Label,
+		Type:    m.Type,
+		Path:    m.Path,
+		Bucket:  m.Bucket,
+		Server:  m.Server,
+		Export:  m.Export,
+		Remote:  m.Remote,
+		Options: maps.Clone(m.Options),
+
+		// Cloned, not aliased. The config is hot-reloadable and this
+		// map is about to be replicated; sharing the backing store
+		// would let a reload mutate a raft payload.
+
+	}
+}

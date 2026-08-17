@@ -497,17 +497,23 @@ Tool invocations run inside a child process set up as follows:
 - **Resources:** cgroup v2 with `cpu_quota` (millicpus) and `memory_limit_mb`.
 - **Environment:** only `env_whitelist` variables cross into the child.
 
+These are described **per tool, in `policy.d` files** — not in a
+fleet-wide `[sandbox]` block. `[sandbox]` once declared a parallel set of
+the same keys (`allowed_paths`, `read_only_paths`, `network_allow_cidr`,
+`env_whitelist`, `cpu_quota`, `memory_limit_mb`) and nothing read any of
+them, so an operator who set `network_allow_cidr` there restricted
+nothing. They have been removed; `[sandbox]` now holds one key,
+`policy_dirs`, saying where to find the policy files.
+
 ```toml
-[sandbox]
-allowed_paths = ["/var/lobslaw/workspace", "/cluster/store/shared/skills"]
-read_only_paths = ["/cluster/store/shared/skills"]
-network_allow_cidr = ["0.0.0.0/0"]   # allow all (for tools that need internet) — per-tool overrides tighten
-env_whitelist = ["PATH", "HOME", "USER", "LANG"]
-cpu_quota = 2000     # millicpus
-memory_limit_mb = 512
+# policy.d/git.toml — one tool, one file
+name = "git"
+presets = ["system-libs", "system-certs", "dns", "ssh-keys"]
+paths = ["~/code:rw", "/tmp:rw"]
+network_allow_cidr = ["10.0.0.0/8"]
 ```
 
-Per-tool overrides can tighten the defaults (but never widen them).
+One authority for the sandbox, rather than two that can disagree.
 
 #### Hooks
 
@@ -594,13 +600,16 @@ RTK is a CLI proxy that intercepts shell commands and returns filtered/compresse
 
 In lobslaw:
 
-```toml
-# Option A: one-line recipe
-[[compute.plugins]]
-name = "rtk"
-source = "github:rtk-ai/rtk"
-auto_install_binary = true
+```console
+# Option A: install the plugin
+$ lobslaw plugin install github:rtk-ai/rtk
+```
 
+There is no `[[compute.plugins]]` section. There was one — `name`,
+`source`, `enabled`, `auto_install_binary` — and nothing read it; the
+CLI has always been the thing that installs a plugin.
+
+```toml
 # Option B: manual hook config (when rtk is already on PATH)
 [[hooks.PreToolUse]]
 match = { tool = "bash" }
@@ -1170,19 +1179,15 @@ key_ref = "env:LOBSLAW_MEMORY_KEY"        # or kms:arn:..., or file:/etc/lobslaw
 
 Missing key → startup fails. Key rotation is operator-driven (new key written to config, background re-wrap job).
 
-**rclone mounts:** `rclone crypt` first-class on `[[storage.mounts]]`:
+**rclone mounts:** `rclone crypt` is **not implemented yet**. The design
+is for contents to be encrypted before leaving the host so the backend
+bucket sees only ciphertext; `internal/storage/rclone` ships the
+VFS-mount skeleton first and documents crypt as a follow-up.
 
-```toml
-[[storage.mounts]]
-label = "shared"
-type = "s3"
-bucket = "lobslaw-data"
-crypt = true
-crypt_password_ref = "env:RCLONE_CRYPT_PASSWORD"
-crypt_salt_ref = "env:RCLONE_CRYPT_SALT"
-```
-
-When `crypt = true`, contents are encrypted before leaving the host — the backend bucket sees only ciphertext.
+`crypt`, `crypt_password_ref` and `crypt_salt_ref` used to be config
+keys. They are gone: a key promising encryption at rest, on a system
+with no code to encrypt anything, is worse than no key — an operator
+setting `crypt = true` got plaintext and no warning.
 
 ### In Transit
 
@@ -1239,26 +1244,29 @@ export        = "/volume1/lobslaw"
 poll_interval = "5m"            # scan for remote-origin writes
 
 [[storage.mounts]]
-label          = "shared"
-type           = "rclone"
-remote         = "s3"
-bucket         = "lobslaw-data"
+label  = "shared"
+type   = "rclone"
+remote = "s3"
+bucket = "lobslaw-data"
+
+# Backend-specific settings go in one map, handed over verbatim. Keys
+# ending in "_ref" are resolved as secret references before the backend
+# starts, so no credential is written in the config file.
+[storage.mounts.options]
 endpoint       = "https://s3.amazonaws.com"
 access_key_ref = "env:AWS_ACCESS_KEY_ID"
 secret_key_ref = "env:AWS_SECRET_ACCESS_KEY"
-crypt               = true
-crypt_password_ref  = "env:RCLONE_CRYPT_PASSWORD"
-crypt_salt_ref      = "env:RCLONE_CRYPT_SALT"
-poll_interval       = "5m"
 
 [[storage.mounts]]
-label          = "r2-backup"
-type           = "rclone"
-remote         = "r2"
+label  = "r2-backup"
+type   = "rclone"
+remote = "r2"
+bucket = "lobslaw-backup"
+
+[storage.mounts.options]
 account        = "abc123"
 access_key_ref = "env:R2_ACCESS_KEY_ID"
 secret_key_ref = "env:R2_SECRET_ACCESS_KEY"
-poll_interval  = "5m"
 
 [policy]
 enabled = true
