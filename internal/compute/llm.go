@@ -143,21 +143,4 @@ type Usage struct {
 	CompletionTokens int
 	TotalTokens      int
 	CachedTokens     int
-
-	// Unit and Quantity describe a call that is NOT billed in tokens:
-	// video by the second, images by the image, speech by the
-	// character. Empty Unit means an ordinary token-billed call.
-	//
-	// Carried on the same struct rather than in a parallel one,
-	// because a turn mixes them — a reply that generates a picture is
-	// billed in tokens AND in images — and two accounts of one turn
-	// eventually disagree about what it cost.
-	//
-	// Quantity is a float because a video is not a whole number of
-	// seconds.
-	Unit     string
-	Quantity float64
 }
-
-// Metered reports whether this usage carries a non-token unit.
-func (u Usage) Metered() bool { return u.Unit != "" && u.Quantity > 0 }

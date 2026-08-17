@@ -138,8 +138,8 @@ func TestBudgetCheckDoesNotIncrement(t *testing.T) {
 func TestBudgetRecordsAccumulate(t *testing.T) {
 	t.Parallel()
 	b, _ := NewTurnBudget(BudgetCaps{})
-	r1 := CostRecord{ProviderLabel: "a", Model: "m", Usage: Usage{PromptTokens: 100}, CostUSD: 0.01}
-	r2 := CostRecord{ProviderLabel: "b", Model: "m2", Usage: Usage{PromptTokens: 200}, CostUSD: 0.02}
+	r1 := CostRecord{ProviderLabel: "a", Model: "m", Usage: TokenUsage(Usage{PromptTokens: 100}, 0.01), CostUSD: 0.01}
+	r2 := CostRecord{ProviderLabel: "b", Model: "m2", Usage: TokenUsage(Usage{PromptTokens: 200}, 0.02), CostUSD: 0.02}
 	_ = b.RecordCostUSD(r1)
 	_ = b.RecordCostUSD(r2)
 

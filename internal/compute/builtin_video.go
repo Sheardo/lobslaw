@@ -24,7 +24,13 @@ import (
 // JobStarter records a submitted job so the scheduler can finish it.
 // Injected rather than reaching for raft here, so this package stays
 // free of the memory layer.
-type JobStarter func(ctx context.Context, h JobHandle, prompt string) (commitmentID string, err error)
+// JobStarter records a submitted job so something will collect it.
+//
+// providerLabel travels because the COST is not known until the job
+// finishes, by which time the turn is long over — the only way to
+// price seconds of video is to be able to find the provider's rate
+// card again from the commitment.
+type JobStarter func(ctx context.Context, h JobHandle, providerLabel, prompt string) (commitmentID string, err error)
 
 // VideoConfig wires the generate_video builtin.
 type VideoConfig struct {
@@ -33,6 +39,10 @@ type VideoConfig struct {
 
 	// MaxPromptChars bounds one prompt.
 	MaxPromptChars int
+
+	// Label is the provider's config label, carried onto the
+	// commitment so the job's cost can be priced when it completes.
+	Label string
 }
 
 // DefaultVideoPromptChars is generous: a video prompt carries scene,
@@ -92,7 +102,7 @@ func newVideoHandler(cfg VideoConfig) BuiltinFunc {
 		// it is reported as an error rather than swallowed — an
 		// operator seeing this knows to expect a charge for a video
 		// nobody receives.
-		id, err := cfg.Start(ctx, h, prompt)
+		id, err := cfg.Start(ctx, h, cfg.Label, prompt)
 		if err != nil {
 			return nil, 1, fmt.Errorf(
 				"generate_video: job %s was submitted but could not be recorded, so its result "+

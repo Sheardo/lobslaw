@@ -2877,8 +2877,24 @@ of them.
       rather than read, because a turn generating two videos across two round-trips must not bill
       the first one twice.
 
-      Image and speech report today. **Video does not yet** — the job completes asynchronously and
-      its cost lands on the poll handler, which is the next piece.
+      **One model, not two.** `ModalUsage` already existed for exactly this — its own doc saying
+      it would "eventually absorb" the token-only `Usage` — and a parallel `Unit`/`Quantity` was
+      added to `Usage` before that was noticed. The duplicate was removed and `CostRecord` now
+      carries `ModalUsage`, with the token breakdown nested. Two accounts of what a turn cost
+      eventually disagree about the answer.
+
+      That also brought `BillingPlan` into the pricing path, which is most of the plan-billed box
+      below: a prepaid plan costs nothing per call, and pricing it as though it did would inflate
+      every turn that provider served. The QUANTITY still travels, because consumption against a
+      quota is the meaningful number there.
+
+      **Video is priced at the poll handler**, because that is where the cost is first knowable —
+      a video is billed by the seconds actually produced, and the driver only learns that when
+      the job completes. The provider label travels on the commitment so the rate card can be
+      found again minutes later.
+
+      It does NOT go to a TurnBudget. The budget it would charge is closed, and re-opening it
+      would let a background job push a finished conversation over a cap it never hit.
 - [x] A plan-billed provider whose quota is exhausted falls through to
       its backup and warns; it is not retried until reset, and it is
       not treated as a request error.

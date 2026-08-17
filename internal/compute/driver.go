@@ -237,6 +237,10 @@ const (
 	UnitVideoSeconds Unit = "video_seconds"
 	UnitGPUSeconds   Unit = "gpu_seconds"
 	UnitCredits      Unit = "credits"
+	// UnitAudioCharacters is billed per character of INPUT text, the
+	// usual shape for text-to-speech — not per second of output,
+	// which is not known until the audio exists.
+	UnitAudioCharacters Unit = "audio_characters"
 )
 
 // Billing distinguishes drawing down a prepaid plan from spending

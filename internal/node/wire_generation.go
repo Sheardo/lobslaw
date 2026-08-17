@@ -17,6 +17,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/scheduler"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 // A generation job outlives its turn, so it is a commitment: work to
@@ -42,6 +43,10 @@ const (
 	paramArtifactName = "artifact_name"
 	paramOrigChannel  = "originator_channel"
 	paramOrigChatID   = "originator_chat_id"
+	// paramProviderLabel names the provider that is running the job,
+	// so its rate card can be found again when the job completes and
+	// its cost is finally known.
+	paramProviderLabel = "provider_label"
 )
 
 // runGenerationPoll advances one generation job by exactly one poll.
@@ -139,9 +144,23 @@ func (n *Node) deliverGeneration(ctx context.Context, c *lobslawv1.AgentCommitme
 		return fmt.Errorf("generation: commitment %q: resolve artifact: %w", c.Id, err)
 	}
 
+	// PRICED HERE, because here is where the cost is first knowable: a
+	// video is billed by the seconds actually produced, and the driver
+	// only learns that when the job completes. The turn that asked for
+	// it finished minutes ago.
+	//
+	// So this cannot go to a TurnBudget — the budget it would charge
+	// is closed, and re-opening it to bill a turn that already ended
+	// would let a background job push a finished conversation over a
+	// cap it never hit. The cost is recorded and reported instead.
+	rec := compute.RecordModalCost(
+		c.Params[paramProviderLabel], "", st.Usage, n.pricingForLabel(c.Params[paramProviderLabel]))
+
 	n.log.Info("generation: job delivered",
 		"commitment", c.Id, "mount", got.Mount, "path", got.Path,
-		"bytes", got.Bytes, "unit", st.Usage.Unit, "quantity", st.Usage.Quantity)
+		"bytes", got.Bytes, "provider", rec.ProviderLabel,
+		"unit", st.Usage.Unit, "quantity", st.Usage.Quantity,
+		"billed_to", st.Usage.BilledTo, "cost_usd", rec.CostUSD)
 
 	n.notifyGeneration(ctx, c, fmt.Sprintf("Your generation is ready: %s (in %s).", got.Path, got.Mount))
 	return nil
@@ -261,7 +280,7 @@ func parseDeadline(s string) time.Time {
 // submitted job. Separated from the handler so the submit path and
 // the poll path agree on the param names by construction rather than
 // by two copies of the same string literals.
-func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, owner, channel, chatID, name string) (*lobslawv1.AgentCommitment, error) {
+func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, owner, channel, chatID, name, providerLabel string) (*lobslawv1.AgentCommitment, error) {
 	raw, err := h.Encode()
 	if err != nil {
 		return nil, err
@@ -274,11 +293,12 @@ func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, o
 		Trigger:    "time",
 		Reason:     "generation job " + h.Driver,
 		Params: map[string]string{
-			paramJobHandle:    raw,
-			paramJobDeadline:  time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
-			paramArtifactName: name,
-			paramOrigChannel:  channel,
-			paramOrigChatID:   chatID,
+			paramJobHandle:     raw,
+			paramJobDeadline:   time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
+			paramArtifactName:  name,
+			paramOrigChannel:   channel,
+			paramOrigChatID:    chatID,
+			paramProviderLabel: providerLabel,
 		},
 	}, nil
 }
@@ -428,13 +448,13 @@ func (n *Node) resolveVideoEndpoints() []*llmEndpoint {
 // scheduler finishes it. Called after the provider has accepted the
 // job, so a failure here means work that is running and billed with
 // nothing to collect it — hence no swallowing.
-func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, prompt string) (string, error) {
+func (n *Node) startGenerationJob(ctx context.Context, h compute.JobHandle, providerLabel, prompt string) (string, error) {
 	if n.raft == nil {
 		return "", fmt.Errorf("no raft on this node; a generation job cannot be recorded")
 	}
 	id := "gen-" + ids.New()
 	turn, _ := compute.TurnIdentityFrom(ctx)
-	c, err := NewGenerationCommitment(id, h, 0, turn.UserID, turn.Channel, turn.ChannelID, prompt)
+	c, err := NewGenerationCommitment(id, h, 0, turn.UserID, turn.Channel, turn.ChannelID, prompt, providerLabel)
 	if err != nil {
 		return "", err
 	}
@@ -493,6 +513,7 @@ func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
 	if err := compute.RegisterVideoBuiltin(builtins, compute.VideoConfig{
 		Driver: d,
 		Start:  n.startGenerationJob,
+		Label:  ep.label,
 	}); err != nil {
 		return fmt.Errorf("register generate_video: %w", err)
 	}
@@ -501,4 +522,23 @@ func (n *Node) wireVideoTools(builtins *compute.Builtins) error {
 	}
 	n.log.Debug("compute: generate_video registered", "model", ep.model, "via", ep.via)
 	return nil
+}
+
+// pricingForLabel finds a provider's rate card by config label.
+//
+// An unknown label yields no rates rather than an error: a commitment
+// can outlive the config that created it — an operator who renames a
+// provider mid-job should still get their video, with the cost
+// unpriced and the quantity intact, rather than a delivery failure
+// over the accounting.
+func (n *Node) pricingForLabel(label string) types.ProviderPricing {
+	if label == "" {
+		return types.ProviderPricing{}
+	}
+	for i := range n.cfg.Compute.Providers {
+		if n.cfg.Compute.Providers[i].Label == label {
+			return n.cfg.Compute.Providers[i].Pricing
+		}
+	}
+	return types.ProviderPricing{}
 }
