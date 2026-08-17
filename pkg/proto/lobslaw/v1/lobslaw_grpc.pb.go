@@ -383,6 +383,236 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	SkillService_ImportSkill_FullMethodName = "/lobslaw.v1.SkillService/ImportSkill"
+	SkillService_ExportSkill_FullMethodName = "/lobslaw.v1.SkillService/ExportSkill"
+	SkillService_ListSkills_FullMethodName  = "/lobslaw.v1.SkillService/ListSkills"
+	SkillService_RemoveSkill_FullMethodName = "/lobslaw.v1.SkillService/RemoveSkill"
+)
+
+// SkillServiceClient is the client API for SkillService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// -----------------------------------------------------------------------------
+// SkillService — install, inspect and remove skills on a RUNNING cluster
+// -----------------------------------------------------------------------------
+//
+// The BYTES travel, not a path. `lobslaw skills import` runs on
+// somebody's laptop and the cluster is elsewhere, so a service taking a
+// directory would be reading one that does not exist on the node.
+type SkillServiceClient interface {
+	ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error)
+	ExportSkill(ctx context.Context, in *ExportSkillRequest, opts ...grpc.CallOption) (*ExportSkillResponse, error)
+	ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error)
+	RemoveSkill(ctx context.Context, in *RemoveSkillRequest, opts ...grpc.CallOption) (*RemoveSkillResponse, error)
+}
+
+type skillServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewSkillServiceClient(cc grpc.ClientConnInterface) SkillServiceClient {
+	return &skillServiceClient{cc}
+}
+
+func (c *skillServiceClient) ImportSkill(ctx context.Context, in *ImportSkillRequest, opts ...grpc.CallOption) (*ImportSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImportSkillResponse)
+	err := c.cc.Invoke(ctx, SkillService_ImportSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) ExportSkill(ctx context.Context, in *ExportSkillRequest, opts ...grpc.CallOption) (*ExportSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExportSkillResponse)
+	err := c.cc.Invoke(ctx, SkillService_ExportSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSkillsResponse)
+	err := c.cc.Invoke(ctx, SkillService_ListSkills_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *skillServiceClient) RemoveSkill(ctx context.Context, in *RemoveSkillRequest, opts ...grpc.CallOption) (*RemoveSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveSkillResponse)
+	err := c.cc.Invoke(ctx, SkillService_RemoveSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SkillServiceServer is the server API for SkillService service.
+// All implementations should embed UnimplementedSkillServiceServer
+// for forward compatibility.
+//
+// -----------------------------------------------------------------------------
+// SkillService — install, inspect and remove skills on a RUNNING cluster
+// -----------------------------------------------------------------------------
+//
+// The BYTES travel, not a path. `lobslaw skills import` runs on
+// somebody's laptop and the cluster is elsewhere, so a service taking a
+// directory would be reading one that does not exist on the node.
+type SkillServiceServer interface {
+	ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error)
+	ExportSkill(context.Context, *ExportSkillRequest) (*ExportSkillResponse, error)
+	ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error)
+	RemoveSkill(context.Context, *RemoveSkillRequest) (*RemoveSkillResponse, error)
+}
+
+// UnimplementedSkillServiceServer should be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedSkillServiceServer struct{}
+
+func (UnimplementedSkillServiceServer) ImportSkill(context.Context, *ImportSkillRequest) (*ImportSkillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ImportSkill not implemented")
+}
+func (UnimplementedSkillServiceServer) ExportSkill(context.Context, *ExportSkillRequest) (*ExportSkillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ExportSkill not implemented")
+}
+func (UnimplementedSkillServiceServer) ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListSkills not implemented")
+}
+func (UnimplementedSkillServiceServer) RemoveSkill(context.Context, *RemoveSkillRequest) (*RemoveSkillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveSkill not implemented")
+}
+func (UnimplementedSkillServiceServer) testEmbeddedByValue() {}
+
+// UnsafeSkillServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to SkillServiceServer will
+// result in compilation errors.
+type UnsafeSkillServiceServer interface {
+	mustEmbedUnimplementedSkillServiceServer()
+}
+
+func RegisterSkillServiceServer(s grpc.ServiceRegistrar, srv SkillServiceServer) {
+	// If the following call pancis, it indicates UnimplementedSkillServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&SkillService_ServiceDesc, srv)
+}
+
+func _SkillService_ImportSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImportSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ImportSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ImportSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ImportSkill(ctx, req.(*ImportSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_ExportSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExportSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ExportSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ExportSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ExportSkill(ctx, req.(*ExportSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_ListSkills_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSkillsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ListSkills(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ListSkills_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ListSkills(ctx, req.(*ListSkillsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SkillService_RemoveSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).RemoveSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_RemoveSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).RemoveSkill(ctx, req.(*RemoveSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// SkillService_ServiceDesc is the grpc.ServiceDesc for SkillService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var SkillService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "lobslaw.v1.SkillService",
+	HandlerType: (*SkillServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ImportSkill",
+			Handler:    _SkillService_ImportSkill_Handler,
+		},
+		{
+			MethodName: "ExportSkill",
+			Handler:    _SkillService_ExportSkill_Handler,
+		},
+		{
+			MethodName: "ListSkills",
+			Handler:    _SkillService_ListSkills_Handler,
+		},
+		{
+			MethodName: "RemoveSkill",
+			Handler:    _SkillService_RemoveSkill_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "lobslaw/v1/lobslaw.proto",
+}
+
+const (
 	SelfLearningService_ListArtefacts_FullMethodName   = "/lobslaw.v1.SelfLearningService/ListArtefacts"
 	SelfLearningService_ApproveArtefact_FullMethodName = "/lobslaw.v1.SelfLearningService/ApproveArtefact"
 	SelfLearningService_DecideRevision_FullMethodName  = "/lobslaw.v1.SelfLearningService/DecideRevision"

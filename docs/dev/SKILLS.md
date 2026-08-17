@@ -859,3 +859,64 @@ knowing. Neither is a state to start in.
 - A **missing** dev directory is refused, not treated as empty: a
   typo'd path loads nothing and looks exactly like a directory whose
   skills all failed to parse.
+
+---
+
+## Installing from anywhere
+
+```console
+$ lobslaw skills import ./my-skill --config /etc/lobslaw/config.toml
+installed tidy 1.2.3 (operator, 3 files)
+
+$ lobslaw skills list
+NAME  VERSION  TIER      ACTIVE  FILES  SOURCE
+tidy  1.2.3    operator  yes     3      cli:/home/john/my-skill
+
+$ lobslaw skills export tidy 1.2.3 ./out
+exported tidy 1.2.3 to ./out (3 files)
+
+$ lobslaw skills remove tidy 1.2.3
+removed tidy 1.2.3
+```
+
+**Live only — there is no `--offline` form.** Importing writes to raft
+and replicates; doing it against a stopped node's `state.db` would
+produce a record the running cluster never sees. `learned approve`
+refuses `--offline` for the same reason.
+
+### The bytes travel, not a path
+
+The command runs on somebody's laptop and the cluster is elsewhere. A
+service taking a directory would be reading one that exists perfectly
+well on the wrong machine, and the failure would be a confusing "no
+such file" naming a path that is right there.
+
+So the directory is read client-side and the bundle is sent. The gRPC
+message ceiling is raised above the bundle limit deliberately: a bundle
+at the 4 MiB cap would otherwise fail with "message too large" instead
+of the store's error naming the offending file.
+
+### Validated through the real loader
+
+A bundle is written to a temporary directory and run through
+`ParseWithPolicy` before it is stored, so an import is held to exactly
+the standard a load is.
+
+Verifying the signature by hand would have admitted a signed manifest
+that pins no `handler_sha256` — which the loader refuses, because a
+signature naming a script but not its digest covers no executable
+content — and the skill would replicate to every node and fail to load
+on all of them. **The feedback belongs at the door, where somebody is
+watching.**
+
+### Two smaller decisions
+
+**Name and version come from the manifest**, not from flags. Both are
+already stated in the file, and two sources for one fact eventually
+disagree — an operator who typed a version that did not match would
+install a record describing a skill that is not the one in it.
+
+**`--tier=agent` is refused.** That tier means "the agent wrote this".
+Letting a person claim it from a command line would make provenance
+something anybody can assert rather than a fact about where a skill
+came from.

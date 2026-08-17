@@ -60,7 +60,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
 | **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ✅ | 🟡 P2 | M | R17 |
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
-| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟡 | 🟠 P1 | L | R15, R17 |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ✅ | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
@@ -2344,7 +2344,26 @@ in a shell profile and forgotten. Both at once is a coincidence somebody has to 
 promote a skill past its provenance, so an operator needing to override a signed skill locally has
 to be given a separate SOURCE rather than a way to game the order.
 
-Still open: the `lobslaw skills import/export/remove` CLI.
+**The CLI is built, and R18 is closed.** `lobslaw skills list | import | export | remove`, live over
+mTLS with no `--offline` form — importing writes to raft, and doing it against a stopped node would
+produce a record the running cluster never sees, which is the same reason `learned approve` refuses
+it.
+
+The BYTES travel, not a path. The command runs on somebody's laptop and the cluster is elsewhere,
+so a service taking a directory would be reading one that exists perfectly well on the wrong
+machine. The gRPC message ceiling is raised above the bundle limit deliberately: a bundle at the
+4 MiB cap would otherwise fail with "message too large" rather than the store's error naming the
+offending file.
+
+A bundle is **parsed through the real loader** before it is stored — written to a temp directory and
+run through `ParseWithPolicy` — so an import is held to exactly the standard a load is. Verifying
+the signature by hand would have admitted a signed manifest pinning no handler digest, which the
+loader refuses, and the skill would replicate everywhere and fail to load everywhere.
+
+Name and version come from the MANIFEST, not from flags. Both are already stated in the file, and
+two sources for one fact eventually disagree. `--tier=agent` is refused: that tier means "the agent
+wrote this", and letting a person claim it from a command line would make provenance something
+anybody can assert rather than a fact about where a skill came from.
 
 ### Store-to-cache contract
 

@@ -75,6 +75,16 @@ func (n *Node) startSkillStoreLoader(ctx context.Context) error {
 	}
 	n.skillSigningPolicy, n.skillVerifier = policy, verifier
 
+	// Registered here, after the policy is resolved, so the service
+	// holds the same stance the loaders do. Registering it earlier
+	// would give it a zero-valued policy — SigningOff, the most
+	// permissive — on a node configured to require signatures.
+	if n.server != nil {
+		lobslawv1.RegisterSkillServiceServer(n.server, &skillService{
+			store: n.skillStore, policy: policy, verifier: verifier,
+		})
+	}
+
 	if err := n.loadStoredSkills(); err != nil {
 		n.log.Error("skills: initial store load failed", "err", err)
 	}
