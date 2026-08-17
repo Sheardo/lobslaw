@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -102,19 +103,20 @@ func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
 			speed = float32(v)
 		}
 
+		started := time.Now()
 		art, err := cfg.Driver.Speak(ctx, SpeakRequest{
 			Text:   text,
 			Voice:  strings.TrimSpace(args["voice"]),
 			Format: strings.TrimSpace(args["format"]),
 			Speed:  speed,
 		})
-		if err == nil {
-			// Billed per CHARACTER OF INPUT, which is what every TTS
-			// vendor meters — not per second of output, which is not
-			// known until the audio exists.
-			usage := MeteredUsage(UnitAudioCharacters, float64(len(text)), cfg.BilledTo)
-			CollectCost(ctx, RecordModalCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
-		}
+		// Billed per CHARACTER OF INPUT, which is what every TTS vendor
+		// meters — not per second of output, which is not known until
+		// the audio exists. Reported whether or not the call succeeded:
+		// a failure costs nothing but is still worth a span.
+		CollectGeneration(ctx, cfg.Label, cfg.Model,
+			MeteredUsage(UnitAudioCharacters, float64(len(text)), cfg.BilledTo),
+			cfg.Pricing, started, err)
 		if err != nil {
 			// Returned unwrapped so the failover chain can read the
 			// class the driver assigned.

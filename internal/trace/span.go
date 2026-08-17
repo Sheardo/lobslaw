@@ -44,6 +44,12 @@ const (
 	// two together would make a tool look expensive to run when what
 	// was expensive was carrying its output.
 	KindContextCarry Kind = "context_carry"
+
+	// KindGeneration is an image, a video or a piece of speech. Kept
+	// distinct from KindLLMCall because it is billed in something
+	// other than tokens and because "how much did we spend on
+	// pictures" is a question somebody asks.
+	KindGeneration Kind = "generation"
 )
 
 // Outcome is how an attempt ended. Named rather than derived from a
@@ -100,6 +106,15 @@ type Span struct {
 	// than no number at all.
 	Unit     string  `json:"unit,omitempty"`
 	Quantity float64 `json:"quantity,omitempty"`
+
+	// BilledTo distinguishes drawing on a prepaid plan from spending
+	// against a balance.
+	//
+	// Without it a plan-billed call is indistinguishable from a free
+	// one: both report a cost of zero, and only one of them consumed
+	// something finite. An operator asking why their quota ran out
+	// would find a trace full of calls that apparently cost nothing.
+	BilledTo string `json:"billed_to,omitempty"`
 
 	// Error is the failure text, which for a provider error is a
 	// status and a classification rather than a response body. Callers
