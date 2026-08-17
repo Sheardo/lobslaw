@@ -64,7 +64,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ✅ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
-| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | 🟨 | 🟠 P1 | M | — |
+| **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | ✅ | 🟠 P1 | M | — |
 | **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
 | **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
 | **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
@@ -3114,12 +3114,36 @@ never be dropped becomes a reliability problem on the reply path.
       `lobslaw trace` states it as a SHARE of the turn rather than adding it: the carried tokens
       were already billed on the llm_call spans, and summing both would make the one command whose
       job is "why did this cost what it did" answer it wrongly.
-- [ ] Cached tokens are priced as cached, not fresh.
-- [ ] A span for a non-token-billed call carries its own unit and
+- [x] Cached tokens are priced as cached, not fresh.
+      Already true and already tested — `EstimateCost` bills `CachedTokens` at `CachedUSDPer1K`,
+      the Anthropic driver reports them, and the span records them separately. Verified rather
+      than assumed.
+- [x] A span for a non-token-billed call carries its own unit and
       quantity (`video_seconds`, `images`, `credits`…), not a token
       count of zero.
-- [ ] Plan-billed calls record quota consumed and are marked as such,
+      `trace.Span` HAD the `Unit` and `Quantity` fields, with a comment explaining exactly why
+      they matter — "a zero token count on a call that cost real money reads as a free call" —
+      and nothing set them. Generation emitted no spans at all, so a turn that rendered a video
+      showed a trace with a gap where the expensive part happened.
+
+      One call now writes both the cost record and the span. The budget and the trace are two
+      accounts of the same spend, and two call sites per modality is how they come to disagree.
+
+      A FAILED generation emits its span but charges nothing: the provider did not deliver, and
+      billing for it would make an outage look like usage — while a failure is exactly what
+      somebody reading a trace is looking for.
+
+      **Video is the exception, and deliberately.** Its job outlives the turn, so by completion
+      there is no turn trace to attach to; the cost is logged at the poll handler instead. A span
+      invented for a turn that ended minutes ago would be worse than none.
+- [x] Plan-billed calls record quota consumed and are marked as such,
       rather than reporting a marginal spend of zero.
+      `BilledTo` on the span. Without it a plan-billed call is indistinguishable from a free one:
+      both report zero, and only one of them consumed something finite. An operator asking why
+      their quota ran out would find a trace full of calls that apparently cost nothing.
+
+      The QUANTITY is what carries the meaning there, so it travels even though the cost does
+      not.
 
 ---
 

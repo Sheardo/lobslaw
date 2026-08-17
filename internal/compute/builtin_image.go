@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -83,6 +84,7 @@ func newImageHandler(cfg ImageConfig) BuiltinFunc {
 				len(prompt), cfg.MaxPromptChars)
 		}
 
+		started := time.Now()
 		art, err := cfg.Driver.Generate(ctx, ImageRequest{
 			Prompt:  prompt,
 			Size:    strings.TrimSpace(args["size"]),
@@ -95,8 +97,8 @@ func newImageHandler(cfg ImageConfig) BuiltinFunc {
 		// Billed per IMAGE, not per token. One request today; a
 		// provider asked for variations would report the number it
 		// actually returned.
-		usage := MeteredUsage(UnitImages, 1, cfg.BilledTo)
-		CollectCost(ctx, RecordModalCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
+		CollectGeneration(ctx, cfg.Label, cfg.Model,
+			MeteredUsage(UnitImages, 1, cfg.BilledTo), cfg.Pricing, started, nil)
 
 		got, err := cfg.Resolver.Resolve(ctx, art, imageFileName(prompt))
 		if err != nil {
