@@ -1477,8 +1477,8 @@ so the existing resolver/capability/roles tests stay green throughout.
       why that was defensible and why the ERROR-level log is what makes advancing safe now.
 - [x] Health tracking: a provider that failed recently is skipped rather than re-tried every turn.
       Per-node, not Raft; no half-open probe state — the chain is the probe.
-- [ ] A chain step falls through without abandoning the chain.
-      **Unblocked — chains route now.** `Resolver.Resolve` is on the turn path: the resolved chain
+- [x] A chain step falls through without abandoning the chain.
+      **Chains route, and their later steps run.** `Resolver.Resolve` is on the turn path: the resolved chain
       picks WHERE THE BACKUP WALK BEGINS, so everything the walk already did (the trust floor at
       every candidate, health cooldowns, failure classification, a span per attempt) applies
       unchanged and a chain decides its start.
@@ -1498,9 +1498,37 @@ so the existing resolver/capability/roles tests stay green throughout.
       whichever label sorted first. Routing now overrides the primary ONLY when a chain actually
       matched. Caught by a test asserting a complexity-5 greeting still starts at the primary.
 
-      What remains is the multi-step half: a chain's later steps are resolved and carried on the
-      turn, but only the first is dispatched. Step-level fallthrough and reviewer handoff (each
-      step's output rendered into the next step's `prompt_template`) is the follow-up.
+      **The multi-step half.** A chain's later steps run as a PIPELINE: step N's output is
+      rendered into step N+1's `prompt_template`, and the last step's output is the answer. A
+      "reviewer" is then just a step whose template says "improve this" — the mechanism does not
+      need to know what a reviewer is, which is why roles stay descriptive rather than becoming
+      behaviour.
+
+      **On the turn's answer, not on each round-trip.** Step 0 is the whole tool-call loop,
+      however many round-trips that takes; the later steps run once, on what it finally said.
+      Running a reviewer against an intermediate tool call would be reviewing a decision to look
+      something up.
+
+      Step-level fallthrough comes free: a step's provider becomes the start of the backup walk,
+      so a rate-limited reviewer falls through to that provider's backups rather than failing the
+      step. Steps go through `callLLM` rather than dispatching directly, so each is billed,
+      hooked, budgeted, traced, floor-checked and failed over exactly as the main turn is — a
+      second code path for provider calls is how one of them comes to be missing the trust floor.
+
+      **A failing step returns the best answer so far.** By that point the user has a complete
+      reply from step 0; losing it because a reviewer's provider was rate-limited would make a
+      chain a liability rather than an improvement. The same applies to an empty reply (a failure
+      that did not announce itself) and to a template the operator got wrong — silently
+      substituting different instructions would produce a reply they did not ask for and cannot
+      account for.
+
+      Steps get NO TOOLS. A step refines what the previous one said; tools would reopen the whole
+      tool-call loop once per step, and a chain of three would be three agents rather than one
+      answer passed along.
+
+      Episodic memory ingests the FINAL answer. Remembering step 0's draft would seed
+      consolidation with a reply nobody saw, and the assistant would later recall having said
+      something it did not say.
 
       *Previously recorded here:* `Resolver.Resolve` has no
       callers — verified exhaustively, `ResolveRequest` is constructed nowhere and

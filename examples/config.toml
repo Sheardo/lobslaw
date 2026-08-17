@@ -112,6 +112,27 @@ max_egress_bytes_per_turn = 10_000_000
 # steps = [{ provider = "big-model" }]
 # [compute.chains.trigger]
 # min_complexity = 70
+#
+# A chain with more than one step runs as a PIPELINE, once the turn has
+# an answer: step N's output is rendered into step N+1's
+# prompt_template, and the last step's output is what the user gets.
+# {{.Previous}} is the preceding output and {{.Message}} the original
+# question. A step that fails, returns nothing, or has a template that
+# will not render keeps the previous answer rather than losing it.
+#
+# [[compute.chains]]
+# label = "reviewed"
+# steps = [
+#   { provider = "big-model" },
+#   { provider = "careful-model", role = "reviewer", prompt_template = """
+# The user asked: {{.Message}}
+#
+# A draft reply: {{.Previous}}
+#
+# Reply with an improved version, and nothing else.""" },
+# ]
+# [compute.chains.trigger]
+# min_complexity = 85
 
 # Plugins are installed with `lobslaw plugin install <source>`, which
 # writes into the skills root. There is no [[compute.plugins]] section —

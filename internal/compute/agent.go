@@ -782,7 +782,14 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// assistant message) still shows the model its own
 			// reasoning. Only resp.Reply — what channels render
 			// — gets the stripped form.
-			resp.Reply = stripReasoningTags(chatResp.Content)
+			// The chain's later steps run HERE, on the turn's
+			// finished answer — not on each round-trip. Step 0 was
+			// the whole tool-call loop; a reviewer applied to an
+			// intermediate call would be reviewing a decision to
+			// look something up. A no-op unless a multi-step chain
+			// routed this turn.
+			final := a.runChainSteps(ctx, req, chatResp.Content)
+			resp.Reply = stripReasoningTags(final)
 			resp.Messages = messages
 			resp.BudgetState = req.Budget.State()
 			// Fire-and-forget episodic ingest: the model
@@ -791,7 +798,10 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 			// logged and swallowed because memory loss is a
 			// soft failure compared to dropping the user's
 			// reply.
-			a.maybeIngestTurn(ctx, req, chatResp.Content)
+			// The FINAL answer, not step 0's draft. What the user
+			// received is what should be remembered; ingesting the
+			// draft would seed memory with a reply nobody saw.
+			a.maybeIngestTurn(ctx, req, final)
 			a.cfg.Review.Consider(req, resp.Messages, len(resp.ToolCalls))
 			return resp, nil
 		}
