@@ -132,3 +132,95 @@ func WriteCAPublic(dstCAPath string, caCertPEM []byte) error {
 	}
 	return nil
 }
+
+// OperatorOU marks a certificate as belonging to a person rather than
+// to a node.
+//
+// In the Subject's OrganizationalUnit rather than encoded into the
+// CommonName, because the CN is already the identity every service
+// reads for attribution — overloading it would make every reader parse
+// a prefix, and the first reader that forgot would treat an operator
+// as a node.
+const OperatorOU = "operator"
+
+// SignOperatorCert issues a credential for a PERSON.
+//
+// Distinct from a node certificate in two ways, and both matter.
+//
+// CLIENT AUTHENTICATION ONLY. A node cert carries ServerAuth as well,
+// because a node both dials its peers and serves them; that is exactly
+// what makes a stolen node credential able to impersonate a cluster
+// member. An operator dials and is never dialled.
+//
+// AND MARKED AS AN OPERATOR, because ClientAuth alone does not stop it
+// dialling the raft transport — a peer dials as a client too. The
+// server refuses this OU on peer-only services, which is what makes
+// "administers but cannot join" true rather than merely intended.
+//
+// A separate credential also makes revocation and audit answerable:
+// revoking one person no longer means rotating a node's identity, and
+// an audit entry names who rather than which host.
+func SignOperatorCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, opts SignOpts) (certPEM, keyPEM []byte, err error) {
+	if opts.NodeID == "" {
+		return nil, nil, errors.New("operator name required")
+	}
+	if opts.ValidFor == 0 {
+		// Shorter than a node's year by default. A person's credential
+		// lives on a laptop that travels; a node's lives on a host
+		// somebody controls.
+		opts.ValidFor = 90 * 24 * time.Hour
+	}
+	now := opts.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate operator key: %w", err)
+	}
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject: pkix.Name{
+			CommonName:         opts.NodeID,
+			OrganizationalUnit: []string{OperatorOU},
+		},
+		NotBefore: now,
+		NotAfter:  now.Add(opts.ValidFor),
+		KeyUsage:  x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		// No ServerAuth. This credential cannot be presented by
+		// something answering connections.
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		// No DNS SAN either: an operator is not reachable at a name,
+		// and a SAN is what a peer would verify when dialling.
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, pub, caKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sign operator cert: %w", err)
+	}
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal operator key: %w", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}), nil
+}
+
+// IsOperatorCert reports whether a certificate belongs to a person.
+func IsOperatorCert(cert *x509.Certificate) bool {
+	if cert == nil {
+		return false
+	}
+	for _, ou := range cert.Subject.OrganizationalUnit {
+		if ou == OperatorOU {
+			return true
+		}
+	}
+	return false
+}

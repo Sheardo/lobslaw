@@ -618,3 +618,51 @@ courtesy could not be assembled is the wrong trade in every case.
 The rate-limit state is per-process, deliberately — unlike session
 grants. The consequence of getting it wrong is one extra line on one
 reply, which does not earn a raft round trip on the reply path.
+
+---
+
+## Operator credentials
+
+An operator administering the cluster from a laptop needs a credential
+that is **not** a node's.
+
+```console
+$ lobslaw cluster sign-operator alice \
+    --config /etc/lobslaw/config.toml \
+    --out ~/.config/lobslaw/prod
+Signed an OPERATOR certificate for "alice":
+  cert: ~/.config/lobslaw/prod/operator.pem
+  key : ~/.config/lobslaw/prod/operator-key.pem
+  ca  : ~/.config/lobslaw/prod/ca.pem
+```
+
+### Why not a node certificate
+
+A node certificate carries `ServerAuth` as well as `ClientAuth`,
+because a node both dials its peers and serves them. Handing one to a
+laptop hands over the ability to present as a cluster member — and
+revoking that person then means rotating a node's identity, while every
+action they took is attributed to a host rather than to them.
+
+### Administers but cannot join
+
+Two halves, and only both make it true:
+
+- **Client authentication only.** Nothing can serve with it, so it
+  cannot answer connections as a node.
+- **`OU=operator`, refused on the raft transport.** ClientAuth alone
+  would not stop it — a peer dials as a client too — so the server
+  refuses that OU on `/RaftTransport/`, on both the unary and the
+  streaming interceptor. Raft's transport is streaming; a unary-only
+  guard would cover nothing that matters.
+
+Enforced at the **server**. A check on the client is a check the
+attacker controls.
+
+An unidentified caller is refused on the peer-only path rather than
+admitted. mTLS is mandatory on that listener, so a call with no
+verified chain is not a configuration this cluster has — and guessing
+in favour of the caller is the wrong way to be wrong about consensus.
+
+Operator certificates are shorter-lived than a node's by default: a
+person's credential lives on a laptop that travels.
