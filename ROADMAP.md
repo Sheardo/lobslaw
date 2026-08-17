@@ -2821,10 +2821,26 @@ of them.
 
       `mimeForAudioFormat` in `speak.go` survives and should: it maps an output CONTAINER to a
       MIME type (`wav` → `audio/wav`), which is not wire-protocol dispatch.
-- [ ] A node boots from a config whose every provider is `driver =
+- [x] A node boots from a config whose every provider is `driver =
       "mock"`, with no network access, and serves a full turn.
-- [ ] A vision provider whose primary returns 503 falls through to its
+      Chat, vision, audio, embeddings and jobs already had a mock; SPEECH AND IMAGE DID NOT, so
+      such a node booted and then failed the moment somebody asked it to say something out loud.
+
+      This is not only a testing convenience. It is the cheapest check that the driver seam is
+      complete: a modality with no mock is one whose wire shape has not really been separated
+      from its plumbing, because if it had been, substituting the wire would be trivial.
+
+      Every mock produces PLAUSIBLE output — a valid RIFF/WAVE container, a PNG that decodes —
+      rather than empty bytes. The artifact path forwards these to a channel, and Telegram
+      rejects a voice note whose container it cannot parse, so a mock producing garbage would
+      make the delivery path untestable exactly where it is fiddliest.
+- [x] A vision provider whose primary returns 503 falls through to its
       backup within the same turn, and the fallthrough is logged.
+      The behaviour was already there and tested per failure class. The LOG was not tested, and
+      it is half the criterion: "the chain worked" and "the chain worked on its third try because
+      two providers are down" look identical to an operator unless the fallthrough says so. The
+      line names the provider that failed, not merely that one did — and a chain that succeeds
+      first time logs nothing, or the signal would appear on every turn and mean nothing.
 - [ ] A provider declaring a modality its model does not support is
       warned about at boot via the existing models.dev capability data.
 - [ ] `generate_image` can be gated by `effect =
@@ -2835,10 +2851,10 @@ of them.
       responsiveness timeout.
 - [ ] A provider billed per second of video reports a non-zero cost.
       Zero is the current answer and it is wrong.
-- [ ] A plan-billed provider whose quota is exhausted falls through to
+- [x] A plan-billed provider whose quota is exhausted falls through to
       its backup and warns; it is not retried until reset, and it is
       not treated as a request error.
-- [ ] The job handle is opaque to everything above the driver: a
+- [x] The job handle is opaque to everything above the driver: a
       driver returning an ARN, an operation resource name or a bare
       task id all work without the scheduler knowing which.
 - [ ] A provider requiring short-lived OAuth tokens (Vertex) and one

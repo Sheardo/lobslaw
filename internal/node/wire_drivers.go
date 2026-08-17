@@ -42,8 +42,10 @@ func (n *Node) drivers() *compute.DriverSet {
 		// sensible to default to.
 		s.RegisterSpeak(compute.DriverOpenAI, compute.OpenAISpeakFactory)
 		s.RegisterSpeak(elevenlabs.DriverName, elevenlabsSpeakFactory)
+		s.RegisterSpeak(compute.DriverMock, compute.MockSpeakFactory)
 		s.RegisterImage(compute.DriverOpenAI, compute.OpenAIImageFactory)
 		s.RegisterImage(imagen.DriverName, imagenImageFactory)
+		s.RegisterImage(compute.DriverMock, compute.MockImageFactory)
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
 		s.RegisterJob(veo.DriverName, veoJobFactory)

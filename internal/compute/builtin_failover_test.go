@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -199,5 +200,61 @@ func TestVisionClassifiesHTTPFailures(t *testing.T) {
 				t.Errorf("HTTP %d classified %s, want %s: %v", tc.status, got, tc.want, err)
 			}
 		})
+	}
+}
+
+// A SILENT failover hides degradation. "The chain worked" and "the
+// chain worked on its third try because two providers are down" look
+// identical to an operator unless the fallthrough says so — which is
+// why R22 asks for the log line and not only the behaviour.
+func TestASuccessfulFallthroughIsLogged(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	calls := &[]string{}
+	h := failoverBuiltin("read_image", log, nil, nil,
+		failoverHandler{label: "primary", fn: stubHandler("primary",
+			Transient(errors.New("HTTP 503")), calls)},
+		failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
+	)
+	if _, _, err := h(context.Background(), nil); err != nil {
+		t.Fatalf("the chain should have succeeded on the backup: %v", err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("calls = %v; the chain did not advance", *calls)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "backup") {
+		t.Errorf("nothing was logged about the fallthrough:\n%s", out)
+	}
+	// The label matters more than the message: an operator needs to
+	// know WHICH provider is failing, not merely that one did.
+	if !strings.Contains(out, "primary") {
+		t.Errorf("the log does not name the provider that failed:\n%s", out)
+	}
+}
+
+// A chain that succeeds first time must not log a fallthrough, or the
+// signal is worthless — every turn would carry one.
+func TestNoFallthroughIsLoggedWhenThePrimaryWorks(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	calls := &[]string{}
+	h := failoverBuiltin("read_image", log, nil, nil,
+		failoverHandler{label: "primary", fn: stubHandler("primary", nil, calls)},
+		failoverHandler{label: "backup", fn: stubHandler("backup", nil, calls)},
+	)
+	if _, _, err := h(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("calls = %v; the backup was tried unnecessarily", *calls)
+	}
+	if strings.Contains(logs.String(), "backup succeeded") {
+		t.Errorf("a fallthrough was logged for a chain that never fell through:\n%s", logs.String())
 	}
 }
