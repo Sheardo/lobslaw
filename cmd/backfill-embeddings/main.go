@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -88,11 +89,11 @@ func main() {
 		die("resolve embedding api key: %v", err)
 	}
 	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
-		Endpoint: cfg.Compute.Embeddings.Endpoint,
-		APIKey:   apiKey,
-		Model:    cfg.Compute.Embeddings.Model,
-		Dims:     cfg.Compute.Embeddings.Dims,
-		Format:   compute.EmbeddingFormat(cfg.Compute.Embeddings.Format),
+		Endpoint:      cfg.Compute.Embeddings.Endpoint,
+		APIKey:        apiKey,
+		Model:         cfg.Compute.Embeddings.Model,
+		Dims:          cfg.Compute.Embeddings.Dims,
+		DriverFactory: backfillEmbeddingFactory(cfg.Compute.Embeddings.Format),
 	})
 	if err != nil {
 		die("embed client: %v", err)
@@ -298,3 +299,15 @@ func die(format string, args ...any) {
 
 // suppress unused imports on some Go versions
 var _ = timestamppb.Now
+
+// backfillEmbeddingFactory picks the wire shape for this one-shot tool.
+//
+// A local switch rather than a DriverSet: the backfill is a standalone
+// binary with no node to assemble one, and two cases here is cheaper
+// than exporting the wiring layer's table for a tool that runs by hand.
+func backfillEmbeddingFactory(name string) compute.EmbeddingDriverFactory {
+	if strings.EqualFold(strings.TrimSpace(name), compute.DriverMiniMax) {
+		return compute.MiniMaxEmbeddingFactory
+	}
+	return compute.OpenAIEmbeddingFactory
+}

@@ -63,6 +63,13 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterAudio(compute.DriverOpenAI, compute.WhisperAudioFactory)
 		s.RegisterAudio(compute.DriverChatMultimodal, compute.ChatMultimodalAudioFactory)
 		s.RegisterAudio(compute.DriverMock, compute.MockAudioFactory)
+
+		// Embeddings register a FACTORY rather than a built driver:
+		// the client normalises the endpoint suffix before anything
+		// can be built with it.
+		s.RegisterEmbedding(compute.DriverOpenAI, compute.OpenAIEmbeddingFactory)
+		s.RegisterEmbedding(compute.DriverMiniMax, compute.MiniMaxEmbeddingFactory)
+		s.RegisterEmbedding(compute.DriverMock, compute.MockEmbeddingFactory)
 		driverSet = s
 	})
 	return driverSet

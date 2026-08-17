@@ -1,12 +1,9 @@
 package compute
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -32,22 +29,6 @@ type EmbeddingProvider interface {
 	Dimensions() int
 }
 
-// EmbeddingFormat picks the request/response wire protocol the
-// client speaks. Set this per-provider — the shape isn't
-// auto-detectable without wasting a probe call.
-type EmbeddingFormat string
-
-const (
-	// EmbeddingFormatOpenAI — {input, model} → {data: [{embedding}]}.
-	// OpenAI, OpenRouter, z.ai, most hosted embedding providers.
-	EmbeddingFormatOpenAI EmbeddingFormat = "openai"
-
-	// EmbeddingFormatMiniMax — {texts, model, type} → {vectors}.
-	// MiniMax's native shape via api.minimax.io/v1/embeddings.
-	// Also carries a base_resp.status_code envelope for errors.
-	EmbeddingFormatMiniMax EmbeddingFormat = "minimax"
-)
-
 // EmbeddingClientConfig configures the client.
 type EmbeddingClientConfig struct {
 	// Endpoint accepts either the base URL
@@ -70,8 +51,13 @@ type EmbeddingClientConfig struct {
 	// mismatch errors downstream.
 	Dims int
 
-	// Format picks the wire protocol. Empty → openai.
-	Format EmbeddingFormat
+	// DriverFactory builds the wire protocol.
+	//
+	// A FACTORY rather than a built driver, because the endpoint
+	// suffix rule below runs first and the driver needs the
+	// normalised endpoint. Nil takes the OpenAI shape, which is what
+	// an unset format used to mean.
+	DriverFactory EmbeddingDriverFactory
 
 	Timeout time.Duration
 
@@ -88,7 +74,7 @@ type EmbeddingClient struct {
 	apiKey     string
 	model      string
 	dims       int
-	format     EmbeddingFormat
+	driver     EmbeddingDriver
 	httpClient *http.Client
 	log        *slog.Logger
 }
@@ -129,20 +115,26 @@ func NewEmbeddingClient(cfg EmbeddingClientConfig) (*EmbeddingClient, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	format := cfg.Format
-	if format == "" {
-		format = EmbeddingFormatOpenAI
+	factory := cfg.DriverFactory
+	if factory == nil {
+		factory = OpenAIEmbeddingFactory
 	}
-	if format != EmbeddingFormatOpenAI && format != EmbeddingFormatMiniMax {
-		return nil, fmt.Errorf("EmbeddingClient: unknown format %q (want %q or %q)",
-			format, EmbeddingFormatOpenAI, EmbeddingFormatMiniMax)
+	driver, err := factory(EmbeddingDriverConfig{
+		Endpoint:   endpoint,
+		Model:      cfg.Model,
+		Credential: embeddingCredential(cfg.APIKey),
+		HTTPClient: hc,
+		Logger:     logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("EmbeddingClient: %w", err)
 	}
 	return &EmbeddingClient{
 		endpoint:   endpoint,
 		apiKey:     cfg.APIKey,
 		model:      cfg.Model,
 		dims:       cfg.Dims,
-		format:     format,
+		driver:     driver,
 		httpClient: hc,
 		log:        logger,
 	}, nil
@@ -185,73 +177,10 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 		return nil, errors.New("EmbedBatch: all inputs empty after trimming")
 	}
 
-	var reqBody []byte
-	switch c.format {
-	case EmbeddingFormatOpenAI:
-		reqBody, _ = json.Marshal(struct {
-			Input []string `json:"input"`
-			Model string   `json:"model"`
-		}{Input: nonEmpty, Model: c.model})
-	case EmbeddingFormatMiniMax:
-		reqBody, _ = json.Marshal(minimaxEmbeddingRequest{
-			Texts: nonEmpty,
-			Model: c.model,
-			Type:  "db",
-		})
-	default:
-		return nil, fmt.Errorf("EmbedBatch: unknown format %q", c.format)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(reqBody))
+	start := time.Now()
+	vectors, err := c.driver.EmbedBatch(ctx, nonEmpty)
 	if err != nil {
 		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	start := time.Now()
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("EmbedBatch: http: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("EmbedBatch: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256))
-	}
-
-	var vectors [][]float32
-	switch c.format {
-	case EmbeddingFormatOpenAI:
-		var decoded openAIEmbeddingResponse
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("EmbedBatch: decode (openai): %w", err)
-		}
-		if len(decoded.Data) != len(nonEmpty) {
-			return nil, fmt.Errorf("EmbedBatch: got %d vectors, sent %d inputs", len(decoded.Data), len(nonEmpty))
-		}
-		vectors = make([][]float32, len(decoded.Data))
-		for _, d := range decoded.Data {
-			if d.Index < 0 || d.Index >= len(decoded.Data) {
-				return nil, fmt.Errorf("EmbedBatch: openai returned out-of-range index %d", d.Index)
-			}
-			vectors[d.Index] = d.Embedding
-		}
-	case EmbeddingFormatMiniMax:
-		var decoded minimaxEmbeddingResponse
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("EmbedBatch: decode (minimax): %w", err)
-		}
-		if decoded.BaseResp.StatusCode != 0 {
-			return nil, fmt.Errorf("EmbedBatch: minimax status %d: %s",
-				decoded.BaseResp.StatusCode, decoded.BaseResp.StatusMsg)
-		}
-		if len(decoded.Vectors) != len(nonEmpty) {
-			return nil, fmt.Errorf("EmbedBatch: got %d vectors, sent %d inputs", len(decoded.Vectors), len(nonEmpty))
-		}
-		vectors = decoded.Vectors
 	}
 
 	// Dim-check the first vector (all should match).
@@ -267,7 +196,7 @@ func (c *EmbeddingClient) EmbedBatch(ctx context.Context, texts []string) ([][]f
 	}
 
 	c.log.Debug("embed.batch",
-		"format", c.format, "count", len(nonEmpty),
+		"count", len(nonEmpty),
 		"dims", c.dims, "duration", time.Since(start))
 	return out, nil
 }
@@ -281,78 +210,16 @@ func (c *EmbeddingClient) Embed(ctx context.Context, text string) ([]float32, er
 		return nil, errors.New("Embed: input text is empty")
 	}
 
-	var (
-		reqBody []byte
-		vec     []float32
-	)
-	switch c.format {
-	case EmbeddingFormatOpenAI:
-		reqBody, _ = json.Marshal(openAIEmbeddingRequest{
-			Input: text,
-			Model: c.model,
-		})
-	case EmbeddingFormatMiniMax:
-		reqBody, _ = json.Marshal(minimaxEmbeddingRequest{
-			Texts: []string{text},
-			Model: c.model,
-			Type:  "db",
-		})
-	default:
-		return nil, fmt.Errorf("Embed: unknown format %q", c.format)
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(reqBody))
+	start := time.Now()
+	vec, err := c.driver.Embed(ctx, text)
 	if err != nil {
 		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	start := time.Now()
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("Embed: http: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Embed: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 256))
-	}
-
-	switch c.format {
-	case EmbeddingFormatOpenAI:
-		var decoded openAIEmbeddingResponse
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("Embed: decode (openai): %w", err)
-		}
-		if len(decoded.Data) == 0 {
-			return nil, errors.New("Embed: empty response data (openai)")
-		}
-		vec = decoded.Data[0].Embedding
-	case EmbeddingFormatMiniMax:
-		var decoded minimaxEmbeddingResponse
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, fmt.Errorf("Embed: decode (minimax): %w", err)
-		}
-		// MiniMax returns status in base_resp even on HTTP 200.
-		// status_code 0 = success; anything else surfaces as the
-		// embed failure so callers see the real cause.
-		if decoded.BaseResp.StatusCode != 0 {
-			return nil, fmt.Errorf("Embed: minimax status %d: %s",
-				decoded.BaseResp.StatusCode, decoded.BaseResp.StatusMsg)
-		}
-		if len(decoded.Vectors) == 0 {
-			return nil, errors.New("Embed: empty vectors (minimax)")
-		}
-		vec = decoded.Vectors[0]
 	}
 
 	if len(vec) != c.dims {
 		return nil, fmt.Errorf("Embed: model returned %d dims, expected %d (check config.dims matches the model)", len(vec), c.dims)
 	}
-	c.log.Debug("embed", "format", c.format, "dims", len(vec), "duration", time.Since(start))
+	c.log.Debug("embed", "dims", len(vec), "duration", time.Since(start))
 	return vec, nil
 }
 
@@ -396,4 +263,15 @@ type minimaxEmbeddingResponse struct {
 type minimaxBaseResp struct {
 	StatusCode int    `json:"status_code"`
 	StatusMsg  string `json:"status_msg"`
+}
+
+// embeddingCredential presents the key as a bearer token, or nothing
+// when there is none — a self-hosted embedding server usually wants no
+// auth at all, and sending "Bearer " with an empty value is worse than
+// sending nothing.
+func embeddingCredential(apiKey string) Credential {
+	if apiKey == "" {
+		return nil
+	}
+	return NewBearerCredential(apiKey)
 }
