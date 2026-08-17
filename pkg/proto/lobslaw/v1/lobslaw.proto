@@ -145,6 +145,10 @@ service SkillService {
   rpc ExportSkill(ExportSkillRequest) returns (ExportSkillResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc RemoveSkill(RemoveSkillRequest) returns (RemoveSkillResponse);
+  // ActivateSkill makes a stored version the one in force. This is
+  // what `lobslaw skills rollback` calls — a rollback is nothing more
+  // than activating a version that is already in the log.
+  rpc ActivateSkill(ActivateSkillRequest) returns (ActivateSkillResponse);
 }
 
 message ImportSkillRequest {
@@ -191,6 +195,18 @@ message RemoveSkillRequest {
 }
 
 message RemoveSkillResponse {}
+
+message ActivateSkillRequest {
+  string name = 1;
+  string version = 2;
+}
+message ActivateSkillResponse {
+  SkillRecord skill = 1;
+  // already_active reports that the version asked for was the one in
+  // force. The call succeeds either way — an operator scripting a
+  // rollback should not have to special-case having already done it.
+  bool already_active = 2;
+}
 
 // -----------------------------------------------------------------------------
 // SelfLearningService — inspect and decide on what the agent taught itself

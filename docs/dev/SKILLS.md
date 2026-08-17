@@ -920,3 +920,36 @@ install a record describing a skill that is not the one in it.
 Letting a person claim it from a command line would make provenance
 something anybody can assert rather than a fact about where a skill
 came from.
+
+### Rolling back
+
+```console
+$ lobslaw skills list --all
+NAME  VERSION  TIER      ACTIVE  FILES  SOURCE
+tidy  2.0.0    operator  yes     3      cli:/home/john/tidy
+tidy  1.0.0    operator          3      cli:/home/john/tidy
+
+$ lobslaw skills rollback tidy 1.0.0
+rolled back to tidy 1.0.0 (operator)
+```
+
+**A rollback is nothing more than activating a version already in the
+log.** Every version ever imported is still there, so going back to one
+is a matter of saying which — there is no bundle to supply and nothing
+is re-imported. `skills list --all` is where to find the versions not
+currently in force.
+
+It is **not** re-validated against the current signing policy. The
+record was parsed through the loader when it arrived, and re-parsing it
+on activation would refuse a skill that a tightened policy no longer
+admits — which is exactly the situation somebody rolling back is trying
+to escape.
+
+Rolling back to the version already in force succeeds and says so.
+Scripting a rollback should not mean special-casing having already done
+it, and an error there would be indistinguishable from one that failed.
+
+Activation is scoped to the **tier**: rolling back an operator version
+does not disturb a signed version of the same name. Which of those wins
+is a precedence question the loader answers, and answering it here too
+would give one skill two authorities.
