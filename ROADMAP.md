@@ -2866,8 +2866,23 @@ of them.
       likely to have got a capability list wrong is the one who typed it by hand. It does not
       fetch the catalogue on its own account, though: a mandatory boot-time HTTP call would break
       an air-gapped node to deliver a warning.
-- [ ] `generate_image` can be gated by `effect =
+- [x] `generate_image` can be gated by `effect =
       "require_confirmation"` with no new machinery.
+      True already, and now checked. A builtin reaches the executor's policy gate as action
+      `tool:exec` with its own name as the resource, so an ordinary rule covers it — the same gate
+      subprocess tools and skills pass through.
+
+      "No new machinery" is only worth claiming if something holds it to that, because it is
+      exactly the sort of property that stays true until a dispatch path is added which skips the
+      gate. A mutation removing the gate fails two of these tests.
+
+      **The sharp part is WHEN.** The check fires before the provider is called, so a confirmation
+      asks about a decision rather than about a bill — an image already generated has already been
+      paid for. And a deny stays distinguishable from a confirmation: one is "ask me", the other
+      is "never", and offering a choice that does not exist is worse than refusing plainly.
+
+      Gating one modality leaves the others alone. An operator worried about image spend has said
+      nothing about speech.
 - [x] A `generate_video` call submits a job, returns from the turn
       immediately, and delivers the artifact later via a commitment —
       without holding the session lease or tripping the 90s
