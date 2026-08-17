@@ -2841,8 +2841,31 @@ of them.
       two providers are down" look identical to an operator unless the fallthrough says so. The
       line names the provider that failed, not merely that one did — and a chain that succeeds
       first time logs nothing, or the signal would appear on every turn and mean nothing.
-- [ ] A provider declaring a modality its model does not support is
+- [x] A provider declaring a modality its model does not support is
       warned about at boot via the existing models.dev capability data.
+      **WARNED, NOT REFUSED.** The catalogue is third-party data that can be stale or wrong, and a
+      self-hosted model may genuinely do something models.dev has never heard of. Refusing to boot
+      on somebody else's data about somebody else's model would take a cluster down over a missing
+      entry.
+
+      The difficulty was not detecting it — it was not crying wolf, because a warning that is
+      often wrong is one nobody reads, and the surrounding warnings then lose their value too.
+      Three rules keep it quiet:
+
+      - It speaks only about the five capabilities the catalogue HAS data for (chat, vision,
+        audio-multimodal, pdf, function-calling). Speech, image, video, embeddings and
+        transcription have no signal there, and warning about them would tell an operator their
+        text-to-speech provider cannot speak.
+      - It takes the UNION across catalogue entries, not the intersection. Two listings of one
+        model name can disagree, and one of them claiming a capability is enough — the
+        intersection would fire whenever any two entries differed.
+      - An unknown model produces nothing. Treating "never heard of it" as "cannot do it" would
+        warn loudest about the self-hosted deployments least likely to be in a public catalogue.
+
+      It checks EVERY provider, not only those that opted into discovery — the operator most
+      likely to have got a capability list wrong is the one who typed it by hand. It does not
+      fetch the catalogue on its own account, though: a mandatory boot-time HTTP call would break
+      an air-gapped node to deliver a warning.
 - [ ] `generate_image` can be gated by `effect =
       "require_confirmation"` with no new machinery.
 - [x] A `generate_video` call submits a job, returns from the turn

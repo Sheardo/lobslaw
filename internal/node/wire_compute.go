@@ -643,6 +643,52 @@ func (n *Node) applyModelsDevAutoCapabilities(ctx context.Context) {
 			"added", added, "all", merged)
 		p.Capabilities = merged
 	}
+
+	n.warnUnsupportedCapabilities(cat)
+}
+
+// warnUnsupportedCapabilities tells an operator when a provider claims
+// something its model cannot do.
+//
+// WARN, NOT REFUSE. The catalogue is third-party data that can be
+// stale or wrong, and a self-hosted model may genuinely do something
+// models.dev has never heard of. Refusing to boot on somebody else's
+// data about somebody else's model would take a cluster down over a
+// missing catalogue entry.
+//
+// EVERY provider, not only the ones that opted into discovery. A
+// declared capability is a claim about the world whoever wrote it, and
+// the operator most likely to have got it wrong is the one who typed
+// the list by hand.
+//
+// The catalogue is only in hand when something opted into
+// auto_capabilities, and this deliberately does not fetch it
+// otherwise: a mandatory boot-time HTTP call would break an
+// air-gapped node to deliver a warning.
+func (n *Node) warnUnsupportedCapabilities(cat modelsdev.Catalog) {
+	if len(cat) == 0 {
+		return
+	}
+	for i := range n.cfg.Compute.Providers {
+		p := &n.cfg.Compute.Providers[i]
+		matches := cat.LookupAll(p.Model)
+		if len(matches) == 0 {
+			if hinted, ok := cat.Lookup(p.Endpoint, p.Model); ok {
+				matches = []modelsdev.Model{hinted}
+			}
+		}
+		unsupported := compute.UnsupportedCapabilities(p.Capabilities, matches)
+		if len(unsupported) == 0 {
+			continue
+		}
+		// The MODEL is named as well as the label, because the usual
+		// cause is a copied provider block whose model was changed and
+		// whose capability list was not.
+		n.log.Warn("compute: provider declares capabilities its model is not listed as supporting; "+
+			"calls routed there on these capabilities will probably fail",
+			"label", p.Label, "model", p.Model,
+			"unsupported", unsupported, "catalog_entries", len(matches))
+	}
 }
 
 // diffCapabilities returns the items in `merged` not present in

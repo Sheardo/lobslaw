@@ -109,3 +109,56 @@ func capSet(in []string) map[string]struct{} {
 	}
 	return out
 }
+
+// catalogueKnowable is the set of capabilities models.dev has data
+// for, derived from what CapabilitiesFromModel can read.
+//
+// Everything else lobslaw understands — speak, image, video,
+// embeddings, audio transcription — has NO signal in the catalogue.
+// Warning about those would tell an operator their text-to-speech
+// provider cannot speak, which is false, and a warning that is often
+// wrong is one nobody reads.
+var catalogueKnowable = map[string]bool{
+	CapabilityChat:            true,
+	CapabilityVision:          true,
+	CapabilityAudioMultimodal: true,
+	CapabilityPDF:             true,
+	CapabilityFunctionCalling: true,
+}
+
+// UnsupportedCapabilities returns the declared capabilities that NO
+// catalogue entry for this model claims.
+//
+// The UNION across matches, not the intersection. Two listings of the
+// same model name can disagree, and a capability one of them claims is
+// enough to say nothing is obviously wrong — the intersection would
+// fire whenever any two entries differed, which is noise rather than
+// evidence.
+//
+// Empty models means empty result: an unknown model is not evidence of
+// anything, and treating "I have never heard of this" as "this cannot
+// do that" would warn loudest about the self-hosted deployments least
+// likely to be in a public catalogue.
+func UnsupportedCapabilities(declared []string, models []modelsdev.Model) []string {
+	if len(models) == 0 || len(declared) == 0 {
+		return nil
+	}
+	supported := make(map[string]struct{})
+	for _, m := range models {
+		for _, c := range CapabilitiesFromModel(m) {
+			supported[c] = struct{}{}
+		}
+	}
+	var out []string
+	for _, c := range declared {
+
+		if !catalogueKnowable[c] {
+			continue
+		}
+		if _, ok := supported[c]; !ok {
+			out = append(out, c)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
