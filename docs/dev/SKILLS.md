@@ -953,3 +953,66 @@ Activation is scoped to the **tier**: rolling back an operator version
 does not disturb a signed version of the same name. Which of those wins
 is a precedence question the loader answers, and answering it here too
 would give one skill two authorities.
+
+---
+
+## Progressive disclosure
+
+A skill's index entry costs one line. Its instructions cost whatever
+they cost, and are read only when the agent has decided the skill is
+relevant.
+
+| Level | What the agent sees | When |
+|---|---|---|
+| 0 | name, one-line description, the NAMES of bundled documents | every turn, in the system prompt |
+| 1 | the skill's own instructions | `skill_view(name)` |
+| 2 | one bundled document | `skill_view(name, path)` |
+
+Level 0 costs O(skills) and stays that way as those documents grow. A
+prompt that inlined every skill's instructions would spend most of a
+context window on capabilities the turn will not use.
+
+### The body
+
+```yaml
+name: tidy
+version: 1.2.3
+runtime: python
+handler: handler.py
+handler_sha256: "…"
+body: SKILL.md
+body_sha256: "…"
+references:
+  - path: rules.md
+    sha256: "…"
+```
+
+`body` names a prose document — `SKILL.md` by convention. A file
+rather than a manifest field: the description is one line and belongs
+in the index, whereas this is paragraphs and would make every manifest
+a document.
+
+**`body_sha256` is required when the manifest is signed**, for the same
+reason `handler_sha256` is. A signature over a manifest that merely
+names a document leaves the document swappable, and the swap would not
+break the signature — while a skill's instructions steer what the agent
+does as surely as its code does.
+
+The digest is re-checked when the document is READ, not trusted from
+parse time. A document that changed since registration is refused
+outright rather than served with a warning: the caveat would land in a
+log nobody reads, and the instructions in the model's context.
+
+### What is not served
+
+Only paths the manifest **declares**. Otherwise the agent could read
+any file beside the manifest by naming it, which is a directory listing
+dressed as documentation. A path that climbs out of the skill directory
+is refused even if a manifest declares it — a manifest is not a licence
+to read the filesystem.
+
+A skill with **no** body is ordinary, not an error: many are a handler
+and a description. `skill_view` says so and succeeds, because reporting
+it as a failure would teach the agent to avoid a tool that is working
+correctly. A typo in the *name* reports differently, because it is a
+different problem with a different fix.

@@ -1909,9 +1909,36 @@ Supporting changes:
 - [x] A skill whose gating fails is absent from the index, and the drop is logged once with the
       reason — a skill vanishing silently is indistinguishable from one that failed to parse.
 - [x] Over-long descriptions fail at parse with the offending manifest named. Counted in runes.
-- [ ] Levels 1 and 2 (`skill_view(name)` / `skill_view(name, path)`). Needs a body concept in the
-      skill model first — `internal/skills` has no notion of a SKILL.md body today; only the
-      clawhub path carries prose. Its own PR.
+- [x] Levels 1 and 2 (`skill_view(name)` / `skill_view(name, path)`).
+      The body concept landed first, as the entry said it must. A manifest may name a `body`
+      document — `SKILL.md` by convention — and pin it with `body_sha256`.
+
+      **Pinned for the same reason the handler is.** A signature over a manifest that merely NAMES
+      a document leaves the document swappable, and the swap would not break the signature. A
+      skill's instructions steer what the agent does as surely as its code does, so a signed
+      manifest declaring a body without a digest is refused — the rule `handler_sha256` already
+      followed.
+
+      The digest is re-checked at READ time, not trusted from parse: the invoker re-hashes the
+      handler immediately before exec for the same reason, and a document swapped after
+      registration is exactly what the digest exists to catch. A mismatch is REFUSED rather than
+      served with a warning, because the caveat would land in a log nobody reads and the
+      instructions in the model's context.
+
+      Only DECLARED paths are served. Otherwise the agent could read any file beside the manifest
+      by naming it, which is a directory listing dressed as documentation — and a traversing path
+      is refused even if a manifest declares it, because a manifest is not a licence to read the
+      filesystem.
+
+      **A skill with no body is ordinary, not an error.** Many are a handler and a description,
+      and reporting that as a failure would teach the agent to avoid a tool that is working. A
+      typo in the NAME reports differently, because it is a different problem with a different
+      fix.
+
+      Documents are bounded and the truncation is announced: a skill bundling a reference manual
+      would otherwise fill the context window progressive disclosure exists to protect, and a
+      document that stops mid-sentence otherwise reads as one that ends there. The cut lands on a
+      rune boundary, or the model reads a replacement character as content.
 
 **Found while doing this:** `promptgen.GenerateInput.Skills` existed and `BuildSkills` rendered it,
 and **nothing ever populated it**. The "Installed Skills" section said "(none installed)" on every

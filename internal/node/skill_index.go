@@ -1,7 +1,14 @@
 package node
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/jmylchreest/lobslaw/internal/skills"
@@ -80,4 +87,98 @@ func (n *Node) configuredCapabilities() []string {
 		}
 	}
 	return out
+}
+
+// skillDocs serves levels 1 and 2 from the registry.
+//
+// READ AT CALL TIME, NOT CACHED AT BOOT. A skill's documents live
+// beside its manifest and are re-materialised whenever the store
+// changes; a copy taken at start-up would serve an operator the
+// instructions for a version they replaced this morning.
+//
+// The digests recorded at parse time are re-checked here for the same
+// reason the invoker re-hashes the handler before exec: a document
+// swapped after registration is exactly the substitution the digest
+// exists to catch, and instructions steer what the agent does as
+// surely as code does.
+type skillDocs struct {
+	reg *skills.Registry
+	log *slog.Logger
+}
+
+func (n *Node) skillDocs() *skillDocs {
+	if n.skillRegistry == nil {
+		return nil
+	}
+	return &skillDocs{reg: n.skillRegistry, log: n.log}
+}
+
+func (d *skillDocs) Has(name string) bool {
+	if d == nil || d.reg == nil {
+		return false
+	}
+	_, err := d.reg.Get(name)
+	return err == nil
+}
+
+func (d *skillDocs) Body(name string) (string, bool) {
+	s, err := d.lookup(name)
+	if err != nil || strings.TrimSpace(s.Manifest.Body) == "" {
+		return "", false
+	}
+	return d.read(s, s.Manifest.Body, s.BodySHA256)
+}
+
+func (d *skillDocs) Reference(name, path string) (string, bool) {
+	s, err := d.lookup(name)
+	if err != nil {
+		return "", false
+	}
+	// Only a path the manifest DECLARED. Without this the agent could
+	// read any file beside the manifest by naming it, which is a
+	// directory listing dressed as documentation.
+	for _, r := range s.Manifest.References {
+		if r.Path == path {
+			return d.read(s, path, s.ReferenceSHA256[path])
+		}
+	}
+	return "", false
+}
+
+func (d *skillDocs) lookup(name string) (*skills.Skill, error) {
+	if d == nil || d.reg == nil {
+		return nil, errors.New("no skill registry")
+	}
+	return d.reg.Get(name)
+}
+
+// read loads one document, refusing it if its digest has moved.
+func (d *skillDocs) read(s *skills.Skill, rel, wantDigest string) (string, bool) {
+	clean := filepath.Clean(rel)
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		d.log.Warn("skills: refusing a document path outside the skill directory",
+			"skill", s.Manifest.Name, "path", rel)
+		return "", false
+	}
+	full := filepath.Join(s.ManifestDir, clean)
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		d.log.Warn("skills: document declared but unreadable",
+			"skill", s.Manifest.Name, "path", rel, "err", err)
+		return "", false
+	}
+	if wantDigest != "" {
+		sum := sha256.Sum256(raw)
+		if got := hex.EncodeToString(sum[:]); !strings.EqualFold(got, wantDigest) {
+			// Refused rather than served with a warning. A document
+			// that changed after registration is the substitution the
+			// digest exists to catch, and serving it "with a caveat"
+			// puts the caveat in a log nobody reads and the
+			// instructions in the model's context.
+			d.log.Error("skills: document does not match its verified digest; refusing to serve it",
+				"skill", s.Manifest.Name, "path", rel)
+			return "", false
+		}
+	}
+	return string(raw), true
 }

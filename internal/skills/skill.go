@@ -105,7 +105,24 @@ type Manifest struct {
 	// Required whenever a manifest is signed. Optional otherwise, but
 	// honoured if present — a declared digest that does not match is
 	// tampering regardless of the signing policy.
-	HandlerSHA256    string             `yaml:"handler_sha256,omitempty"`
+	HandlerSHA256 string `yaml:"handler_sha256,omitempty"`
+
+	// Body names a prose document describing HOW to use this skill —
+	// the level-1 disclosure, read only when the agent has decided the
+	// skill is relevant.
+	//
+	// A file rather than a manifest field: the description is one line
+	// and belongs in the index, whereas this is paragraphs and would
+	// make every manifest a document. Relative to the manifest
+	// directory; "SKILL.md" is the convention.
+	Body string `yaml:"body,omitempty"`
+
+	// BodySHA256 pins it, for the same reason HandlerSHA256 pins the
+	// handler and references carry digests: a signature over a
+	// manifest that merely NAMES a document leaves the document
+	// swappable, and a skill's instructions are as able to change its
+	// behaviour as its code is.
+	BodySHA256       string             `yaml:"body_sha256,omitempty"`
 	Storage          []StorageAccess    `yaml:"storage,omitempty"`
 	Network          []string           `yaml:"network,omitempty"`
 	NetworkIsolation bool               `yaml:"network_isolation,omitempty"`
@@ -259,6 +276,10 @@ type Skill struct {
 	ManifestDir string // absolute path to the directory containing manifest.yaml
 	HandlerPath string // absolute path to the handler script
 	SHA256      string // hex-encoded manifest-file digest
+
+	// BodySHA256 is the verified digest of the body document as it was
+	// at parse time, empty when none was declared.
+	BodySHA256 string
 
 	// HandlerSHA256 is the verified digest of the handler as it was
 	// on disk at parse time, empty when the manifest declared none.
@@ -428,6 +449,10 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 		skill.HandlerSHA256 = actual
 	}
 
+	if err := verifyBody(dir, m, skill); err != nil {
+		return nil, err
+	}
+
 	refDigests, err := verifyReferences(dir, m.References)
 	if err != nil {
 		return nil, err
@@ -462,6 +487,16 @@ func ParseWithPolicy(dir string, policy SigningPolicy, verifier *Verifier) (*Ski
 	if skill.HandlerSHA256 == "" {
 		return nil, fmt.Errorf("skills: %q: signed manifest does not declare handler_sha256, "+
 			"so the signature covers no executable content; re-publish with the handler digest pinned", manifestPath)
+	}
+	// And the same for the body, for the same reason. A skill's
+	// instructions steer what the agent does with it as surely as its
+	// code does — a signature covering a manifest that merely NAMES a
+	// document leaves the document swappable, and the swap would not
+	// break the signature.
+	if strings.TrimSpace(m.Body) != "" && strings.TrimSpace(m.BodySHA256) == "" {
+		return nil, fmt.Errorf("skills: %q: signed manifest declares a body but no body_sha256, "+
+			"so the signature does not cover the instructions; re-publish with the body digest pinned",
+			manifestPath)
 	}
 	// Same argument one level out. A skill whose behaviour comes from
 	// an adjacent rules document is as changeable as one whose
@@ -674,5 +709,35 @@ func validateManifest(m *Manifest, dir string) error {
 			}
 		}
 	}
+	return nil
+}
+
+// verifyBody checks the declared body document.
+//
+// A declared body that is MISSING is an error rather than an empty
+// one: the manifest promised documentation the agent will ask for, and
+// answering "there is none" for a skill that says otherwise sends
+// somebody looking for a bug in the wrong place.
+//
+// A declared digest that does not match is tampering regardless of the
+// signing policy — the same rule the handler follows, for the same
+// reason. A skill's instructions can change what it does as surely as
+// its code can.
+func verifyBody(dir string, m Manifest, skill *Skill) error {
+	rel := strings.TrimSpace(m.Body)
+	if rel == "" {
+		return nil
+	}
+	path := filepath.Join(dir, filepath.Clean(rel))
+	declared := strings.TrimSpace(m.BodySHA256)
+	actual, err := fileDigest(path)
+	if err != nil {
+		return fmt.Errorf("skills: body %q: %w", rel, err)
+	}
+	if declared != "" && !strings.EqualFold(actual, declared) {
+		return fmt.Errorf("skills: body %q does not match its declared sha256 "+
+			"(declared %s, found %s)", rel, declared, actual)
+	}
+	skill.BodySHA256 = actual
 	return nil
 }
