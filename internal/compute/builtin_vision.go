@@ -1,13 +1,10 @@
 package compute
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,15 +12,6 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
-)
-
-// VisionFormat picks the wire protocol for the read_image builtin.
-type VisionFormat string
-
-const (
-	VisionFormatOpenAI    VisionFormat = "openai"
-	VisionFormatAnthropic VisionFormat = "anthropic"
-	VisionFormatGemini    VisionFormat = "gemini"
 )
 
 // VisionConfig wires the read_image builtin to a vision-capable
@@ -34,8 +22,13 @@ type VisionConfig struct {
 	Endpoint string
 	Model    string
 	APIKey   string
-	// Format picks the wire protocol. Empty → openai.
-	Format VisionFormat
+	// Driver is the resolved wire protocol for this endpoint.
+	//
+	// This used to be a VisionFormat enum switched on in two places —
+	// once to build the request, once to decode the reply — with three
+	// vendors inlined in each. Adding a fourth meant editing both and
+	// hoping nobody had added a third switch elsewhere.
+	Driver VisionDriver
 	// AllowedRoot scopes which paths the agent can read. Empty →
 	// "/workspace/incoming" (where the channel attachment downloader
 	// drops files). Set to "" via SetAllowedRoot if you really want
@@ -74,13 +67,9 @@ func RegisterVisionBuiltin(b *Builtins, cfgs ...VisionConfig) error {
 		if cfg.Model == "" {
 			return errors.New("read_image: Model required (e.g. \"abab6.5s-chat\", \"claude-opus-4\", \"gemini-2.0-flash\")")
 		}
-		if cfg.Format == "" {
-			cfg.Format = VisionFormatOpenAI
-		}
-		switch cfg.Format {
-		case VisionFormatOpenAI, VisionFormatAnthropic, VisionFormatGemini:
-		default:
-			return fmt.Errorf("read_image: unknown format %q (want openai|anthropic|gemini)", cfg.Format)
+
+		if cfg.Driver == nil {
+			return errors.New("read_image: Driver required (resolve it from the DriverSet)")
 		}
 		if cfg.AllowedRoot == "" {
 			cfg.AllowedRoot = "/workspace/incoming"
@@ -146,113 +135,25 @@ func newReadImageHandler(cfg VisionConfig, client *http.Client) BuiltinFunc {
 			return nil, 2, fmt.Errorf("read_image: read file: %w", err)
 		}
 		mime := sniffImageMime(abs, data)
-		b64 := base64.StdEncoding.EncodeToString(data)
 
-		var (
-			body    []byte
-			req     *http.Request
-			content string
-		)
-		switch cfg.Format {
-		case VisionFormatOpenAI:
-			body, _ = json.Marshal(openAIVisionRequest{
-				Model:     cfg.Model,
-				MaxTokens: 1024,
-				Messages: []openAIVisionMessage{{
-					Role: "user",
-					Content: []openAIVisionPart{
-						{Type: "text", Text: question},
-						{Type: "image_url", ImageURL: &openAIImageURL{URL: fmt.Sprintf("data:%s;base64,%s", mime, b64)}},
-					},
-				}},
-			})
-			req, err = http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
-			if err != nil {
-				return nil, 1, err
-			}
-			req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-		case VisionFormatAnthropic:
-			body, _ = json.Marshal(anthropicVisionRequest{
-				Model:     cfg.Model,
-				MaxTokens: 1024,
-				Messages: []anthropicMessage{{
-					Role: "user",
-					Content: []anthropicContentPart{
-						{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: mime, Data: b64}},
-						{Type: "text", Text: question},
-					},
-				}},
-			})
-			req, err = http.NewRequestWithContext(ctx, http.MethodPost, cfg.Endpoint, bytes.NewReader(body))
-			if err != nil {
-				return nil, 1, err
-			}
-			req.Header.Set("x-api-key", cfg.APIKey)
-			req.Header.Set("anthropic-version", "2023-06-01")
-
-		case VisionFormatGemini:
-			body, _ = json.Marshal(geminiVisionRequest{
-				Contents: []geminiContent{{
-					Parts: []geminiPart{
-						{Text: question},
-						{InlineData: &geminiInlineData{MIMEType: mime, Data: b64}},
-					},
-				}},
-			})
-			endpoint := cfg.Endpoint
-			if !strings.Contains(endpoint, "key=") {
-				sep := "?"
-				if strings.Contains(endpoint, "?") {
-					sep = "&"
-				}
-				endpoint = endpoint + sep + "key=" + cfg.APIKey
-			}
-			req, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-			if err != nil {
-				return nil, 1, err
-			}
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
-
-		resp, err := client.Do(req)
+		// The builtin owns the path check and the sniff; the driver
+		// owns the wire. That line is what makes a new vendor one file
+		// rather than an edit to every switch in here.
+		content, err := cfg.Driver.Describe(ctx, VisionRequest{
+			Question: question,
+			MIME:     mime,
+			Data:     data,
+		})
 		if err != nil {
-			// Transport failures are the textbook backup case: this
-			// endpoint is unreachable, another may not be.
-			return nil, 1, Transient(fmt.Errorf("read_image: http: %w", err))
-		}
-		defer func() { _ = resp.Body.Close() }()
-		raw, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			// Classified so the modality chain can tell "try the next
-			// provider" from "this fails everywhere". Unclassified, every
-			// failure reads as permanent and the chain never advances.
-			return nil, 1, &DriverError{
-				Class: ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-				Err:   fmt.Errorf("read_image: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512)),
-			}
-		}
-
-		switch cfg.Format {
-		case VisionFormatOpenAI:
-			content, err = decodeOpenAIVision(raw)
-		case VisionFormatAnthropic:
-			content, err = decodeAnthropicVision(raw)
-		case VisionFormatGemini:
-			content, err = decodeGeminiVision(raw)
-		}
-		if err != nil {
-			return nil, 1, fmt.Errorf("read_image: decode (%s): %w", cfg.Format, err)
+			return nil, 1, err
 		}
 		if content == "" {
-			return nil, 1, fmt.Errorf("read_image: %s returned empty content", cfg.Format)
+			return nil, 1, errors.New("read_image: the provider returned empty content")
 		}
 
 		out, _ := json.Marshal(map[string]any{
 			"path":    abs,
 			"model":   cfg.Model,
-			"format":  string(cfg.Format),
 			"content": content,
 		})
 		return out, 0, nil
@@ -311,84 +212,4 @@ func decodeOpenAIVision(raw []byte) (string, error) {
 		return "", errors.New("no choices")
 	}
 	return decoded.Choices[0].Message.Content, nil
-}
-
-// --- Anthropic /v1/messages shape ---
-
-type anthropicVisionRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	Messages  []anthropicMessage `json:"messages"`
-}
-type anthropicMessage struct {
-	Role    string                 `json:"role"`
-	Content []anthropicContentPart `json:"content"`
-}
-type anthropicContentPart struct {
-	Type   string                `json:"type"`
-	Text   string                `json:"text,omitempty"`
-	Source *anthropicImageSource `json:"source,omitempty"`
-}
-type anthropicImageSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-}
-
-func decodeAnthropicVision(raw []byte) (string, error) {
-	var decoded struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	for _, c := range decoded.Content {
-		if c.Type == "text" {
-			b.WriteString(c.Text)
-		}
-	}
-	return b.String(), nil
-}
-
-// --- Gemini generateContent shape ---
-
-type geminiVisionRequest struct {
-	Contents []geminiContent `json:"contents"`
-}
-type geminiContent struct {
-	Parts []geminiPart `json:"parts"`
-}
-type geminiPart struct {
-	Text       string            `json:"text,omitempty"`
-	InlineData *geminiInlineData `json:"inlineData,omitempty"`
-}
-type geminiInlineData struct {
-	MIMEType string `json:"mimeType"`
-	Data     string `json:"data"`
-}
-
-func decodeGeminiVision(raw []byte) (string, error) {
-	var decoded struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"content"`
-		} `json:"candidates"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return "", err
-	}
-	var b strings.Builder
-	for _, cand := range decoded.Candidates {
-		for _, p := range cand.Content.Parts {
-			b.WriteString(p.Text)
-		}
-	}
-	return b.String(), nil
 }

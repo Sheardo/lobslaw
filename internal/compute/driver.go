@@ -291,6 +291,39 @@ type Credential interface {
 	Apply(ctx context.Context, req *http.Request) error
 }
 
+// QueryCredential puts a secret in a URL query parameter.
+//
+// Google's generateContent endpoints authenticate this way. The vision
+// builtin used to handle it by appending "?key=" to the configured
+// endpoint before the request was built — which worked, and meant the
+// one provider whose auth was not a header had its auth expressed
+// somewhere no other provider's was.
+//
+// A credential that edits the URL is still a credential. Keeping it
+// behind the same interface is what stops the next such provider
+// growing another special case.
+type QueryCredential struct {
+	Param string
+	Value string
+}
+
+// NewQueryCredential returns a credential that sets param=value on the
+// request URL.
+func NewQueryCredential(param, value string) *QueryCredential {
+	return &QueryCredential{Param: param, Value: value}
+}
+
+// Apply sets the parameter, replacing any existing value.
+func (c *QueryCredential) Apply(_ context.Context, req *http.Request) error {
+	if c == nil || c.Param == "" || c.Value == "" {
+		return nil
+	}
+	q := req.URL.Query()
+	q.Set(c.Param, c.Value)
+	req.URL.RawQuery = q.Encode()
+	return nil
+}
+
 // StaticCredential sets a header from a resolved secret. Covers every
 // provider lobslaw talks to today.
 type StaticCredential struct {

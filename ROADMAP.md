@@ -2772,6 +2772,26 @@ of them.
 
 - [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
       `EmbeddingFormat` remain.
+      **Vision is done; audio, PDF and embeddings remain.** `read_image` switched on a
+      `VisionFormat` in two places — once to build the request, once to decode the reply — with
+      three vendors inlined in each, so `driver = "anthropic"` selected the chat wire shape and
+      said nothing about the vision one. It now resolves a `VisionDriver` from the `DriverSet`
+      like chat, speech, image and jobs already did.
+
+      **Read literally, "one `Driver` type" would mean collapsing the per-modality maps into one
+      `map[string]Driver` with runtime type assertions.** That was not done, deliberately: the
+      separate maps are what let a speech-only vendor simply be absent from the chat map, and
+      replacing compile-time separation with an assertion is a downgrade. The box is read as one
+      PATTERN — a named driver per (vendor, modality), resolved from a set — which is what the
+      rest of the entry describes.
+
+      Two things fell out of the move. Anthropic's `anthropic-version` header is a PROTOCOL
+      version, not a credential, and a driver that left it to the wiring layer would work only
+      for whoever remembered to set it — so drivers can now pass their own required headers.
+      Google authenticates on the URL rather than in a header, which the old code handled by
+      appending `?key=` to the endpoint before the request was built; a `QueryCredential` puts
+      that behind the same interface as every other provider's auth, so the next such vendor does
+      not grow another special case.
 - [ ] A node boots from a config whose every provider is `driver =
       "mock"`, with no network access, and serves a full turn.
 - [ ] A vision provider whose primary returns 503 falls through to its

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 )
@@ -673,13 +674,26 @@ func (n *Node) wireVisionTools(builtins *compute.Builtins) error {
 	}
 	cfgs := make([]compute.VisionConfig, 0, len(eps))
 	for _, ep := range eps {
+		// Resolved at BOOT, not per call. An endpoint naming a driver
+		// this node cannot build is a configuration error the operator
+		// should see on start-up, not the first time somebody sends a
+		// photograph.
+		driver, err := n.drivers().Vision(ep.format, compute.VisionDriverConfig{
+			Endpoint:   ep.endpoint,
+			Model:      ep.model,
+			Credential: visionCredential(ep.format, ep.apiKey),
+			Logger:     n.log,
+		})
+		if err != nil {
+			return fmt.Errorf("read_image: provider %q: %w", ep.label, err)
+		}
 		cfgs = append(cfgs, compute.VisionConfig{
 			Label:     ep.label,
 			TrustTier: ep.trustTier,
 			Endpoint:  ep.endpoint,
 			Model:     ep.model,
 			APIKey:    ep.apiKey,
-			Format:    compute.VisionFormat(ep.format),
+			Driver:    driver,
 		})
 	}
 	if err := compute.RegisterVisionBuiltin(builtins, cfgs...); err != nil {
@@ -786,4 +800,26 @@ func (n *Node) wirePDFTools(builtins *compute.Builtins) error {
 	n.log.Debug("compute: read_pdf registered",
 		"model", eps[0].model, "via", eps[0].via, "chain_len", len(eps))
 	return nil
+}
+
+// visionCredential picks how a vendor wants its key presented.
+//
+// Google authenticates generateContent with a URL query parameter,
+// everyone else with a header. That used to be handled by appending
+// "?key=" to the endpoint before the request was built — which worked,
+// and put one provider's auth somewhere no other provider's was.
+func visionCredential(driver, apiKey string) compute.Credential {
+	if apiKey == "" {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case gemini.DriverName:
+		return compute.NewQueryCredential("key", apiKey)
+	case compute.DriverAnthropic:
+		// Anthropic wants its own header and a pinned API version;
+		// a bearer token is silently ignored.
+		return compute.NewHeaderCredential("x-api-key", apiKey)
+	default:
+		return compute.NewBearerCredential(apiKey)
+	}
 }

@@ -22,10 +22,11 @@ import (
 // implementations import compute for the request types, so compute
 // cannot import them back. internal/node assembles the real set.
 type DriverSet struct {
-	chat  map[string]ChatDriverFactory
-	speak map[string]SpeakDriverFactory
-	image map[string]ImageDriverFactory
-	job   map[string]JobDriverFactory
+	chat   map[string]ChatDriverFactory
+	speak  map[string]SpeakDriverFactory
+	image  map[string]ImageDriverFactory
+	job    map[string]JobDriverFactory
+	vision map[string]VisionDriverFactory
 }
 
 // ChatDriverConfig is what every chat driver is built from. Fields a
@@ -285,7 +286,9 @@ func (s *DriverSet) Job(name string, cfg JobDriverConfig) (JobDriver, error) {
 
 func normaliseDriverName(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
-func sortedKeysSpeak(m map[string]SpeakDriverFactory) []string {
+// sortedKeys replaces what were three near-identical helpers, one per
+// factory type, written before this package used generics.
+func sortedKeys[T any](m map[string]T) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
@@ -294,23 +297,11 @@ func sortedKeysSpeak(m map[string]SpeakDriverFactory) []string {
 	return out
 }
 
-func sortedKeysImage(m map[string]ImageDriverFactory) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+func sortedKeysSpeak(m map[string]SpeakDriverFactory) []string { return sortedKeys(m) }
 
-func sortedKeysJob(m map[string]JobDriverFactory) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
+func sortedKeysImage(m map[string]ImageDriverFactory) []string { return sortedKeys(m) }
+
+func sortedKeysJob(m map[string]JobDriverFactory) []string { return sortedKeys(m) }
 
 // OpenAISpeakFactory adapts the /v1/audio/speech driver.
 func OpenAISpeakFactory(cfg SpeakDriverConfig) (SpeakDriver, error) {

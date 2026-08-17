@@ -12,12 +12,35 @@ import (
 	"testing"
 )
 
+// The Anthropic and Gemini wire-shape tests moved to their driver
+// packages when read_image stopped switching on a format enum. Each
+// driver tests its own bytes now, which is the point of the seam.
+//
+// What stays here is the BUILTIN's business: the path check, the MIME
+// sniff, and handing off to whichever driver it was given.
+
+// openAIVisionFor builds the default-shaped driver against a test
+// server.
+func openAIVisionFor(t *testing.T, endpoint string) VisionDriver {
+	t.Helper()
+	d, err := OpenAIVisionFactory(VisionDriverConfig{
+		Endpoint:   endpoint,
+		Model:      "test-vl",
+		Credential: NewBearerCredential("fake"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func TestReadImageDispatchesToVisionEndpoint(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
 	imgPath := filepath.Join(tmp, "shot.jpg")
-	if err := os.WriteFile(imgPath, []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0o600); err != nil {
+	if err := os.WriteFile(imgPath,
+		[]byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -34,6 +57,7 @@ func TestReadImageDispatchesToVisionEndpoint(t *testing.T) {
 		Model:       "test-vl",
 		APIKey:      "fake",
 		AllowedRoot: tmp,
+		Driver:      openAIVisionFor(t, srv.URL),
 	}); err != nil {
 		t.Fatalf("RegisterVisionBuiltin: %v", err)
 	}
@@ -64,6 +88,9 @@ func TestReadImageDispatchesToVisionEndpoint(t *testing.T) {
 	if !strings.Contains(string(gotBody), `"image_url"`) {
 		t.Errorf("expected multimodal request body to include image_url; got %s", gotBody)
 	}
+	// The MIME sniff is the builtin's, and the driver renders it into
+	// the data URL. A sniff that guessed wrong here would send a JPEG
+	// labelled as something else.
 	if !strings.Contains(string(gotBody), `"data:image/jpeg;base64,`) {
 		t.Errorf("expected base64 data URL; got %s", gotBody)
 	}
@@ -84,6 +111,7 @@ func TestReadImageRefusesPathOutsideAllowedRoot(t *testing.T) {
 		Model:       "test-vl",
 		APIKey:      "fake",
 		AllowedRoot: "/workspace/incoming",
+		Driver:      openAIVisionFor(t, srv.URL),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -96,9 +124,7 @@ func TestReadImageRefusesPathOutsideAllowedRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("read_image not registered")
 	}
-	_, code, err := fn(context.Background(), map[string]string{
-		"path": out,
-	})
+	_, code, err := fn(context.Background(), map[string]string{"path": out})
 	if err == nil {
 		t.Error("expected error for path outside allowed root")
 	}
@@ -107,134 +133,40 @@ func TestReadImageRefusesPathOutsideAllowedRoot(t *testing.T) {
 	}
 }
 
-func TestReadImageAnthropicFormat(t *testing.T) {
-	t.Parallel()
-	tmp := t.TempDir()
-	imgPath := filepath.Join(tmp, "x.png")
-	_ = os.WriteFile(imgPath, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'}, 0o600)
-
-	var gotBody []byte
-	var gotKey, gotVersion string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		gotKey = r.Header.Get("x-api-key")
-		gotVersion = r.Header.Get("anthropic-version")
-		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"a tiny png"}]}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	b := NewBuiltins()
-	if err := RegisterVisionBuiltin(b, VisionConfig{
-		Endpoint:    srv.URL,
-		Model:       "claude-opus-4",
-		APIKey:      "sk-ant-x",
-		Format:      VisionFormatAnthropic,
-		AllowedRoot: tmp,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	fn, _ := b.Get("read_image")
-	out, code, err := fn(context.Background(), map[string]string{"path": imgPath})
-	if err != nil || code != 0 {
-		t.Fatalf("Dispatch: code=%d err=%v", code, err)
-	}
-	var resp map[string]any
-	_ = json.Unmarshal(out, &resp)
-	if got := resp["content"]; got != "a tiny png" {
-		t.Errorf("content = %q, want anthropic content text", got)
-	}
-	if !strings.Contains(string(gotBody), `"source"`) || !strings.Contains(string(gotBody), `"media_type":"image/png"`) {
-		t.Errorf("expected anthropic image source shape; got %s", gotBody)
-	}
-	if gotKey != "sk-ant-x" || gotVersion != "2023-06-01" {
-		t.Errorf("missing anthropic auth/version headers (key=%q version=%q)", gotKey, gotVersion)
-	}
-}
-
-func TestReadImageGeminiFormat(t *testing.T) {
-	t.Parallel()
-	tmp := t.TempDir()
-	imgPath := filepath.Join(tmp, "x.jpg")
-	_ = os.WriteFile(imgPath, []byte{0xFF, 0xD8, 0xFF}, 0o600)
-
-	var gotBody []byte
-	var gotKeyParam string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		gotKeyParam = r.URL.Query().Get("key")
-		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"image looks like a jpeg header"}]}}]}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	b := NewBuiltins()
-	if err := RegisterVisionBuiltin(b, VisionConfig{
-		Endpoint:    srv.URL,
-		Model:       "gemini-2.0-flash",
-		APIKey:      "g-key",
-		Format:      VisionFormatGemini,
-		AllowedRoot: tmp,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	fn, _ := b.Get("read_image")
-	out, code, err := fn(context.Background(), map[string]string{"path": imgPath})
-	if err != nil || code != 0 {
-		t.Fatalf("Dispatch: code=%d err=%v", code, err)
-	}
-	var resp map[string]any
-	_ = json.Unmarshal(out, &resp)
-	if got := resp["content"]; got != "image looks like a jpeg header" {
-		t.Errorf("content = %q", got)
-	}
-	if gotKeyParam != "g-key" {
-		t.Errorf("expected gemini key as ?key= param; got %q", gotKeyParam)
-	}
-	if !strings.Contains(string(gotBody), `"inlineData"`) {
-		t.Errorf("expected gemini inlineData shape; got %s", gotBody)
-	}
-}
-
-func TestReadImageDefaultsToOpenAIFormat(t *testing.T) {
-	t.Parallel()
-	tmp := t.TempDir()
-	imgPath := filepath.Join(tmp, "x.jpg")
-	_ = os.WriteFile(imgPath, []byte{0xFF, 0xD8}, 0o600)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// OpenAI format = Bearer auth, not x-api-key.
-		if r.Header.Get("Authorization") == "" {
-			t.Errorf("expected Bearer auth (openai default); headers = %v", r.Header)
-		}
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	b := NewBuiltins()
-	if err := RegisterVisionBuiltin(b, VisionConfig{
-		Endpoint:    srv.URL,
-		Model:       "any",
-		APIKey:      "k",
-		AllowedRoot: tmp,
-		// Format intentionally unset → must default to openai.
-	}); err != nil {
-		t.Fatal(err)
-	}
-	fn, _ := b.Get("read_image")
-	if _, code, err := fn(context.Background(), map[string]string{"path": imgPath}); err != nil || code != 0 {
-		t.Fatalf("default-format dispatch failed: code=%d err=%v", code, err)
-	}
-}
-
 func TestReadImageRequiresEndpointAndKey(t *testing.T) {
 	t.Parallel()
 	b := NewBuiltins()
-	if err := RegisterVisionBuiltin(b, VisionConfig{Endpoint: "", APIKey: "x", Model: "m"}); err == nil {
+	d := openAIVisionFor(t, "http://example.invalid")
+	if err := RegisterVisionBuiltin(b, VisionConfig{
+		Endpoint: "", APIKey: "x", Model: "m", Driver: d,
+	}); err == nil {
 		t.Error("expected error when Endpoint missing")
 	}
-	if err := RegisterVisionBuiltin(b, VisionConfig{Endpoint: "http://x", APIKey: "", Model: "m"}); err == nil {
+	if err := RegisterVisionBuiltin(b, VisionConfig{
+		Endpoint: "http://x", APIKey: "", Model: "m", Driver: d,
+	}); err == nil {
 		t.Error("expected error when APIKey missing")
 	}
-	if err := RegisterVisionBuiltin(b, VisionConfig{Endpoint: "http://x", APIKey: "k", Model: ""}); err == nil {
+	if err := RegisterVisionBuiltin(b, VisionConfig{
+		Endpoint: "http://x", APIKey: "k", Model: "", Driver: d,
+	}); err == nil {
 		t.Error("expected error when Model missing")
+	}
+}
+
+// A config without a driver cannot serve anything, and the failure
+// belongs at boot rather than the first time somebody sends a
+// photograph.
+func TestReadImageRequiresADriver(t *testing.T) {
+	t.Parallel()
+	b := NewBuiltins()
+	err := RegisterVisionBuiltin(b, VisionConfig{
+		Endpoint: "http://x", APIKey: "k", Model: "m",
+	})
+	if err == nil {
+		t.Fatal("a config with no driver was accepted")
+	}
+	if !strings.Contains(err.Error(), "Driver") {
+		t.Errorf("err = %q; it does not say what is missing", err)
 	}
 }
