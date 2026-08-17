@@ -65,6 +65,8 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
 | **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | 🟨 | 🟠 P1 | M | — |
+| **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
+| **R28** | [The operator's laptop](#r28--the-operators-laptop) | ⬜ | 🟠 P1 | L | — |
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -3078,3 +3080,75 @@ which a `*types.Named` assertion skips in silence.
 It earned its keep immediately: it caught `StorageMountConfig.Server`
 during this very change, when the config edit landed and the wiring edit
 silently did not.
+
+## R28 — the operator's laptop
+
+### Problem
+
+Somebody running a cluster in the cloud should be able to administer it from a laptop. Today they
+can do two things.
+
+The transport is not the gap. `liveNode` dials over mTLS with `--addr` plus CA / cert / key (or
+`LOBSLAW_NODE_ADDR`), mTLS is mandatory with no plaintext fallback, and `lobslaw skills` and
+`lobslaw learned` already work against a remote node. The gap is that **this is the exception**:
+
+| Command | Reaches a remote node? |
+|---|---|
+| `skills`, `learned` | yes — dials the node |
+| `memory`, `policy`, `identity`, `session`, `cluster` | **no — opens `state.db` on the local filesystem** |
+| `trace` | **no — reads NDJSON under the node's data dir** |
+
+On a laptop the second row does not fail cleanly. It operates on a database that is not the
+cluster's, or is not there at all. An operator listing sessions would see an empty list and have no
+reason to doubt it.
+
+### Three things in the way
+
+**1. The credential is a NODE identity.** `cluster sign-node` is the only signing command, so a
+laptop presents exactly what a cluster peer presents. Three consequences: an operator's laptop holds
+material that could act as a node; revoking one operator means rotating a node cert; and every
+action in the audit log is attributed to a node rather than to a person. The CLI comment already
+says it presents "the same credential a peer node does" — that was the right call for a tool running
+beside the node, and it is the wrong one for a tool running on somebody's laptop.
+
+**2. Most commands have no live form.** Cheaper than it looks for some of them: `Memory`, `Policy`
+and `Audit` services are already registered on the cluster listener, so those are a matter of
+pointing the CLI at what exists. `Session` and `Identity` have no service yet. `trace` is genuinely
+harder — R24 stored traces per-node rather than in raft, deliberately, so "show me the trace" has to
+name a node or fan out.
+
+**3. No connection profile.** Four flags on every invocation, or a `config.toml` that a laptop does
+not have and should not have — it is the node's file, full of paths that mean nothing off the node.
+
+### Proposal
+
+Sequenced so each step is useful alone.
+
+- **Operator certificates.** `lobslaw cluster sign-operator <name>`, issuing a client certificate
+  that is not a node certificate. The cluster listener accepts it for the administrative services
+  and refuses it for raft transport, so a stolen laptop credential cannot join the cluster or
+  replicate. Audit entries carry the operator name.
+- **Connection profiles.** `~/.config/lobslaw/contexts.toml` with named clusters — address, CA,
+  operator cert — and `lobslaw --context prod`. `LOBSLAW_CONTEXT` for shells that live in one. The
+  node's `config.toml` stays what it is: the node's.
+- **Live forms for what already has a service** — `memory`, `policy`, `audit`. Rewiring, not new
+  protocol.
+- **Services for what does not** — `session`, `identity`.
+- **`trace` names a node.** Per-node storage was a deliberate answer to R24's objection and should
+  not be undone to make a CLI easier; the CLI should say which node it is reading, and default to
+  the one it is connected to.
+
+**A rule to hold to throughout:** a command that cannot reach the cluster must SAY SO. The failure
+mode this is meant to remove is not "the command errored" — it is a laptop-local `state.db` being
+read as though it were the cluster's, and answering confidently with nothing in it.
+
+### Acceptance
+
+- [ ] `lobslaw cluster sign-operator` issues a credential that administers but cannot join.
+- [ ] A named context replaces the four connection flags.
+- [ ] `memory`, `policy` and `audit` work against a remote node.
+- [ ] `session` and `identity` have services and live forms.
+- [ ] `trace` names the node it read, and does not silently read a local directory when pointed at a
+      remote cluster.
+- [ ] Every command either reaches the cluster or refuses; none reads a local `state.db` that is not
+      the one the operator meant.
