@@ -2845,7 +2845,7 @@ of them.
       warned about at boot via the existing models.dev capability data.
 - [ ] `generate_image` can be gated by `effect =
       "require_confirmation"` with no new machinery.
-- [ ] A `generate_video` call submits a job, returns from the turn
+- [x] A `generate_video` call submits a job, returns from the turn
       immediately, and delivers the artifact later via a commitment —
       without holding the session lease or tripping the 90s
       responsiveness timeout.
@@ -2904,11 +2904,27 @@ of them.
 - [ ] A provider requiring short-lived OAuth tokens (Vertex) and one
       requiring per-request signing (Bedrock) are both configurable
       without a static `api_key`.
-- [ ] An artifact delivered to an operator-owned bucket lands in a
+- [x] An artifact delivered to an operator-owned bucket lands in a
       lobslaw storage mount, with no download step.
-- [ ] An artifact delivered as an expiring vendor URL is fetched
+      The mount kind returns the provider's own path untouched, and the test asserts nothing was
+      written into the default mount — which is what "no download step" means in practice.
+- [x] An artifact delivered as an expiring vendor URL is fetched
       before it expires, and a poll handler that has not run is not
       silently dropped.
+      The expiry half was already covered — the check happens BEFORE the request, so an expired
+      URL reports what actually went wrong rather than surfacing as a puzzling 403 from a CDN.
+
+      **The second half had no tests at all**: `wire_generation.go` was entirely uncovered. Every
+      branch of that handler decides between RETRY (the job is still out there), GIVE UP LOUDLY
+      (say so and stop) and CLOSE (nothing can ever poll this again), and getting one wrong either
+      loses work that is already running and already being billed, or polls a dead handle until
+      the deadline.
+
+      Now tested: a running job asks to be polled again at the DRIVER's cadence; a transient poll
+      failure retries, because a 503 from a status endpoint says nothing about the job; a
+      permanent one closes; an undecodable handle is not retried forever; a missing driver is
+      named, which is the restart case; and an expired job gives up WITH a notification, because
+      a job that silently stops being polled is precisely what "silently dropped" means.
 
 ---
 
