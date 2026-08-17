@@ -475,6 +475,14 @@ func New(cfg Config) (*Node, error) {
 
 	server := grpc.NewServer(
 		grpc.Creds(cfg.Creds.ServerCreds()),
+		// A skill bundle is capped at DefaultMaxSkillTotalBytes, which
+		// is 4 MiB — exactly gRPC's default receive limit. A bundle at
+		// the limit plus proto framing would fail with "message too
+		// large" instead of the store's message naming the offending
+		// file, so the transport ceiling is raised above the one that
+		// carries meaning.
+		grpc.MaxRecvMsgSize(3*memory.DefaultMaxSkillTotalBytes),
+		grpc.MaxSendMsgSize(3*memory.DefaultMaxSkillTotalBytes),
 		grpc.ChainUnaryInterceptor(
 			grpcinterceptors.RequestID(log),
 			grpcinterceptors.Recovery(log),

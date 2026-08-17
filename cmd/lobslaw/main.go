@@ -206,6 +206,9 @@ func main() {
 	if dispatchAudit(os.Args[1:]) {
 		return
 	}
+	if dispatchSkills(os.Args[1:]) {
+		return
+	}
 	if dispatchTrace(os.Args[1:]) {
 		return
 	}

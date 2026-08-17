@@ -116,10 +116,29 @@ func (s *SkillStore) SetLimits(maxFile, maxTotal int) {
 // counters, and a prefix scan by name is what listing needs.
 func SkillKey(name, version string) string { return name + "@" + version }
 
+// Bundle is a skill's content, independent of where it came from.
+//
+// Separated from the directory so an import can arrive over the wire.
+// `lobslaw skills import` runs on somebody's laptop and the cluster is
+// elsewhere, so the bytes have to travel — a service that took a path
+// would be reading a directory that does not exist on the node.
+type Bundle struct {
+	// Manifest is the manifest file's bytes, VERBATIM.
+	Manifest []byte
+	// Signature is the detached signature, empty when unsigned.
+	Signature []byte
+	// Files maps a relative path to its content.
+	Files map[string][]byte
+}
+
 // ImportRequest is one skill being taken into the store.
 type ImportRequest struct {
-	// Dir is the skill directory, containing manifest.yaml.
+	// Dir is the skill directory, containing manifest.yaml. Ignored
+	// when Bundle is set.
 	Dir string
+	// Bundle is the content directly, for an import that did not come
+	// from a local directory.
+	Bundle *Bundle
 	// Name and Version come from the parsed manifest. Passed in rather
 	// than parsed here so this package does not need to understand the
 	// manifest schema — it stores bytes.
@@ -144,24 +163,16 @@ func (s *SkillStore) Import(ctx context.Context, req ImportRequest) (*lobslawv1.
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Version) == "" {
 		return nil, errors.New("skills: import needs a name and a version")
 	}
-	dir := filepath.Clean(req.Dir)
-	manifest, err := os.ReadFile(filepath.Join(dir, ManifestFile)) //nolint:gosec // operator-supplied import path
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%w: %s", ErrNoManifest, dir)
+	bundle := req.Bundle
+	if bundle == nil {
+		var err error
+		if bundle, err = ReadBundle(req.Dir); err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("skills: read manifest: %w", err)
 	}
-
-	// Read verbatim, never re-encoded. See the file comment.
-	sig, err := os.ReadFile(filepath.Join(dir, SignatureFile)) //nolint:gosec // sibling of the manifest
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("skills: read signature: %w", err)
-	}
-
-	payloads, err := s.collect(dir)
-	if err != nil {
-		return nil, err
+	manifest, sig, payloads := bundle.Manifest, bundle.Signature, bundle.Files
+	if len(manifest) == 0 {
+		return nil, fmt.Errorf("%w: the bundle has no manifest", ErrNoManifest)
 	}
 	if err := s.checkSize(manifest, payloads); err != nil {
 		return nil, err
@@ -207,9 +218,34 @@ func (s *SkillStore) Import(ctx context.Context, req ImportRequest) (*lobslawv1.
 	return rec, nil
 }
 
+// ReadBundle reads a skill directory into a Bundle.
+//
+// Exported because the CLI does this on the client side: the bytes
+// travel, not the path.
+func ReadBundle(dir string) (*Bundle, error) {
+	dir = filepath.Clean(dir)
+	manifest, err := os.ReadFile(filepath.Join(dir, ManifestFile)) //nolint:gosec // operator-supplied import path
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %s", ErrNoManifest, dir)
+		}
+		return nil, fmt.Errorf("skills: read manifest: %w", err)
+	}
+	// Read verbatim, never re-encoded. See the file comment.
+	sig, err := os.ReadFile(filepath.Join(dir, SignatureFile)) //nolint:gosec // sibling of the manifest
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("skills: read signature: %w", err)
+	}
+	files, err := collect(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Bundle{Manifest: manifest, Signature: sig, Files: files}, nil
+}
+
 // collect reads every file under dir except the manifest and its
 // signature, which live on the record itself.
-func (s *SkillStore) collect(dir string) (map[string][]byte, error) {
+func collect(dir string) (map[string][]byte, error) {
 	out := map[string][]byte{}
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

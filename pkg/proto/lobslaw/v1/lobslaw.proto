@@ -134,6 +134,65 @@ message AddMemberResponse {
 }
 
 // -----------------------------------------------------------------------------
+// SkillService — install, inspect and remove skills on a RUNNING cluster
+// -----------------------------------------------------------------------------
+//
+// The BYTES travel, not a path. `lobslaw skills import` runs on
+// somebody's laptop and the cluster is elsewhere, so a service taking a
+// directory would be reading one that does not exist on the node.
+service SkillService {
+  rpc ImportSkill(ImportSkillRequest) returns (ImportSkillResponse);
+  rpc ExportSkill(ExportSkillRequest) returns (ExportSkillResponse);
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  rpc RemoveSkill(RemoveSkillRequest) returns (RemoveSkillResponse);
+}
+
+message ImportSkillRequest {
+  string name = 1;
+  string version = 2;
+  SkillTier tier = 3;
+  // manifest_yaml travels VERBATIM. Re-encoding anywhere on this path
+  // breaks a detached signature permanently.
+  bytes manifest_yaml = 4;
+  bytes manifest_sig = 5;
+  map<string, bytes> files = 6;
+  string source = 7;
+  string imported_by = 8;
+  bool activate = 9;
+}
+
+message ImportSkillResponse {
+  SkillRecord skill = 1;
+}
+
+message ExportSkillRequest {
+  string name = 1;
+  string version = 2;
+}
+
+message ExportSkillResponse {
+  bytes manifest_yaml = 1;
+  bytes manifest_sig = 2;
+  map<string, bytes> files = 3;
+}
+
+message ListSkillsRequest {
+  // active_only narrows to the version in force per (name, tier).
+  bool active_only = 1;
+}
+
+message ListSkillsResponse {
+  repeated SkillRecord skills = 1;
+}
+
+message RemoveSkillRequest {
+  string name = 1;
+  string version = 2;
+}
+
+message RemoveSkillResponse {}
+
+// -----------------------------------------------------------------------------
 // SelfLearningService — inspect and decide on what the agent taught itself
 // -----------------------------------------------------------------------------
 //
