@@ -165,20 +165,26 @@ max_turn_seconds        = 600
 # when the key is absent. An explicit 0 DISABLES a bound rather than
 # taking the default.
 tail_tokens                   = 4000   # verbatim history budget per turn
-tail_messages                 = 100    # cap on messages read per turn
 history_tool_result_bytes     = 512    # truncate REPLAYED tool results
 compact_enabled               = true   # false disables compaction
 compact_keep_messages         = 40     # never summarise the recent exchange
 compact_trigger_tokens        = 1500   # aged-out volume that justifies a call
 compact_max_summary_tokens    = 600    # cap on the stored summary
-compact_max_completion_tokens = 1024   # cap on what the summariser generates
 compact_tool_result_bytes     = 400    # tool output the summariser reads
 # Appended to the built-in summariser prompt, not replacing it.
 compact_instructions = "Always keep ticket numbers and schema decisions."
 
 # Conversation titles, generated once on first compaction.
-titles_enabled  = true
-title_max_chars = 60
+titles_enabled = true
+
+# `tail_messages`, `compact_max_completion_tokens` and
+# `title_max_chars` used to be here. The first two were second caps on
+# things another setting already capped, and the tighter of two caps
+# wins silently — a `tail_messages` of 5 beside a generous
+# `tail_tokens` truncated history for a reason nobody could see in the
+# config. They are derived now, so the pair cannot disagree.
+# `title_max_chars` was a UI constant: a title's length does not vary
+# by deployment.
 
 # Bounds on what the session_* tools may pull into the agent's
 # context. Unbounded, one session_read undoes the context budget in a

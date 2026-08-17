@@ -186,7 +186,6 @@ full list and sizing guidance. The compaction ones:
 | `compact_keep_messages` | 40 | Never summarise the recent exchange |
 | `compact_trigger_tokens` | 1500 | How much must age out to justify a call |
 | `compact_max_summary_tokens` | 600 | Cap on the stored summary — it rides on every later turn |
-| `compact_max_completion_tokens` | 1024 | Cap on what the summariser may generate |
 | `compact_tool_result_bytes` | 400 | How much tool output the summariser reads |
 | `compact_instructions` | — | Appended to the built-in prompt, not replacing it |
 

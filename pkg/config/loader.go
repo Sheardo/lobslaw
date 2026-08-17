@@ -181,11 +181,9 @@ func validateContextConfig(c ContextConfig) error {
 	}{
 		{"tail_tokens", c.TailTokens},
 		{"history_tool_result_bytes", c.HistoryToolResultBytes},
-		{"tail_messages", c.TailMessages},
 		{"compact_keep_messages", c.CompactKeepMessages},
 		{"compact_trigger_tokens", c.CompactTriggerTokens},
 		{"compact_max_summary_tokens", c.CompactMaxSummaryTokens},
-		{"compact_max_completion_tokens", c.CompactMaxCompletionTokens},
 		{"compact_tool_result_bytes", c.CompactToolResultBytes},
 	} {
 		if f.val != nil && *f.val < 0 {
