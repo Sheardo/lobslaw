@@ -38,7 +38,7 @@ func TestMaterialiseWritesALoadableSkill(t *testing.T) {
 		t.Fatalf("written = %v", res.Written)
 	}
 
-	dir := filepath.Join(m.Root(), "tidy", "0.0.3")
+	dir := filepath.Join(m.AgentRoot(), "tidy", "0.0.3")
 	skill, err := ParseAgentSkill(dir)
 	if err != nil {
 		t.Fatalf("the materialised skill does not parse: %v", err)
@@ -78,7 +78,7 @@ func TestBundledFilesAreWrittenAndDeclared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := filepath.Join(m.Root(), "tidy", "0.0.1")
+	dir := filepath.Join(m.AgentRoot(), "tidy", "0.0.1")
 	got, err := os.ReadFile(filepath.Join(dir, "references", "api.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -123,10 +123,10 @@ func TestArchivedArtefactsArePruned(t *testing.T) {
 	if len(res.Pruned) != 1 || !strings.HasSuffix(res.Pruned[0], "summarise") {
 		t.Fatalf("pruned = %v, want the summarise directory", res.Pruned)
 	}
-	if _, err := os.Stat(filepath.Join(m.Root(), "summarise")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(m.AgentRoot(), "summarise")); !os.IsNotExist(err) {
 		t.Error("the archived artefact is still on disk")
 	}
-	if _, err := os.Stat(filepath.Join(m.Root(), "tidy", "0.0.1")); err != nil {
+	if _, err := os.Stat(filepath.Join(m.AgentRoot(), "tidy", "0.0.1")); err != nil {
 		t.Errorf("the active artefact was pruned too: %v", err)
 	}
 }
@@ -145,10 +145,10 @@ func TestASupersededVersionIsRemoved(t *testing.T) {
 	if _, err := m.Materialise([]Artefact{artefact("tidy", "v2", 2)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(m.Root(), "tidy", "0.0.1")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(m.AgentRoot(), "tidy", "0.0.1")); !os.IsNotExist(err) {
 		t.Error("the old version directory survived")
 	}
-	body, err := os.ReadFile(filepath.Join(m.Root(), "tidy", "0.0.2", BodyFile))
+	body, err := os.ReadFile(filepath.Join(m.AgentRoot(), "tidy", "0.0.2", BodyFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestAnEditedCacheIsCorrected(t *testing.T) {
 	if _, err := m.Materialise([]Artefact{artefact("tidy", "the real body", 1)}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(m.Root(), "tidy", "0.0.1", BodyFile)
+	path := filepath.Join(m.AgentRoot(), "tidy", "0.0.1", BodyFile)
 	if err := os.WriteFile(path, []byte("somebody edited this"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -191,14 +191,14 @@ func TestDeletingTheCacheRecoversFully(t *testing.T) {
 	if _, err := m.Materialise(arts); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(m.Root()); err != nil {
+	if err := os.RemoveAll(m.AgentRoot()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.Materialise(arts); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"tidy/0.0.1", "summarise/0.0.4"} {
-		if _, err := ParseAgentSkill(filepath.Join(m.Root(), filepath.FromSlash(want))); err != nil {
+		if _, err := ParseAgentSkill(filepath.Join(m.AgentRoot(), filepath.FromSlash(want))); err != nil {
 			t.Errorf("%s did not come back: %v", want, err)
 		}
 	}
@@ -213,7 +213,7 @@ func TestAnUnchangedPassRewritesNothing(t *testing.T) {
 	if _, err := m.Materialise(arts); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(m.Root(), "tidy", "0.0.1", BodyFile)
+	path := filepath.Join(m.AgentRoot(), "tidy", "0.0.1", BodyFile)
 	before, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestNoStagingDirectoriesAreLeftBehind(t *testing.T) {
 	if _, err := m.Materialise([]Artefact{artefact("tidy", "v2", 2)}); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := os.ReadDir(filepath.Join(m.Root(), "tidy"))
+	entries, err := os.ReadDir(filepath.Join(m.AgentRoot(), "tidy"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestAnOverlongDescriptionIsTruncatedNotRefused(t *testing.T) {
 	if _, err := m.Materialise([]Artefact{a}); err != nil {
 		t.Fatal(err)
 	}
-	skill, err := ParseAgentSkill(filepath.Join(m.Root(), "tidy", "0.0.1"))
+	skill, err := ParseAgentSkill(filepath.Join(m.AgentRoot(), "tidy", "0.0.1"))
 	if err != nil {
 		t.Fatalf("an overlong description made the skill unloadable: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestAMultiLineDescriptionIsFlattened(t *testing.T) {
 	if _, err := m.Materialise([]Artefact{a}); err != nil {
 		t.Fatal(err)
 	}
-	skill, err := ParseAgentSkill(filepath.Join(m.Root(), "tidy", "0.0.1"))
+	skill, err := ParseAgentSkill(filepath.Join(m.AgentRoot(), "tidy", "0.0.1"))
 	if err != nil {
 		t.Fatalf("a multi-line description made the skill unloadable: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestScanAgentRegistersTheCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := NewRegistry(slog.New(slog.DiscardHandler))
-	if errs := r.ScanAgent(m.Root()); len(errs) != 0 {
+	if errs := r.ScanAgent(m.AgentRoot()); len(errs) != 0 {
 		t.Fatalf("scan errors: %v", errs)
 	}
 	if len(r.List()) != 2 {
@@ -424,7 +424,7 @@ handler: handler.py
 	}
 
 	r := NewRegistry(slog.New(slog.DiscardHandler))
-	if errs := r.ScanAgent(m.Root()); len(errs) != 0 {
+	if errs := r.ScanAgent(m.AgentRoot()); len(errs) != 0 {
 		t.Fatal(errs)
 	}
 	r.Put(operator)

@@ -306,6 +306,15 @@ type Node struct {
 	// node's disposable skill cache. Nil when self-learning is off,
 	// for the same absence-not-a-flag reason the store is.
 	materialiser *skills.Materialiser
+
+	// skillStore is the cluster-store authority for imported skills.
+	// Nil on a node with no raft, where nothing can be imported.
+	skillStore *memory.SkillStore
+	// skillSigningPolicy and skillVerifier are resolved once at boot
+	// and reused by every scan, so a reconcile cannot quietly use a
+	// different stance from the one reported at startup.
+	skillSigningPolicy skills.SigningPolicy
+	skillVerifier      *skills.Verifier
 	// shadowedSkills remembers which self-taught names already lost to
 	// an operator skill, so the reason is logged once per node rather
 	// than on every reconcile.
@@ -661,6 +670,12 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 
 	if err := n.startMaterialiser(ctx); err != nil {
 		n.log.Error("skills: materialiser failed to start", "err", err)
+	}
+
+	// After the materialiser, which builds the cache root both loaders
+	// write into.
+	if err := n.startSkillStoreLoader(ctx); err != nil {
+		return fmt.Errorf("skills: %w", err)
 	}
 
 	// Skill registry watcher: fsnotify on the skills storage
