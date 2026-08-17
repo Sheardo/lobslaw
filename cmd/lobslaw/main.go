@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	logfilter "github.com/jmylchreest/slog-logfilter"
@@ -48,12 +49,17 @@ type flags struct {
 	policyDirs  []string
 	logLevel    string
 	logFormat   string
-	all         bool
-	memory      bool
-	policy      bool
-	compute     bool
-	gateway     bool
-	storage     bool
+	// logSetOnWire records which logging flags the operator actually
+	// typed (or set via env). [logging] in the config file fills in
+	// the rest — but must not overrule someone who passed
+	// --log-level=debug to debug this very boot.
+	logSetOnWire map[string]bool
+	all          bool
+	memory       bool
+	policy       bool
+	compute      bool
+	gateway      bool
+	storage      bool
 }
 
 func parseFlags(args []string, out *flags) error {
@@ -81,7 +87,22 @@ func parseFlags(args []string, out *flags) error {
 	fs.BoolVar(&out.compute, "compute", false, "enable compute function")
 	fs.BoolVar(&out.gateway, "gateway", false, "enable gateway function")
 	fs.BoolVar(&out.storage, "storage", false, "enable storage function")
-	return fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	out.logSetOnWire = map[string]bool{}
+	fs.Visit(func(fl *flag.Flag) { out.logSetOnWire[fl.Name] = true })
+	// An env var is as explicit as a flag: somebody set it on purpose,
+	// and it is the mechanism a container deployment has.
+	for name, env := range map[string]string{
+		"log-level":  "LOBSLAW_LOG_LEVEL",
+		"log-format": "LOBSLAW_LOG_FORMAT",
+	} {
+		if os.Getenv(env) != "" {
+			out.logSetOnWire[name] = true
+		}
+	}
+	return nil
 }
 
 func parseLogLevel(s string) slog.Level {
@@ -263,6 +284,22 @@ func main() {
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
+	}
+
+	// [logging] level / format reach the logger HERE rather than at
+	// construction, because building it needs to come first — loading
+	// the config is one of the things that has to be able to report an
+	// error. So config can only govern what is logged after this
+	// point, which is nearly everything.
+	//
+	// An explicit --log-level (or LOBSLAW_LOG_LEVEL) still wins. The
+	// file is where the deployment's normal level lives; the flag is
+	// what somebody types when they are debugging this boot, and the
+	// file must not overrule them.
+	if level, format, changed := effectiveLogging(f.logLevel, f.logFormat, f.logSetOnWire, cfg.Logging); changed {
+		f.logLevel, f.logFormat = level, format
+		logger = logging.New(os.Stderr, parseLogLevel(level), logging.Format(format))
+		slog.SetDefault(logger)
 	}
 
 	// Apply any startup filters from [[logging.filters]]. Runtime
@@ -538,4 +575,22 @@ func policyDirsSource(cliDirs []string, cfg *config.Config) string {
 	default:
 		return "default-discovery"
 	}
+}
+
+// effectiveLogging folds [logging] into the flag-derived level and
+// format, reporting whether anything moved.
+//
+// An explicit --log-level (or LOBSLAW_LOG_LEVEL) wins. The config file
+// is where a deployment's normal level lives; the flag is what
+// somebody types when they are debugging this boot, and the file must
+// not overrule them.
+func effectiveLogging(flagLevel, flagFormat string, setOnWire map[string]bool, cfg config.LoggingConfig) (level, format string, changed bool) {
+	level, format = flagLevel, flagFormat
+	if v := strings.TrimSpace(cfg.Level); v != "" && !setOnWire["log-level"] {
+		level, changed = v, true
+	}
+	if v := strings.TrimSpace(cfg.Format); v != "" && !setOnWire["log-format"] {
+		format, changed = v, true
+	}
+	return level, format, changed
 }

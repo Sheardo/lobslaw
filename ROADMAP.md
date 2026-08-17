@@ -2956,3 +2956,90 @@ real `ArtifactMount` — until then only the mock had — and its
 operation-resource-name handle is what finally tested `JobHandle`'s
 opacity, which had been asserted and only mock-exercised. All three
 are fake-verified; no accounts exist for any of them.
+
+## R27 — the config sweep (done 2026-08-17)
+
+### Problem
+
+Three settings turned up in one week that were parsed, validated,
+documented — and read by nothing: `min_trust_tier`, `[[compute.chains]]`
+and `skills.signing_policy`. Three in one week is a pattern, not a
+coincidence, so the whole surface was swept.
+
+**35 of 296 settings were read by nothing outside `pkg/config`.**
+
+| Section | Dead keys | What the operator believed |
+|---|---|---|
+| `[sandbox]` | `allowed_paths`, `read_only_paths`, `network_allow_cidr`, `dangerous_cmds_deny`/`_allow`, `env_whitelist`, `cpu_quota`, `memory_limit_mb`, `skip_perm_checks`, `hot_reload_opt_out` | filesystem, egress and resource limits |
+| `[[storage.mounts]]` | `endpoint`, `account`, `access_key_ref`, `secret_key_ref`, `env`, `crypt`, `crypt_password_ref`, `crypt_salt_ref`, `extra_opts` | credentials and encryption at rest |
+| `[[compute.plugins]]` | `name`, `source`, `enabled`, `auto_install_binary`, `grpc_port` | plugin tools loaded |
+| `[audit.raft]` / `[audit.local]` | `anchor_target`, `anchor_cadence` (×2) | tamper-evident anchoring |
+| `[memory.snapshot]` | `cadence`, `retention` | snapshots scheduled and pruned |
+| `[logging]` | `level`, `format` | log verbosity from config |
+| singles | `compute.complexity_estimator`, `discovery.broadcast_interface`, `soul.scope` | |
+
+Every one was in `examples/config.toml`, most were in `DESIGN.md`, and
+two were in the end-user security documentation. An operator who wrote
+`network_allow_cidr` had restricted nothing, and nothing said so.
+
+### The storage mounts were the worst of it
+
+Not because a setting was ignored, but because the section could not
+express a working mount **at all**. `seedStorageMounts` copied label,
+type, path and bucket into the replicated proto and dropped the rest —
+and there were no `remote`, `server` or `export` keys to drop, because
+the struct never had them. The rclone backend refuses a mount whose
+remote is empty; the NFS backend refuses one with no server or export.
+So `type = "rclone"` and `type = "nfs"` declared in TOML could never
+start, and the credentials written beside them reached nothing.
+
+Fixed by giving the section the vocabulary the backends actually speak:
+`remote`, `server`, `export`, and one `options` map passed through
+verbatim, replacing eight bespoke credential keys. Fewer settings, and
+they work.
+
+`crypt` was removed rather than wired: `internal/storage/rclone`
+documents crypt as a follow-up, so there is no code to encrypt
+anything. **A key promising encryption at rest on a system that cannot
+encrypt is worse than no key** — `crypt = true` returned plaintext and
+no warning.
+
+### Disposition
+
+- **Deleted** (33 keys): the whole `[sandbox]` parallel vocabulary — the
+  sandbox is described by policy.d files, and two authorities for one
+  sandbox is how they came to disagree; `[[compute.plugins]]`, because
+  `lobslaw plugin install` has always been the thing that installs a
+  plugin; audit anchoring and snapshot cadence/retention, which
+  described schedules for jobs that do not run.
+- **Wired** : `[logging] level`/`format` now reach the logger, after
+  config loads rather than at construction — building the logger has to
+  come first, because loading config is one of the things that must be
+  able to report an error. An explicit `--log-level` still wins:
+  the file holds a deployment's normal level, the flag is what somebody
+  types while debugging this boot.
+- **Replaced**: the storage mount credential fields, as above.
+
+Net: 296 settings → 264.
+
+### The guard
+
+`TestEverySettingIsReadBySomething` fails when a koanf-tagged field has
+no reader, with an allowlist for deliberate exceptions that is empty
+today. Adding to it is a visible decision in review.
+
+**Type-checked, not grepped.** A textual search for `.Level` cannot tell
+`LoggingConfig.Level` from the dozen other structs with a field of that
+name — and `[logging] level` was one of the 35, so a name-based check
+would have missed exactly the case that motivated it.
+
+Two bugs in the analysis had to be fixed before its output could be
+trusted, both of which made it report live settings as dead:
+`Tests: true` loads duplicate package variants, so the same field is a
+different `*types.Var` in each and object identity breaks; and Go 1.23+
+materialises `type SpeakConfig = ModalityOverride` as `*types.Alias`,
+which a `*types.Named` assertion skips in silence.
+
+It earned its keep immediately: it caught `StorageMountConfig.Server`
+during this very change, when the config edit landed and the wiring edit
+silently did not.
