@@ -724,9 +724,22 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 	// its own protocol.
 	cfgs := make([]compute.AudioConfig, 0, len(eps))
 	for _, ep := range eps {
-		audioFmt := compute.AudioFormatWhisper
+		// The driver follows the matched CAPABILITY rather than the
+		// provider's `driver` key, which is what lets one chain mix the
+		// two shapes. Vision resolves from `driver` because its vendors
+		// differ; audio's differ by which capability they advertise.
+		driverName := compute.DriverOpenAI
 		if ep.matchedCap == compute.CapabilityAudioMultimodal {
-			audioFmt = compute.AudioFormatChatMultimodal
+			driverName = compute.DriverChatMultimodal
+		}
+		driver, err := n.drivers().Audio(driverName, compute.AudioDriverConfig{
+			Endpoint:   ep.endpoint,
+			Model:      ep.model,
+			Credential: compute.NewBearerCredential(ep.apiKey),
+			Logger:     n.log,
+		})
+		if err != nil {
+			return fmt.Errorf("read_audio: provider %q: %w", ep.label, err)
 		}
 		cfgs = append(cfgs, compute.AudioConfig{
 			Label:     ep.label,
@@ -734,7 +747,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 			Endpoint:  ep.endpoint,
 			Model:     ep.model,
 			APIKey:    ep.apiKey,
-			Format:    audioFmt,
+			Driver:    driver,
 		})
 	}
 	if err := compute.RegisterAudioBuiltin(builtins, cfgs...); err != nil {
@@ -744,7 +757,7 @@ func (n *Node) wireAudioTools(builtins *compute.Builtins) error {
 		return fmt.Errorf("register read_audio tool def: %w", err)
 	}
 	n.log.Debug("compute: read_audio registered",
-		"model", cfgs[0].Model, "format", cfgs[0].Format, "via", eps[0].via,
+		"model", cfgs[0].Model, "via", eps[0].via,
 		"chain_len", len(eps))
 	return nil
 }

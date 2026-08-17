@@ -21,8 +21,11 @@ import (
 // shape: OpenRouter's chat-completions with a `file` content part
 // carrying base64-encoded PDF bytes (the same shape as their
 // input_audio for audio). Other providers exposing PDF reading
-// (Anthropic native PDF, Gemini PDF) can land here later as
-// PDFFormat constants in the same dispatch pattern as audio/vision.
+// (Anthropic native PDF, Gemini PDF) land as PDF DRIVERS registered in
+// the DriverSet — not as constants in a switch. Audio and vision both
+// grew that switch and both have had it taken out again: it puts the
+// vendor's shape in the builtin, and the builtin's job is the path
+// check and the sniff.
 type PDFConfig struct {
 	Endpoint    string
 	Model       string

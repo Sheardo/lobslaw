@@ -19,35 +19,18 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// AudioFormat picks the wire protocol for read_audio.
-type AudioFormat string
-
-const (
-	// AudioFormatWhisper is the OpenAI /v1/audio/transcriptions
-	// multipart POST. Default. Covers OpenAI, MiniMax STT, and any
-	// self-hosted server that exposes the Whisper API surface
-	// (faster-whisper-server, parakeet wrapped behind a thin
-	// FastAPI shim, etc).
-	AudioFormatWhisper AudioFormat = "openai"
-
-	// AudioFormatChatMultimodal is OpenRouter's audio-on-chat shape:
-	// /v1/chat/completions with content parts that include
-	// {type:"input_audio", input_audio:{data:"<b64>", format:"wav"}}.
-	// Returns a normal chat completion; we treat the assistant's
-	// content as the transcript.
-	AudioFormatChatMultimodal AudioFormat = "openrouter"
-)
-
 // AudioConfig wires the read_audio (STT) builtin. Format selects
 // between Whisper-style multipart (default) and OpenRouter's
 // chat-completions-multimodal shape. For self-hosted Parakeet /
 // faster-whisper sidecars: leave Format empty (whisper) and point
 // Endpoint at the local URL.
 type AudioConfig struct {
-	Endpoint    string
-	Model       string
-	APIKey      string
-	Format      AudioFormat
+	Endpoint string
+	Model    string
+	APIKey   string
+	// Driver is the resolved wire protocol. This was an AudioFormat
+	// switched on twice — once to validate, once to dispatch.
+	Driver      AudioDriver
 	AllowedRoot string
 	HTTPClient  *http.Client
 
@@ -78,13 +61,9 @@ func RegisterAudioBuiltin(b *Builtins, cfgs ...AudioConfig) error {
 		if cfg.Model == "" {
 			return errors.New("read_audio: Model required (e.g. \"whisper-1\", \"speech-01\", \"google/gemini-2.0-flash-001\")")
 		}
-		if cfg.Format == "" {
-			cfg.Format = AudioFormatWhisper
-		}
-		switch cfg.Format {
-		case AudioFormatWhisper, AudioFormatChatMultimodal:
-		default:
-			return fmt.Errorf("read_audio: unknown format %q (want openai|openrouter)", cfg.Format)
+
+		if cfg.Driver == nil {
+			return errors.New("read_audio: Driver required (resolve it from the DriverSet)")
 		}
 		if cfg.AllowedRoot == "" {
 			cfg.AllowedRoot = "/workspace/incoming"
@@ -144,13 +123,11 @@ func newReadAudioHandler(cfg AudioConfig, client *http.Client) BuiltinFunc {
 			return nil, 2, fmt.Errorf("read_audio: read file: %w", err)
 		}
 
-		var transcript string
-		switch cfg.Format {
-		case AudioFormatWhisper:
-			transcript, err = audioWhisperTranscribe(ctx, client, cfg, abs, data, language)
-		case AudioFormatChatMultimodal:
-			transcript, err = audioChatMultimodalTranscribe(ctx, client, cfg, abs, data, language)
-		}
+		transcript, err := cfg.Driver.Transcribe(ctx, AudioRequest{
+			Filename: abs,
+			Data:     data,
+			Language: language,
+		})
 		if err != nil {
 			return nil, 1, err
 		}
@@ -161,7 +138,6 @@ func newReadAudioHandler(cfg AudioConfig, client *http.Client) BuiltinFunc {
 		out, _ := json.Marshal(map[string]any{
 			"path":    abs,
 			"model":   cfg.Model,
-			"format":  string(cfg.Format),
 			"content": transcript,
 		})
 		return out, 0, nil
@@ -172,7 +148,15 @@ func newReadAudioHandler(cfg AudioConfig, client *http.Client) BuiltinFunc {
 // Whisper-API-compatible endpoint. Voice notes from Telegram are
 // OPUS-in-OGG; the part Content-Type matters because OpenAI's
 // ffmpeg-side detection trusts it.
-func audioWhisperTranscribe(ctx context.Context, client *http.Client, cfg AudioConfig, abs string, data []byte, language string) (string, error) {
+type whisperAudioDriver struct {
+	cfg    AudioDriverConfig
+	client *http.Client
+}
+
+// Transcribe uploads the recording as multipart form data.
+func (d *whisperAudioDriver) Transcribe(ctx context.Context, in AudioRequest) (string, error) {
+	client, cfg := d.client, d.cfg
+	abs, data, language := in.Filename, in.Data, in.Language
 	body := &bytes.Buffer{}
 	mw := multipart.NewWriter(body)
 	filePart, err := mw.CreatePart(textproto.MIMEHeader{
@@ -206,8 +190,12 @@ func audioWhisperTranscribe(ctx context.Context, client *http.Client, cfg AudioC
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if cfg.Credential != nil {
+		if err := cfg.Credential.Apply(ctx, req); err != nil {
+			return "", err
+		}
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -235,7 +223,16 @@ func audioWhisperTranscribe(ctx context.Context, client *http.Client, cfg AudioC
 // the assistant's content as the transcript. Per OpenRouter's
 // docs, the format field within input_audio expects "wav" / "mp3"
 // / "ogg" — not the MIME type.
-func audioChatMultimodalTranscribe(ctx context.Context, client *http.Client, cfg AudioConfig, abs string, data []byte, language string) (string, error) {
+type chatMultimodalAudioDriver struct {
+	cfg    AudioDriverConfig
+	client *http.Client
+}
+
+// Transcribe sends the recording as an input_audio content part and
+// treats the assistant's reply as the transcript.
+func (d *chatMultimodalAudioDriver) Transcribe(ctx context.Context, in AudioRequest) (string, error) {
+	client, cfg := d.client, d.cfg
+	abs, data, language := in.Filename, in.Data, in.Language
 	prompt := "Transcribe this audio verbatim."
 	if language != "" {
 		prompt = "Transcribe this audio verbatim. The speaker is using language: " + language + "."
@@ -257,8 +254,12 @@ func audioChatMultimodalTranscribe(ctx context.Context, client *http.Client, cfg
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
 	req.Header.Set("Content-Type", "application/json")
+	if cfg.Credential != nil {
+		if err := cfg.Credential.Apply(ctx, req); err != nil {
+			return "", err
+		}
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
