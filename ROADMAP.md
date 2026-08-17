@@ -2296,8 +2296,27 @@ Three decisions worth recording:
   on another node could have written, so trusting its paths on the way out would turn a bad record
   into arbitrary file writes.
 
-Still open: wiring the materialiser and registry to read from the store rather than a mount, and the
-`lobslaw skills import/export` CLI.
+**The materialiser and registry now read from the store.** The cache gained two subtrees —
+`agent/` and `imported/` — namespaced rather than flat because they are scanned by different code
+with different authority: everything under `agent/` is tagged `TierAgent` and passed through the
+capability floor, everything under `imported/` has its signature verified and its tier derived from
+the result. One directory holding both would make the tier depend on which scanner reached it
+first. (The layout change is free: the cache is disposable, and `rm -rf` plus restart is still
+complete recovery.)
+
+The manifest reaches disk **verbatim** here too, with the detached signature beside it, so the
+registry's real `SigningRequire` path verifies against the file the interpreter will load. A
+mutation that re-renders the manifest on the way out fails that test.
+
+**Found while wiring it: `skills.signing_policy` and `skills.trusted_publishers` were parsed,
+documented, validated — and read by nothing.** The mount watcher calls `Registry.Scan`, which is
+`SigningOff`, so a deployment setting `signing_policy = "require"` got no verification at all. The
+same shape as `min_trust_tier` before it was enforced. Both are now read, and a `require` policy
+with no trusted publishers refuses to boot rather than failing per-skill at scan time, where it
+reads as "every skill is broken" instead of "no publisher is trusted".
+
+Still open: the mount becoming an import source (decided), and the `lobslaw skills import/export`
+CLI.
 
 ### Store-to-cache contract
 

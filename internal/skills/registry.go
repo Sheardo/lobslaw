@@ -355,6 +355,62 @@ func (r *Registry) ScanAgent(root string) []error {
 	return errs
 }
 
+// ScanImported loads the materialised store cache, whose layout is
+// <root>/<name>/<version>/manifest.yaml — the same two-level shape as
+// the agent cache, and a different subtree.
+//
+// Parsed WITH the signing policy, unlike ScanAgent. That is the whole
+// difference between the two: a skill here came from an import, may
+// carry a detached signature, and its tier is derived from whether
+// that signature verified. A skill there was written by the agent and
+// is capped whatever it claims.
+//
+// policy.d/ IS honoured here, again unlike the agent path. An operator
+// who imported a skill shipping tool policy meant to install it; the
+// agent-authored path refuses because the capability floor already
+// refuses the capabilities such a policy would grant.
+func (r *Registry) ScanImported(root string, policy SigningPolicy, verifier *Verifier) []error {
+	var errs []error
+	names, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return []error{err}
+	}
+	for _, n := range names {
+		if !n.IsDir() || strings.HasPrefix(n.Name(), ".") {
+			continue
+		}
+		versions, err := os.ReadDir(filepath.Join(root, n.Name()))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, v := range versions {
+			if !v.IsDir() || strings.HasPrefix(v.Name(), ".") {
+				continue
+			}
+			dir := filepath.Join(root, n.Name(), v.Name())
+			skill, err := ParseWithPolicy(dir, policy, verifier)
+			if err != nil {
+				if _, statErr := os.Stat(filepath.Join(dir, "manifest.yaml")); os.IsNotExist(statErr) {
+					continue
+				}
+				r.log.Warn("skills: imported skill failed to load", "dir", dir, "err", err)
+				errs = append(errs, err)
+				continue
+			}
+			r.Put(skill)
+			if err := r.loadSkillPolicies(skill); err != nil {
+				r.log.Warn("skills: policy.d load failed", "skill", skill.Name(), "err", err)
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errs
+}
+
 // loadSkillPolicies calls sandbox.LoadSkillPolicies against the
 // skill's policy.d/ subtree when one exists. No-op when no sink is
 // configured OR the skill ships no policy.d.

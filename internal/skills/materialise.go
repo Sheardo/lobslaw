@@ -51,6 +51,21 @@ const BodyFile = "SKILL.md"
 // loads nothing.
 const manifestFile = "manifest.yaml"
 
+// Cache subtrees, one per provenance.
+//
+// Namespaced rather than flat, because the two are scanned by
+// different code with different authority: everything under Agent is
+// tagged TierAgent and passed through the capability floor, while
+// everything under Imported has its signature verified and its tier
+// derived from that. A single directory holding both would make the
+// tier a property of who happened to scan it first.
+//
+// One root above them, so `rm -rf` the cache is still one command.
+const (
+	AgentSubtree    = "agent"
+	ImportedSubtree = "imported"
+)
+
 // Materialiser writes ACTIVE artefacts into a per-node cache.
 type Materialiser struct {
 	root string
@@ -71,9 +86,15 @@ func NewMaterialiser(dir string, log *slog.Logger) (*Materialiser, error) {
 	return &Materialiser{root: filepath.Clean(dir), log: log}, nil
 }
 
-// Root is the cache directory. Exposed so the caller can point a scan
-// at it without reconstructing the path and getting it subtly wrong.
+// Root is the cache directory.
 func (m *Materialiser) Root() string { return m.root }
+
+// AgentRoot and ImportedRoot are what a scan points at. Exposed so a
+// caller never reconstructs the path and gets it subtly wrong — and
+// so pointing the agent scanner at the imported subtree is a
+// misspelling rather than a plausible line of code.
+func (m *Materialiser) AgentRoot() string    { return filepath.Join(m.root, AgentSubtree) }
+func (m *Materialiser) ImportedRoot() string { return filepath.Join(m.root, ImportedSubtree) }
 
 // Result reports what one pass did.
 type Result struct {
@@ -123,7 +144,7 @@ func (m *Materialiser) Materialise(artefacts []Artefact) (Result, error) {
 		res.Written = append(res.Written, dir)
 	}
 
-	pruned, err := m.prune(keep)
+	pruned, err := m.prune(m.AgentRoot(), keep)
 	if err != nil {
 		return res, err
 	}
@@ -172,7 +193,7 @@ func refuseFilePath(path string) string {
 	if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return fmt.Sprintf("bundled file %q is outside the skill directory", path)
 	}
-	if cleaned == BodyFile || cleaned == manifestFile {
+	if cleaned == BodyFile || cleaned == manifestFile || cleaned == manifestFile+".sig" {
 		return fmt.Sprintf("bundled file %q would overwrite a file the materialiser owns", path)
 	}
 	return ""
@@ -197,20 +218,39 @@ func versionString(v uint32) string { return fmt.Sprintf("0.0.%d", v) }
 // observed partway through.
 func (m *Materialiser) writeSkill(a Artefact) (string, error) {
 	version := versionString(a.Version)
-	final := filepath.Join(m.root, a.Name, version)
-
 	manifestYAML, err := renderManifest(a, version)
 	if err != nil {
 		return "", err
 	}
-	if m.upToDate(final, a, manifestYAML) {
+	files := map[string][]byte{
+		BodyFile:     []byte(a.Body),
+		manifestFile: manifestYAML,
+	}
+	for path, content := range a.Files {
+		files[filepath.ToSlash(filepath.Clean(path))] = []byte(content)
+	}
+	return m.writeVersion(m.AgentRoot(), a.Name, version, files)
+}
+
+// writeVersion writes one version directory atomically.
+//
+// Staged and renamed rather than written in place. A scan can run at
+// any moment — the watcher fires on the writes this makes — and a
+// directory that appears half-built parses as a broken skill, logs an
+// error, and is then never retried because the next pass sees the
+// content it expected. The rename is the one operation that cannot be
+// observed partway through.
+func (m *Materialiser) writeVersion(root, name, version string, files map[string][]byte) (string, error) {
+	final := filepath.Join(root, name, version)
+	if dirMatches(final, files) {
 		return final, nil
 	}
 
-	if err := os.MkdirAll(filepath.Join(m.root, a.Name), 0o700); err != nil {
+	nameDir := filepath.Join(root, name)
+	if err := os.MkdirAll(nameDir, 0o700); err != nil {
 		return "", err
 	}
-	staging, err := os.MkdirTemp(filepath.Join(m.root, a.Name), ".staging-")
+	staging, err := os.MkdirTemp(nameDir, ".staging-")
 	if err != nil {
 		return "", err
 	}
@@ -224,27 +264,18 @@ func (m *Materialiser) writeSkill(a Artefact) (string, error) {
 		}
 	}()
 
-	if err := os.WriteFile(filepath.Join(staging, BodyFile), []byte(a.Body), 0o600); err != nil {
-		return "", err
-	}
-	for path, content := range a.Files {
-		dest := filepath.Join(staging, filepath.Clean(path))
+	for rel, content := range files {
+		dest := filepath.Join(staging, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(dest, []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(dest, content, 0o600); err != nil {
 			return "", err
 		}
 	}
-	if err := os.WriteFile(filepath.Join(staging, manifestFile), manifestYAML, 0o600); err != nil {
-		return "", err
-	}
 
-	// The previous contents of THIS version directory — a record
-	// edited in place
-	// without its version moving, which the store does not do today
-	// but which a rollback could reintroduce. Removed first because
-	// rename onto a non-empty directory fails.
+	// The previous contents of THIS version directory. Removed first
+	// because rename onto a non-empty directory fails.
 	if err := os.RemoveAll(final); err != nil {
 		return "", err
 	}
@@ -281,39 +312,33 @@ func renderManifest(a Artefact, version string) ([]byte, error) {
 	})
 }
 
-// upToDate reports whether the directory already holds this artefact,
-// byte for byte.
+// dirMatches reports whether the directory already holds exactly these
+// files, byte for byte.
 //
-// Compared by content rather than by mtime or by version alone. A
-// version match would be enough if the cache were only ever written
-// here — which is the invariant, and comparing content is what makes a
-// violation of it self-correcting rather than permanent.
+// Compared by CONTENT rather than by version alone. A version match
+// would be enough if the cache were only ever written here — which is
+// the invariant, and comparing content is what makes a violation of it
+// self-correcting rather than permanent.
 //
-// Anything unreadable counts as out of date. There is no failure here
-// worth reporting: the answer to "I cannot tell" and the answer to
-// "no" are the same action.
-func (m *Materialiser) upToDate(dir string, a Artefact, manifestYAML []byte) bool {
-	same := func(rel string, want []byte) bool {
-		got, err := os.ReadFile(filepath.Join(dir, rel)) //nolint:gosec // rel is validated by refuseArtefact
-		return err == nil && string(got) == string(want)
-	}
-	if !same(BodyFile, []byte(a.Body)) || !same(manifestFile, manifestYAML) {
-		return false
-	}
-	for path, want := range a.Files {
-		if !same(filepath.Clean(path), []byte(want)) {
+// Anything unreadable counts as a mismatch. There is no failure worth
+// reporting: the answer to "I cannot tell" and the answer to "no" are
+// the same action.
+func dirMatches(dir string, files map[string][]byte) bool {
+	for rel, want := range files {
+		got, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel))) //nolint:gosec // rel validated by the caller
+		if err != nil || string(got) != string(want) {
 			return false
 		}
 	}
-	// A file in the directory that the artefact does not name is
-	// drift too — a reference removed from the record would otherwise
-	// stay readable forever, because nothing that compares only the
-	// files it expects can notice one it does not.
-	return m.countFiles(dir) == len(a.Files)+2
+	// A file present that the record does not name is drift too — a
+	// reference removed upstream would otherwise stay readable forever,
+	// because nothing comparing only the files it expects can notice
+	// one it does not.
+	return countFiles(dir) == len(files)
 }
 
 // countFiles counts regular files under dir, recursively.
-func (m *Materialiser) countFiles(dir string) int {
+func countFiles(dir string) int {
 	n := 0
 	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
 		if err == nil && !d.IsDir() {
@@ -331,8 +356,8 @@ func (m *Materialiser) countFiles(dir string) int {
 // node that had ever seen it ACTIVE, and "forget what you taught
 // yourself" would be true of the store and false of the thing actually
 // in the prompt.
-func (m *Materialiser) prune(keep map[string]string) ([]string, error) {
-	entries, err := os.ReadDir(m.root)
+func (m *Materialiser) prune(root string, keep map[string]string) ([]string, error) {
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -344,7 +369,7 @@ func (m *Materialiser) prune(keep map[string]string) ([]string, error) {
 		if !e.IsDir() {
 			continue
 		}
-		nameDir := filepath.Join(m.root, e.Name())
+		nameDir := filepath.Join(root, e.Name())
 		version, wanted := keep[e.Name()]
 		if !wanted {
 			if err := os.RemoveAll(nameDir); err != nil {
@@ -388,4 +413,125 @@ func indexDescription(s string) string {
 		return s
 	}
 	return strings.TrimSpace(string(runes[:MaxDescriptionChars-1])) + "…"
+}
+
+// --- imported skills -------------------------------------------------
+
+// StoredSkill is one record from the cluster store, flattened to what
+// a directory needs.
+//
+// The manifest arrives as BYTES, not as a parsed Manifest, and that is
+// the whole reason the store keeps it verbatim: a signature is over
+// the exact file, and anything that re-encodes on the way to disk
+// breaks verification for a skill that genuinely was signed.
+type StoredSkill struct {
+	Name    string
+	Version string
+	// ManifestYAML is written unchanged. Never re-rendered.
+	ManifestYAML []byte
+	// ManifestSig is the detached signature, empty when unsigned.
+	ManifestSig []byte
+	Files       map[string][]byte
+}
+
+// MaterialiseStored makes the imported subtree match the store.
+//
+// Convergent like its agent-side counterpart, and separate from it
+// because the two have different authority. Everything written here is
+// scanned with signature verification and gets its tier from the
+// result; everything written there is tagged TierAgent and passed
+// through the capability floor. Sharing one directory would make the
+// tier depend on which scanner reached it first.
+func (m *Materialiser) MaterialiseStored(skills []StoredSkill) (Result, error) {
+	res := Result{Refused: map[string]string{}}
+
+	keep := make(map[string]string, len(skills))
+	for _, sk := range skills {
+		if reason := refuseStored(sk); reason != "" {
+			res.Refused[sk.Name] = reason
+			continue
+		}
+		keep[sk.Name] = sk.Version
+	}
+
+	for _, sk := range skills {
+		if _, ok := keep[sk.Name]; !ok {
+			continue
+		}
+		files := map[string][]byte{manifestFile: sk.ManifestYAML}
+		if len(sk.ManifestSig) > 0 {
+			// Written only when there is one. An empty .sig file makes
+			// an unsigned skill look signed, and it then fails
+			// verification rather than being correctly treated as
+			// unsigned.
+			files[signatureFile] = sk.ManifestSig
+		}
+		for rel, content := range sk.Files {
+			files[filepath.ToSlash(filepath.Clean(rel))] = content
+		}
+		dir, err := m.writeVersion(m.ImportedRoot(), sk.Name, sk.Version, files)
+		if err != nil {
+			res.Refused[sk.Name] = err.Error()
+			continue
+		}
+		res.Written = append(res.Written, dir)
+	}
+
+	pruned, err := m.prune(m.ImportedRoot(), keep)
+	if err != nil {
+		return res, err
+	}
+	res.Pruned = pruned
+	sort.Strings(res.Written)
+	sort.Strings(res.Pruned)
+	return res, nil
+}
+
+// signatureFile sits beside the manifest, and the name must match what
+// the parser looks for or a signed skill materialises as an unsigned
+// one.
+const signatureFile = manifestFile + ".sig"
+
+// refuseStored returns why a stored record cannot become a directory.
+//
+// Checked BEFORE any path is built from the name or version — both
+// become path segments here, and a separator in either is a traversal
+// the moment it reaches filepath.Join. The version is checked too,
+// which the agent side does not need: there the version is generated
+// from a counter, while here it comes from a manifest somebody else
+// wrote.
+func refuseStored(sk StoredSkill) string {
+	if reason := refuseSegment("name", sk.Name); reason != "" {
+		return reason
+	}
+
+	if reason := refuseSegment("version", sk.Version); reason != "" {
+		return reason
+	}
+	if len(sk.ManifestYAML) == 0 {
+		return "the record has no manifest"
+	}
+	for path := range sk.Files {
+		if reason := refuseFilePath(path); reason != "" {
+			return reason
+		}
+	}
+	return ""
+}
+
+func refuseSegment(what, v string) string {
+	trimmed := strings.TrimSpace(v)
+	switch {
+	case trimmed == "":
+		return "the record has no " + what
+	case trimmed != v:
+		return fmt.Sprintf("%s %q has leading or trailing whitespace", what, v)
+	case strings.ContainsAny(trimmed, `/\`):
+		return fmt.Sprintf("%s %q contains a path separator", what, trimmed)
+	case trimmed == "." || trimmed == "..":
+		return fmt.Sprintf("%s %q is not a directory name", what, trimmed)
+	case strings.HasPrefix(trimmed, "."):
+		return fmt.Sprintf("%s %q starts with a dot, which the scan skips", what, trimmed)
+	}
+	return ""
 }
