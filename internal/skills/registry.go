@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"golang.org/x/mod/semver"
 
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
-	"github.com/jmylchreest/lobslaw/internal/storage"
 )
 
 // ErrSkillNotFound fires when Get is asked about a skill that isn't
@@ -440,44 +438,15 @@ func (r *Registry) loadSkillPolicies(skill *Skill) error {
 	return nil
 }
 
-// Watch wires the registry to a storage-Manager mount label. Runs
-// an initial Scan, then subscribes to the mount's Watcher and
-// re-scans on relevant changes. Exits cleanly on ctx cancel. The
-// simplest correct semantic: any Create/Write/Remove under the
-// label triggers a full Scan — the skill set is small so the cost
-// of re-parsing is negligible and it avoids fiddly per-file state.
-func (r *Registry) Watch(ctx context.Context, mgr *storage.Manager, label string) error {
-	root, err := mgr.Resolve(label)
-	if err != nil {
-		return err
-	}
-	if errs := r.Scan(root); len(errs) > 0 {
-		r.log.Warn("skills: initial scan had errors", "count", len(errs))
-	}
-
-	ch, err := mgr.Watch(ctx, label, storage.WatchOpts{
-		Recursive: true,
-		Include:   []string{"manifest.yaml"},
-	})
-	if err != nil {
-		return err
-	}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case ev, ok := <-ch:
-				if !ok {
-					return
-				}
-				// Rescan is simpler than per-event surgery, keeps the
-				// winner-computation correct across rename/remove, and
-				// is cheap for realistic skill counts.
-				_ = r.Scan(root)
-				_ = ev
-			}
-		}
-	}()
-	return nil
-}
+// Watch is GONE.
+//
+// It registered mount skills directly, which was the second authority
+// R18 calls self-inflicted complexity: a skill could be installed
+// because a file existed on one node, and the store's answer to "what
+// is installed" would differ from the registry's.
+//
+// The mount is now an import source — internal/node walks it, imports
+// into the store, and the store is materialised and scanned. Deleting
+// this rather than leaving it unused is deliberate: a method that
+// quietly reintroduces two authorities is exactly the thing somebody
+// calls because it looks like what they want.

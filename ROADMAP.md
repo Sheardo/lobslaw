@@ -2315,8 +2315,27 @@ same shape as `min_trust_tier` before it was enforced. Both are now read, and a 
 with no trusted publishers refuses to boot rather than failing per-skill at scan time, where it
 reads as "every skill is broken" instead of "no publisher is trusted".
 
-Still open: the mount becoming an import source (decided), and the `lobslaw skills import/export`
-CLI.
+**The mount is now an import source, and `Registry.Watch` is deleted.** Drop a skill in the
+directory and it is imported into the store, replicated, materialised and loaded — the directory
+keeps its job, but what it feeds is the store, and the store is the only thing the registry loads
+from. `Watch` registered mount skills directly, which was precisely the second authority R18 calls
+self-inflicted; it is removed rather than left unused, because a method that quietly reintroduces
+two authorities is the thing somebody calls because it looks like what they want.
+
+The consequence an operator has to know: **deleting the file no longer removes the skill.** It is in
+the store. Said at boot, and said again once per skill when a source directory disappears, naming
+the command that does remove it.
+
+No leader gate: importing is a raft write and writes forward to the leader, so any node holding the
+mount can do it — which matters, because a mount is per-node storage and leader-gating would mean
+only the leader's copy was ever read. Two nodes importing identical content converge, since the
+record is skipped when it already matches and blobs are content-addressed.
+
+Idempotency is by CONTENT, not by version. A skill edited in place without its version moving is
+exactly what a drop-in directory is for during development, and a version check would make those
+edits invisible.
+
+Still open: the `lobslaw skills import/export/remove` CLI, and the dev-source escape hatch.
 
 ### Store-to-cache contract
 

@@ -678,18 +678,12 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 		return fmt.Errorf("skills: %w", err)
 	}
 
-	// Skill registry watcher: fsnotify on the skills storage
-	// mount so drop-in manifests are auto-discovered. Gated on
-	// both the registry and a configured storage label —
-	// deployments without skills just skip.
-	if n.skillRegistry != nil && n.storageMgr != nil && n.cfg.Skills.StorageLabel != "" {
-		label := n.cfg.Skills.StorageLabel
-		if err := n.skillRegistry.Watch(ctx, n.storageMgr, label); err != nil {
-			n.log.Warn("skills: watcher failed to start",
-				"label", label, "err", err)
-		} else {
-			n.log.Info("skills: watcher started", "label", label)
-		}
+	// The skills mount, now an IMPORT source rather than a live one.
+	// It feeds the store; the store is what the registry loads from.
+	// Started after the store loader so the first import has somewhere
+	// to land and something to materialise it.
+	if err := n.startSkillMountImport(ctx); err != nil {
+		n.log.Warn("skills: mount import not started", "err", err)
 	}
 
 	// MCP servers from top-level [mcp.servers] config. Plugin
