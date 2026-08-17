@@ -115,19 +115,39 @@ func (r *restResponder) Close() {
 
 // event writes a progress event, or nothing once the turn has begun
 // its final write.
+//
+// THE CLOSED CHECK AND THE WRITE HAPPEN UNDER ONE LOCK.
+//
+// They used to be two: the flag was read, the lock released, and
+// forceEvent then took it again to write. A typing keepalive firing in
+// that gap passed a check that was already stale and wrote to a
+// ResponseWriter whose handler had returned — which panics, and a
+// panic in a timer goroutine takes the whole process with it. In tests
+// that showed up as internal/gateway failing perhaps one run in four,
+// with a stack in typingKeepalive and nothing wrong at the line named.
+//
+// The flag was always meant to prevent exactly this; check-then-act
+// meant it could not.
 func (r *restResponder) event(name string, payload any) error {
 	if r == nil || !r.streaming {
 		return nil
 	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
 	r.mu.Lock()
-	closed := r.closed
-	r.mu.Unlock()
-	if closed {
+	defer r.mu.Unlock()
+	if r.closed {
 		return nil
 	}
-	return r.forceEvent(name, payload)
+	return r.writeEventLocked(name, body)
 }
 
+// forceEvent writes regardless of closed. The handler's own final and
+// error events use it: Close is called BEFORE the handler writes, to
+// shut the timers up, so the write it is shutting them up for must not
+// be blocked by the same flag.
 func (r *restResponder) forceEvent(name string, payload any) error {
 	if r == nil || !r.streaming {
 		return nil
@@ -138,6 +158,11 @@ func (r *restResponder) forceEvent(name string, payload any) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.writeEventLocked(name, body)
+}
+
+// writeEventLocked emits one SSE frame. Caller holds r.mu.
+func (r *restResponder) writeEventLocked(name string, body []byte) error {
 	if _, err := r.w.Write([]byte("event: " + name + "\ndata: ")); err != nil {
 		return err
 	}
