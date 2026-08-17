@@ -62,7 +62,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
 | **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ✅ | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
-| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | 🟨 | 🟠 P1 | L | R23, R24 |
+| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ✅ | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
 | **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | 🟨 | 🟠 P1 | M | — |
 | **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
@@ -2939,7 +2939,7 @@ of them.
 - [x] The job handle is opaque to everything above the driver: a
       driver returning an ARN, an operation resource name or a bare
       task id all work without the scheduler knowing which.
-- [ ] A provider requiring short-lived OAuth tokens (Vertex) and one
+- [x] A provider requiring short-lived OAuth tokens (Vertex) and one
       requiring per-request signing (Bedrock) are both configurable
       without a static `api_key`.
       **The OAuth half is done.** `RefreshingCredential` caches a token behind a `TokenSource` and
@@ -2954,9 +2954,22 @@ of them.
       reads as a misconfigured key rather than a token-endpoint outage. An unknown expiry is
       treated as short rather than forever, or a dead token would be presented indefinitely.
 
-      **The signing half remains**: SigV4 needs the request body to compute its hash, which the
-      `Credential` interface can already reach through `GetBody` — so the seam holds, and what is
-      left is the algorithm itself, testable against AWS's published vectors.
+      **The signing half is done too.** SigV4 is written out rather than imported: the AWS SDK
+      brings a large dependency tree for one function, and this is a published, frozen algorithm.
+      It reaches the body through `GetBody` and puts it back — a body consumed to hash it and not
+      restored is signed correctly and then sent empty, and the server's complaint is "signature
+      mismatch" rather than "your body vanished".
+
+      **The tests do NOT assert AWS's published signature constants.** Writing one down from
+      memory risks a wrong expected value that then gets "fixed" to match the implementation,
+      which is worse than no test: it looks verified and proves nothing. They check instead that
+      every component the specification covers actually changes the signature — body, method,
+      path, query, host, region, service, date, secret, session token — that the header block is
+      lowercased and sorted as described, and that the body survives.
+
+      **So interop with a real AWS endpoint is UNPROVEN.** It should be confirmed against a live
+      Bedrock call, or against the published vectors copied in verbatim from the documentation,
+      before this is relied on. Recorded here rather than left implied.
 - [x] An artifact delivered to an operator-owned bucket lands in a
       lobslaw storage mount, with no download step.
       The mount kind returns the provider's own path untouched, and the test asserts nothing was
