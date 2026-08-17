@@ -183,6 +183,7 @@ func TestVisionClassifiesHTTPFailures(t *testing.T) {
 			b := NewBuiltins()
 			if err := RegisterVisionBuiltin(b, VisionConfig{
 				Endpoint: srv.URL, Model: "m", APIKey: "k", AllowedRoot: dir,
+				Driver: openAIVisionFor(t, srv.URL),
 			}); err != nil {
 				t.Fatal(err)
 			}

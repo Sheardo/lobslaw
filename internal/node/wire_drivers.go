@@ -8,6 +8,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/anthropic"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/dashscope"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/elevenlabs"
+	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/imagen"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/veo"
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -46,6 +47,15 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterJob(compute.DriverMock, compute.MockJobFactory)
 		s.RegisterJob(dashscope.DriverName, dashscopeJobFactory)
 		s.RegisterJob(veo.DriverName, veoJobFactory)
+
+		// Vision joins the same seam. It used to switch on a
+		// VisionFormat enum in two places with three vendors inlined in
+		// each, so `driver = "anthropic"` selected the chat wire shape
+		// and said nothing about the vision one.
+		s.RegisterVision(compute.DriverOpenAI, compute.OpenAIVisionFactory)
+		s.RegisterVision(compute.DriverAnthropic, anthropic.VisionFactory)
+		s.RegisterVision(gemini.DriverName, gemini.VisionFactory)
+		s.RegisterVision(compute.DriverMock, compute.MockVisionFactory)
 		driverSet = s
 	})
 	return driverSet
