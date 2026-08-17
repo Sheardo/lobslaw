@@ -93,14 +93,84 @@ func WrapContext(blocks []ContextBlock) string {
 		case TrustTrusted:
 			fmt.Fprintf(&b, "<!-- source:%s -->\n%s\n", block.Source, block.Content)
 		case TrustUntrusted:
-			fmt.Fprintf(&b, "<untrusted source=%q>\n%s\n</untrusted>\n", block.Source, block.Content)
+			fmt.Fprintf(&b, "<untrusted source=%q>\n%s\n</untrusted>\n",
+				block.Source, NeutraliseDelimiters(block.Content))
 		case TrustUntrustedUser:
-			fmt.Fprintf(&b, "<untrusted-user source=%q>\n%s\n</untrusted-user>\n", block.Source, block.Content)
+			fmt.Fprintf(&b, "<untrusted-user source=%q>\n%s\n</untrusted-user>\n",
+				block.Source, NeutraliseDelimiters(block.Content))
 		default:
 			// Unknown trust levels → fall through to untrusted.
 			// Never up-trust an unknown level to trusted.
-			fmt.Fprintf(&b, "<untrusted source=%q>\n%s\n</untrusted>\n", block.Source, block.Content)
+			fmt.Fprintf(&b, "<untrusted source=%q>\n%s\n</untrusted>\n",
+				block.Source, NeutraliseDelimiters(block.Content))
 		}
 	}
 	return b.String()
+}
+
+// Delimiters are the tags this package emits around untrusted content.
+//
+// EXPORTED BECAUSE THE SCANNER NEEDS THE SAME LIST. promptguard kept
+// its own copy, which is two authorities for one fact: adding a
+// wrapper tag here would leave the scanner silently not covering it,
+// and nothing would fail.
+//
+// Only the tags THIS package writes. The chat-template control tokens
+// several models honour — im_start, INST and the rest — are the
+// scanner's own business, because nothing here emits them.
+func Delimiters() []string {
+	return []string{
+		"</untrusted-user",
+		"<untrusted-user",
+		"</untrusted",
+		"<untrusted",
+	}
+}
+
+// NeutraliseDelimiters makes a wrapper tag inside untrusted content
+// unable to close the block it is in.
+//
+// THE INGEST SCANNER IS NOT ENOUGH ON ITS OWN. It quarantines records
+// carrying these fragments, which covers everything that went through
+// ingest — and R5 asks that a record cannot escape "on any path". A
+// record stored before the scanner existed, imported by another route,
+// or content that reaches this function from somewhere other than
+// recall would otherwise close its own block, and everything after it
+// would read as instructions rather than as data.
+//
+// Only the delimiter's opening angle bracket is escaped, and only
+// where it begins one of these tags. Escaping every "<" would mangle
+// any memory containing code, which is most of them here, and a
+// defence that corrupts ordinary content gets turned off.
+func NeutraliseDelimiters(content string) string {
+	if content == "" {
+		return content
+	}
+	out := content
+	for _, d := range Delimiters() {
+		// Case-insensitively: a model reading "</UNTRUSTED>" is not
+		// obviously less confused than one reading the lowercase form,
+		// and the scanner already matches without regard to case.
+		out = replaceFold(out, d, "&lt;"+strings.TrimPrefix(d, "<"))
+	}
+	return out
+}
+
+// replaceFold replaces every case-insensitive occurrence of old.
+func replaceFold(s, old, new string) string {
+	if old == "" {
+		return s
+	}
+	var b strings.Builder
+	lower, lowerOld := strings.ToLower(s), strings.ToLower(old)
+	for {
+		i := strings.Index(lower, lowerOld)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		b.WriteString(new)
+		s, lower = s[i+len(old):], lower[i+len(lowerOld):]
+	}
 }
