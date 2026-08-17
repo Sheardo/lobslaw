@@ -50,7 +50,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🟠 P1 | M | — |
 | **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | S | — |
 | **R7** | [Principal identity](#r7--principal-identity) | 🟨 | 🟠 P1 | M | — |
-| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | 🟨 | 🟠 P1 | M | — |
+| **R8** | [Unified provider selection + fallthrough](#r8--unified-provider-selection--fallthrough) | ✅ | 🟠 P1 | M | — |
 | **R9** | [Hardline floor + protected paths](#r9--hardline-floor--protected-paths) | ✅ | 🟠 P1 | S | — |
 | **R10** | [Channel-agnostic Responder](#r10--channel-agnostic-responder) | ✅ | 🟡 P2 | M | R11 |
 | **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
@@ -60,13 +60,33 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
 | **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ✅ | 🟡 P2 | M | R17 |
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
-| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ✅ | 🟠 P1 | L | R15, R17 |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟨 | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
-| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟠 P1 | L | R23, R24 |
+| **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | 🟨 | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
 | **R24** | [Turn trace export](#r24--turn-trace-export) — *[Trace](/dev/TRACE)* | 🟨 | 🟠 P1 | M | — |
 | **R27** | [The config sweep](#r27--the-config-sweep-done-2026-08-17) | ✅ | 🟠 P1 | M | — |
+| **R25** | [Retire the node functions that select nothing](#r25--retire-the-node-functions-that-do-not-select-anything) | ⬜ | 🟡 P2 | S | — |
+| **R26** | [A second vendor per generation modality](#r26--a-second-vendor-per-generation-modality) | ⬜ | 🟠 P1 | M | R22 |
 | **R28** | [The operator's laptop](#r28--the-operators-laptop) | ⬜ | 🟠 P1 | L | — |
+
+### Bookkeeping (reviewed 2026-08-17)
+
+The status column and the acceptance boxes had drifted apart, in both directions. Corrected:
+
+- **R8 → ✅.** All eight boxes are checked; chains route and their steps run.
+- **R18 → 🟨, from ✅.** Marked complete when its CLI landed, but `skills rollback` is on the
+  acceptance list and does not exist. Two boxes were ticked against tests that already cover them;
+  three describe behaviour that is probably present and has never been verified.
+- **R22 → 🟨, from ⬜.** Three generation modalities shipped while this said "not started". The
+  driver consolidation genuinely has not.
+- **R25 and R26** had sections but no row in the table above, so they were invisible to anyone
+  reading the index.
+
+**Still unreconciled, and deliberately not guessed at:** R1 and R5 are marked ✅ with *no* boxes
+ticked at all. That pattern reads as criteria written and never verified rather than work left
+undone — both are plainly built — but ticking them from memory would be inventing evidence. They
+need a pass that checks each box against a test.
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -2409,7 +2429,21 @@ in a shell profile and forgotten. Both at once is a coincidence somebody has to 
 promote a skill past its provenance, so an operator needing to override a signed skill locally has
 to be given a separate SOURCE rather than a way to game the order.
 
-**The CLI is built, and R18 is closed.** `lobslaw skills list | import | export | remove`, live over
+**The CLI is built. R18 is NOT closed — that was a mistake, corrected here.**
+
+The CLI landing was read as the last piece, and it was not: `skills rollback` is on the acceptance
+list and does not exist. `lobslaw learned` has `rollback`; `lobslaw skills` has list, import, export
+and remove. Three more boxes describe behaviour that is probably present and has never been
+verified — a node serving the library from the log with no mount, a deleted cache restoring
+byte-identically, and an oversized payload naming the offending path (the store's error does name
+it, and the gRPC ceiling was raised so that error is what surfaces, but nothing tests it end to
+end).
+
+Two of the six ARE done and can be ticked on the strength of existing tests: the signed
+`import → export → diff` round trip is `TestTheRoundTripOverTheServiceIsByteIdentical`, and
+`SigningRequire` behaviour is covered by the unsigned-bundle and missing-handler-digest tests.
+
+**The CLI itself:** `lobslaw skills list | import | export | remove`, live over
 mTLS with no `--offline` form — importing writes to raft, and doing it against a stopped node would
 produce a record the running cluster never sees, which is the same reason `learned approve` refuses
 it.
@@ -2528,8 +2562,14 @@ node needs forwarding.
 
 - [ ] A node with no storage mount and no skills directory serves the full skill library from the log.
 - [ ] Deleting the cache and restarting restores every skill byte-identically.
-- [ ] `import → export → diff` is empty for a signed skill, and the export still verifies.
-- [ ] `SigningRequired` behaviour is unchanged after the move.
+- [x] `import → export → diff` is empty for a signed skill, and the export still verifies.
+      `TestTheRoundTripOverTheServiceIsByteIdentical` signs a manifest that is deliberately not
+      already-normalised — a comment, an unusual key order, trailing whitespace — imports it,
+      exports it, and checks the signature still verifies against the exported bytes.
+- [x] `SigningRequired` behaviour is unchanged after the move.
+      An unsigned bundle is refused under `SigningRequire`, and a signed manifest pinning no
+      `handler_sha256` is refused too — because the import is parsed through `ParseWithPolicy`
+      rather than signature-checked by hand.
 - [x] A self-taught skill cannot win a name against a signed or operator skill at any version.
       Shipped ahead of the rest — see above.
 - [ ] `skills rollback` restores a prior version across the cluster.
@@ -2689,6 +2729,17 @@ Steps 1–5 add no capability, and that is the point: they make step 8 a
 day per modality rather than a fresh argument each time.
 
 ### Acceptance
+
+**Status (reviewed 2026-08-17): partly shipped.** The MODALITIES landed — speak, image and video
+generate, and generated files are delivered to the user through an explicit artifact mount. The
+DRIVER CONSOLIDATION did not: `mimeForAudioFormat` and the `PDFFormat` constants are still
+per-modality, and there is no `driver =` key on a provider. So the boxes below that describe one
+`Driver` type remain genuinely open, while the ones describing generation are done in substance
+under a different shape.
+
+This entry said ⬜ while three modalities were shipping, which is how a roadmap stops being read.
+Reconciling the boxes against what exists is worth doing before R26 builds a second vendor on top
+of them.
 
 - [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
       `EmbeddingFormat` remain.
