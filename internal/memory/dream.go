@@ -58,8 +58,12 @@ type DreamRunner struct {
 	raft        *RaftNode
 	summarizer  Summarizer  // may be nil until Phase 5
 	adjudicator Adjudicator // defaults to AlwaysKeepDistinct — safe no-op
-	cfg         DreamConfig
-	logger      *slog.Logger
+	// pinned is the always-on memory store. Nil disables the pinned
+	// consolidation pass entirely, which is what a node without one
+	// should do — not guess at a block it cannot read.
+	pinned *PinnedStore
+	cfg    DreamConfig
+	logger *slog.Logger
 }
 
 // SetSummarizer swaps in the consolidation-layer summarizer.
@@ -121,6 +125,10 @@ type DreamResult struct {
 	// pass. Zero values are expected before Phase 5 lands — the default
 	// AlwaysKeepDistinct Adjudicator never takes destructive action.
 	Merge MergeResult
+	// Pinned is the outcome of the pinned-memory consolidation pass.
+	// Zero values are expected on a node with no Summarizer, which
+	// never rewrites anything.
+	Pinned PinnedConsolidation
 	// CommitmentsDigested is the number of fired commitments swept
 	// from BucketCommitments during this pass.
 	CommitmentsDigested int
@@ -175,6 +183,16 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		d.logger.Warn("dream: merge phase failed", "err", err)
 	}
 
+	// Pinned consolidation: tidy blocks that are near their cap, so
+	// the pressure produces curation in the background rather than a
+	// write failure the user sees. Non-fatal for the same reason as
+	// the merge phase — a summariser outage leaves the block as it is
+	// and the threshold fires again tomorrow.
+	pinnedResult, err := d.consolidatePinned(ctx, d.pinned)
+	if err != nil {
+		d.logger.Warn("dream: pinned consolidation failed", "err", err)
+	}
+
 	// Commitment digest: roll up fired commitments older than the
 	// grace window into per-day episodic summaries, then delete the
 	// originals. Keeps BucketCommitments lean for fast listing while
@@ -199,6 +217,7 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		Pruned:              pruned,
 		Candidates:          ids,
 		Merge:               mergeResult,
+		Pinned:              pinnedResult,
 		CommitmentsDigested: digested,
 		CommitmentDigests:   digests,
 	}
@@ -211,6 +230,9 @@ func (d *DreamRunner) Run(ctx context.Context) (*DreamResult, error) {
 		"supersedes", mergeResult.Supersedes,
 		"commitments_digested", digested,
 		"commitment_digests", digests,
+		"pinned_considered", pinnedResult.Considered,
+		"pinned_consolidated", pinnedResult.Consolidated,
+		"pinned_refused", pinnedResult.Refused,
 	)
 	return result, nil
 }
@@ -523,3 +545,11 @@ func (d *DreamRunner) applyEntry(e *lobslawv1.LogEntry) error {
 	}
 	return nil
 }
+
+// SetPinnedStore wires the always-on memory store, enabling Dream's
+// pinned consolidation pass.
+//
+// Separate from the constructor for the same reason SetSummarizer is:
+// the store is built later in the boot order than the runner, and a
+// constructor argument would force one of them to move.
+func (d *DreamRunner) SetPinnedStore(p *PinnedStore) { d.pinned = p }

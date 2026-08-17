@@ -134,5 +134,16 @@ func (n *Node) wirePinnedMemory() error {
 		return fmt.Errorf("pinned memory: %w", err)
 	}
 	n.pinnedStore = pinned
+
+	// Dream tidies these blocks when they near their cap, so the
+	// pressure produces curation in the background rather than a write
+	// failure the user sees. Wired here rather than at Dream's
+	// construction because the store is built later in the boot order
+	// than the runner is.
+	if n.memorySvc != nil {
+		if runner := n.memorySvc.DreamRunner(); runner != nil {
+			runner.SetPinnedStore(pinned)
+		}
+	}
 	return nil
 }
