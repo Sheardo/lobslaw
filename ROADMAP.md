@@ -2335,7 +2335,16 @@ Idempotency is by CONTENT, not by version. A skill edited in place without its v
 exactly what a drop-in directory is for during development, and a version check would make those
 edits invisible.
 
-Still open: the `lobslaw skills import/export/remove` CLI, and the dev-source escape hatch.
+**The dev source is built**, gated twice — `skills.dev_source` AND `LOBSLAW_DEV` — with the node
+refusing to boot when the key is set and the marker is not, naming both. Either gate alone is easy
+to leave behind: a config file gets copied to production wholesale, an environment variable gets set
+in a shell profile and forgotten. Both at once is a coincidence somebody has to arrange.
+
+`TierDev` outranks signed, which is the point: tier-first precedence means a version bump cannot
+promote a skill past its provenance, so an operator needing to override a signed skill locally has
+to be given a separate SOURCE rather than a way to game the order.
+
+Still open: the `lobslaw skills import/export/remove` CLI.
 
 ### Store-to-cache contract
 

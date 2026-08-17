@@ -1118,6 +1118,25 @@ type SkillsConfig struct {
 	// no watcher started; skills can still be registered
 	// programmatically but won't auto-discover on drop-in.
 	StorageLabel string `koanf:"storage_label,omitempty"`
+
+	// DevSource is a local directory whose skills outrank EVERYTHING,
+	// including signed ones.
+	//
+	// The escape hatch for an operator who needs to override a signed
+	// skill locally. It has to be a separate source rather than a way
+	// to game precedence, because a rule that can be beaten by editing
+	// a version number is not a rule.
+	//
+	// Gated twice: this key AND the LOBSLAW_DEV environment variable.
+	// With the key set and the variable absent the node REFUSES TO
+	// START, naming both. Either gate alone is easy to leave behind —
+	// a config file gets copied to production wholesale, an
+	// environment variable gets set in a shell profile and forgotten —
+	// and both at once is a coincidence somebody has to arrange.
+	//
+	// Layout is <dir>/<name>/manifest.yaml, one level, because this is
+	// a working directory somebody edits by hand.
+	DevSource string `koanf:"dev_source,omitempty"`
 }
 
 // SecurityConfig carries cross-cutting safety controls: the egress

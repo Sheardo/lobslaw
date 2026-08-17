@@ -165,6 +165,13 @@ func (n *Node) wireCompute() error {
 // and sees it accepted is entitled to think it does something, so
 // this says otherwise, loudly, once.
 func (n *Node) wireResolver() error {
+	// Before anything is constructed, and fatal. A dev source that is
+	// configured but not gated is a node that would either silently
+	// skip an override the operator is developing against, or run an
+	// unsigned one in production without saying so.
+	if err := n.checkDevSource(); err != nil {
+		return err
+	}
 	if len(n.cfg.Compute.Providers) == 0 {
 		return nil
 	}

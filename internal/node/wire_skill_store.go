@@ -132,6 +132,11 @@ func (n *Node) loadStoredSkills() error {
 		n.materialiser.ImportedRoot(), n.skillSigningPolicy, n.skillVerifier) {
 		n.log.Warn("skills: imported skill failed to register", "err", err)
 	}
+	// Last, so a dev override is registered after the thing it
+	// overrides. Order does not decide the winner — tier does — but a
+	// scan that ran first would log its override before the skill it
+	// overrides existed, which reads as a warning about nothing.
+	n.loadDevSource()
 	return nil
 }
 
