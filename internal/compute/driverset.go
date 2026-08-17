@@ -27,6 +27,7 @@ type DriverSet struct {
 	image  map[string]ImageDriverFactory
 	job    map[string]JobDriverFactory
 	vision map[string]VisionDriverFactory
+	audio  map[string]AudioDriverFactory
 }
 
 // ChatDriverConfig is what every chat driver is built from. Fields a
@@ -112,6 +113,12 @@ const (
 	// node whose providers are all mock drivers boots and serves a
 	// full turn offline, which is what the end-to-end harness needs.
 	DriverMock = "mock"
+
+	// DriverChatMultimodal is audio-on-chat: /v1/chat/completions with
+	// an input_audio content part, as OpenRouter exposes it. Named for
+	// the SHAPE rather than the vendor, because several providers offer
+	// it and none of them owns it.
+	DriverChatMultimodal = "openrouter"
 )
 
 // MockChatFactory builds a mock chat driver from config.

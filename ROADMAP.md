@@ -2772,7 +2772,7 @@ of them.
 
 - [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
       `EmbeddingFormat` remain.
-      **Vision is done; audio, PDF and embeddings remain.** `read_image` switched on a
+      **Vision and audio are done; embeddings remain, and PDF never had the problem.** `read_image` switched on a
       `VisionFormat` in two places — once to build the request, once to decode the reply — with
       three vendors inlined in each, so `driver = "anthropic"` selected the chat wire shape and
       said nothing about the vision one. It now resolves a `VisionDriver` from the `DriverSet`
@@ -2792,6 +2792,18 @@ of them.
       appending `?key=` to the endpoint before the request was built; a `QueryCredential` puts
       that behind the same interface as every other provider's auth, so the next such vendor does
       not grow another special case.
+
+      Audio followed, with one difference worth recording: its driver is picked by the matched
+      CAPABILITY rather than by the provider's `driver` key, because a chain can legitimately mix
+      a Whisper endpoint with a chat-multimodal one. Vision's vendors differ by vendor; audio's
+      differ by which capability they advertise.
+
+      PDF turned out never to have had a format enum — its comment merely anticipated one, and
+      now points at the driver seam instead so the next vendor does not reintroduce the switch
+      that has twice been taken out.
+
+      Embeddings is what remains: `EmbeddingFormat` is threaded through the client struct and
+      switched on at five sites, including a batch path whose index mapping needs care.
 - [ ] A node boots from a config whose every provider is `driver =
       "mock"`, with no network access, and serves a full turn.
 - [ ] A vision provider whose primary returns 503 falls through to its

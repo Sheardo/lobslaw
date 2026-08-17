@@ -56,6 +56,13 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterVision(compute.DriverAnthropic, anthropic.VisionFactory)
 		s.RegisterVision(gemini.DriverName, gemini.VisionFactory)
 		s.RegisterVision(compute.DriverMock, compute.MockVisionFactory)
+
+		// Audio picks its driver by matched CAPABILITY rather than by
+		// the provider's `driver` key, so one chain can mix a Whisper
+		// endpoint with a chat-multimodal one.
+		s.RegisterAudio(compute.DriverOpenAI, compute.WhisperAudioFactory)
+		s.RegisterAudio(compute.DriverChatMultimodal, compute.ChatMultimodalAudioFactory)
+		s.RegisterAudio(compute.DriverMock, compute.MockAudioFactory)
 		driverSet = s
 	})
 	return driverSet
