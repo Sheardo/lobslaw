@@ -127,6 +127,21 @@ func EstimateCost(usage Usage, pricing types.ProviderPricing) float64 {
 	cost += float64(nonCached) * pricing.InputUSDPer1K / 1000.0
 	cost += float64(usage.CachedTokens) * pricing.CachedUSDPer1K / 1000.0
 	cost += float64(usage.CompletionTokens) * pricing.OutputUSDPer1K / 1000.0
+
+	// Non-token billing, added rather than substituted: a turn can be
+	// billed both ways, and a reply that generates a picture costs its
+	// tokens AND its image.
+	//
+	// An unpriced unit contributes nothing and is NOT an error. A
+	// plan-billed provider has no marginal cost per call, and refusing
+	// to account for the turn because nobody wrote down a rate would
+	// stop the turn rather than the billing. The quantity is still
+	// recorded on the span, so consumption is visible even where the
+	// marginal cost is genuinely nil.
+
+	if usage.Metered() {
+		cost += usage.Quantity * pricing.UnitUSD[usage.Unit]
+	}
 	return cost
 }
 

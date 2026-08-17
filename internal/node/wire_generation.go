@@ -321,7 +321,8 @@ func (n *Node) wireSpeakTools(builtins *compute.Builtins) error {
 			n.log.Warn("compute: speak provider skipped", "via", ep.via, "err", err)
 			continue
 		}
-		cfgs = append(cfgs, compute.SpeakConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver})
+		cfgs = append(cfgs, compute.SpeakConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
+			Model: ep.model, Pricing: ep.pricing})
 	}
 	if len(cfgs) == 0 {
 		return nil
@@ -402,7 +403,8 @@ func (n *Node) wireImageTools(builtins *compute.Builtins) error {
 			n.log.Warn("compute: image provider skipped", "via", ep.via, "err", err)
 			continue
 		}
-		cfgs = append(cfgs, compute.ImageConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver})
+		cfgs = append(cfgs, compute.ImageConfig{Label: ep.label, TrustTier: ep.trustTier, Driver: d, Resolver: resolver,
+			Model: ep.model, Pricing: ep.pricing})
 	}
 	if len(cfgs) == 0 {
 		return nil

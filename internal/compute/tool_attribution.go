@@ -88,7 +88,10 @@ func (t *toolAttributor) noteLLMCall(pricing types.ProviderPricing) {
 	// The last provider to serve the turn prices the carry. A turn
 	// that failed over mid-way was re-prompted at the new provider's
 	// rate, and that is the rate the carried context actually cost.
-	if pricing != (types.ProviderPricing{}) {
+	// Compared field-by-field rather than with ==: ProviderPricing
+	// gained a map for non-token units, and a struct holding one is
+	// not comparable.
+	if pricing.IsSet() {
 		t.pricing = pricing
 	}
 }

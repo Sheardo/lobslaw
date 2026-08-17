@@ -20,7 +20,7 @@ func TestResolvePricingExactMatch(t *testing.T) {
 		t.Fatal("expected to find built-in for gpt-4o-mini")
 	}
 	want := BuiltinPricing["gpt-4o-mini"]
-	if pricing != want {
+	if !samePricing(pricing, want) {
 		t.Errorf("got %+v, want %+v", pricing, want)
 	}
 }
@@ -45,7 +45,7 @@ func TestResolvePricingPrefixMatch(t *testing.T) {
 	if !found {
 		t.Fatal("prefix match should find built-in")
 	}
-	if pricing != BuiltinPricing["gpt-4o-mini"] {
+	if !samePricing(pricing, BuiltinPricing["gpt-4o-mini"]) {
 		t.Errorf("longest prefix should win; got %+v", pricing)
 	}
 }
@@ -219,4 +219,21 @@ func TestBuiltinPricingSanity(t *testing.T) {
 			t.Errorf("BuiltinPricing missing row %q — did the default table get thinned?", m)
 		}
 	}
+}
+
+// samePricing compares field by field. ProviderPricing gained a map
+// for non-token units, and a struct holding one is not comparable.
+func samePricing(a, b types.ProviderPricing) bool {
+	if a.InputUSDPer1K != b.InputUSDPer1K ||
+		a.OutputUSDPer1K != b.OutputUSDPer1K ||
+		a.CachedUSDPer1K != b.CachedUSDPer1K ||
+		len(a.UnitUSD) != len(b.UnitUSD) {
+		return false
+	}
+	for k, v := range a.UnitUSD {
+		if b.UnitUSD[k] != v {
+			return false
+		}
+	}
+	return true
 }

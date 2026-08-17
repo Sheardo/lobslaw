@@ -31,6 +31,17 @@ type SpeakConfig struct {
 	// soul's min_trust_tier before this provider is used. Empty fails
 	// any set floor: an undeclared tier is not evidence of a high one.
 	TrustTier types.TrustTier
+
+	// Pricing is what this provider charges. Without it synthesised
+	// speech costs the turn nothing and the spend cap cannot fire on
+	// it — which matters more here than elsewhere, because TTS is the
+	// one modality billed by the character and a model that decides to
+	// narrate a file runs the meter fast.
+	Pricing types.ProviderPricing
+
+	// Model is carried for the cost record, so an audit says which
+	// model was billed rather than only which provider.
+	Model string
 }
 
 // DefaultSpeakMaxChars is roughly a few minutes of speech — long
@@ -91,6 +102,13 @@ func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
 			Format: strings.TrimSpace(args["format"]),
 			Speed:  speed,
 		})
+		if err == nil {
+			// Billed per CHARACTER OF INPUT, which is what every TTS
+			// vendor meters — not per second of output, which is not
+			// known until the audio exists.
+			usage := Usage{Unit: types.UnitAudioCharacters, Quantity: float64(len(text))}
+			CollectCost(ctx, RecordCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
+		}
 		if err != nil {
 			// Returned unwrapped so the failover chain can read the
 			// class the driver assigned.
