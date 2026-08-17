@@ -2849,8 +2849,36 @@ of them.
       immediately, and delivers the artifact later via a commitment —
       without holding the session lease or tripping the 90s
       responsiveness timeout.
-- [ ] A provider billed per second of video reports a non-zero cost.
+- [x] A provider billed per second of video reports a non-zero cost.
       Zero is the current answer and it is wrong.
+      It was worse than zero: generation reported NOTHING — not an approximation, not a zero with
+      a note, but no cost record at all. The spend cap could not fire on a generated minute of
+      video and the trace could not show it.
+
+      `Usage` carries an optional unit and quantity, and `ProviderPricing` a `unit_usd` map. A MAP
+      rather than a field per concept, because the set is open — video seconds, images, audio
+      characters, opaque credits — and a field per vendor idea means a code change and a release
+      every time somebody meters something new. Tokens stay as their own fields: they are the
+      common case, they need the cached/uncached distinction a flat map cannot express, and
+      moving them would make every chat turn pay a lookup to price the thing it always prices.
+
+      **Added to the token cost, not substituted for it.** A reply that generates a picture costs
+      its tokens AND its image.
+
+      **An unpriced unit costs nothing and is not an error.** A plan-billed provider has no
+      marginal rate, and refusing to account for the turn because nobody wrote down a price would
+      stop the turn rather than the billing. The QUANTITY is recorded either way, so consumption
+      stays visible where the marginal cost is genuinely nil — which is also most of what the
+      plan-billed box below asks for.
+
+      Costs reach the budget through a collector on the context, following `ArtifactCollector`. A
+      builtin has no reference to the `TurnBudget` and should not: it would then be able to
+      refuse a turn on the budget's behalf, halfway through, from inside a tool. It is DRAINED
+      rather than read, because a turn generating two videos across two round-trips must not bill
+      the first one twice.
+
+      Image and speech report today. **Video does not yet** — the job completes asynchronously and
+      its cost lands on the poll handler, which is the next piece.
 - [x] A plan-billed provider whose quota is exhausted falls through to
       its backup and warns; it is not retried until reset, and it is
       not treated as a request error.

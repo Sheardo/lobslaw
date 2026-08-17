@@ -26,6 +26,15 @@ type ImageConfig struct {
 	// any set floor: an undeclared tier is not evidence of a high one.
 	TrustTier types.TrustTier
 
+	// Pricing is what this provider charges. Without it a generated
+	// image costs the turn nothing, the spend cap cannot fire on it,
+	// and the trace shows a free picture.
+	Pricing types.ProviderPricing
+
+	// Model is carried for the cost record, so an audit says which
+	// model was billed rather than only which provider.
+	Model string
+
 	// MaxPromptChars bounds one prompt. Image APIs reject over-long
 	// prompts with a 400, which costs a round trip to learn something
 	// checkable here. Zero picks DefaultImagePromptChars.
@@ -76,6 +85,12 @@ func newImageHandler(cfg ImageConfig) BuiltinFunc {
 		if err != nil {
 			return nil, 1, err
 		}
+
+		// Billed per IMAGE, not per token. One request today; a
+		// provider asked for variations would report the number it
+		// actually returned.
+		usage := Usage{Unit: types.UnitImages, Quantity: 1}
+		CollectCost(ctx, RecordCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
 
 		got, err := cfg.Resolver.Resolve(ctx, art, imageFileName(prompt))
 		if err != nil {

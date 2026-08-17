@@ -456,6 +456,11 @@ type llmEndpoint struct {
 	// modality's default, which is the OpenAI-compatible shape
 	// everywhere it has one.
 	driver string
+	// pricing is what the provider charges, carried through for the
+	// same reason trustTier is: looking it up again at registration
+	// could disagree with what was read here, and the disagreement
+	// would be silent.
+	pricing types.ProviderPricing
 }
 
 // findProvider scans cfg.Compute.Providers for one matching label.
@@ -550,6 +555,12 @@ func (n *Node) endpointFromProvider(modality string, p config.ProviderConfig, vi
 		// it travels with, and nothing would catch it.
 		label:     p.Label,
 		trustTier: p.TrustTier,
+		// Unset pricing is not an error: a plan-billed provider has no
+		// marginal rate to quote, and a modality that refused to run
+		// without one would be refusing over the accounting rather
+		// than the work. The quantity is recorded either way, so
+		// consumption stays visible where the marginal cost is nil.
+		pricing: p.Pricing,
 	}
 }
 

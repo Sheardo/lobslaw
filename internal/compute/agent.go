@@ -717,6 +717,10 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// unusual paths would lose something the user already paid for.
 	ctx, artifacts := WithArtifactCollector(ctx)
 	defer func() { resp.Attachments = artifacts.Collected() }()
+	// Generation costs come back this way. A builtin has no reference
+	// to the budget and should not: it would then be able to refuse a
+	// turn on the budget's behalf, halfway through, from inside a tool.
+	ctx, costs := WithCostCollector(ctx)
 
 	// Attribution is flushed on EVERY exit — normal, budget-exceeded,
 	// confirmation, hard timeout, loop exhausted. A turn that ended
@@ -757,6 +761,16 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 		}
 
 		budgetDecision := req.Budget.RecordCostUSD(chatResp.cost)
+		// Whatever the tools spent this round-trip, recorded BEFORE the
+		// exceeded check below acts on the total. A video generated on
+		// the round-trip that tips the turn over its cap is part of why
+		// it tipped over.
+
+		for _, rec := range costs.Drain() {
+			if d := req.Budget.RecordCostUSD(rec); d.Exceeded {
+				budgetDecision = d
+			}
+		}
 		if budgetDecision.Exceeded {
 			resp.NeedsConfirmation = true
 			resp.ConfirmationReason = fmt.Sprintf("budget exceeded on %s", budgetDecision.ExceededOn)
