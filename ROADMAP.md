@@ -2942,6 +2942,21 @@ of them.
 - [ ] A provider requiring short-lived OAuth tokens (Vertex) and one
       requiring per-request signing (Bedrock) are both configurable
       without a static `api_key`.
+      **The OAuth half is done.** `RefreshingCredential` caches a token behind a `TokenSource` and
+      renews it — with a refresh margin, because a token that expires mid-flight fails a call that
+      was valid when it started and the failure reads as an auth problem rather than a timing one.
+
+      The lock is held ACROSS the refresh, deliberately. Concurrent turns would otherwise each
+      mint a token: a stampede against a rate-limited endpoint, with all but one discarded.
+
+      A failed refresh does NOT fall back to the stale token. A refresh that failed says nothing
+      about whether the old token still works, and presenting an expired one produces a 401 that
+      reads as a misconfigured key rather than a token-endpoint outage. An unknown expiry is
+      treated as short rather than forever, or a dead token would be presented indefinitely.
+
+      **The signing half remains**: SigV4 needs the request body to compute its hash, which the
+      `Credential` interface can already reach through `GetBody` — so the seam holds, and what is
+      left is the algorithm itself, testable against AWS's published vectors.
 - [x] An artifact delivered to an operator-owned bucket lands in a
       lobslaw storage mount, with no download step.
       The mount kind returns the provider's own path untouched, and the test asserts nothing was
