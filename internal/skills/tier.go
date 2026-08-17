@@ -34,10 +34,29 @@ const (
 	// TierSigned is a bundle whose manifest verified against a trusted
 	// publisher key.
 	TierSigned
+
+	// TierDev is a skill from the operator's dev source, and it
+	// outranks EVERYTHING — including signed.
+	//
+	// That is the point and also the danger. The escape hatch for an
+	// operator who needs to override a signed skill locally has to be
+	// something other than bumping a version, because a rule that can
+	// be beaten by editing a number is not a rule. So it is a separate
+	// source, deliberately awkward: it must be configured explicitly
+	// AND the process must be started with LOBSLAW_DEV set, or the
+	// node refuses to boot.
+	//
+	// Two gates rather than one because either alone is easy to leave
+	// behind. A config file gets copied to production; an environment
+	// variable gets set in a shell profile and forgotten. Both at once
+	// is a coincidence somebody has to arrange.
+	TierDev
 )
 
 func (t SkillTier) String() string {
 	switch t {
+	case TierDev:
+		return "dev"
 	case TierSigned:
 		return "signed"
 	case TierOperator:

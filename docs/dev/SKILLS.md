@@ -780,3 +780,82 @@ made. Three things make it tolerable:
 Pinned proposals are exempt, like everything else pinned. A proposal
 with no `created_at` is left alone rather than expired — a missing
 timestamp is not evidence of age.
+
+---
+
+## Where skills come from
+
+| Source | Tier | How it gets in |
+|---|---|---|
+| dev source | `dev` | scanned directly, outranks everything |
+| signed import | `signed` | store → cache, signature verified |
+| operator import | `operator` | store → cache |
+| self-taught | `agent` | store → cache, capability floor |
+
+Precedence is **tier first**, then version, then directory. A version
+bump cannot promote a skill past its provenance.
+
+The mount is an **import source**, not a live one. Drop a skill in and
+it is imported into the store, replicated, materialised and loaded.
+Deleting the file does not remove the skill — it is in the store, and
+comes out with `lobslaw skills remove`.
+
+## The dev source
+
+Tier-first precedence leaves an operator with a real problem: a signed
+skill is misbehaving, they have a fix, and there is no way to try it.
+Bumping the version no longer wins, which is exactly what tier-first
+was for.
+
+So the escape hatch is a separate **source**, not a way to game the
+order:
+
+```toml
+[skills]
+dev_source = "/home/john/skills-dev"
+```
+
+```console
+$ LOBSLAW_DEV=1 lobslaw serve
+WARN skills: a DEV skill is overriding by tier skill=tidy dir=/home/john/skills-dev/tidy
+```
+
+Without `LOBSLAW_DEV` the node **refuses to start**:
+
+```
+skills: dev source is configured but LOBSLAW_DEV is not:
+  skills.dev_source = "/home/john/skills-dev" would outrank every signed
+  skill on this node. Set LOBSLAW_DEV=1 to develop against it, or remove
+  the setting
+```
+
+### Why two gates
+
+Either alone is easy to leave behind. A config file gets copied to
+production wholesale; an environment variable gets set in a shell
+profile and forgotten. **Both at once is a coincidence somebody has to
+arrange.**
+
+Refusing to boot is the answer rather than ignoring the setting. An
+operator who configured a dev source and had it silently skipped would
+develop against a skill that was never loaded; one who left it in a
+production config would be running an unsigned override without
+knowing. Neither is a state to start in.
+
+### Details
+
+- **One level**, `<dir>/<name>/manifest.yaml` — not the two-level cache
+  layout. This is a working directory somebody edits by hand, and
+  making them mint version subdirectories to try a change would defeat
+  the purpose.
+- **Never signature-checked.** A dev skill is by definition not the
+  published one; demanding a signature would make the hatch useless in
+  the case it exists for. The gates are on the *source*, not its
+  contents.
+- **Re-scanned every reconcile**, so an edit is picked up without a
+  restart.
+- **Warns on every override**, because it is a state the operator
+  should be reminded they are in.
+- A **missing** dev directory is refused, not treated as empty: a
+  typo'd path loads nothing and looks exactly like a directory whose
+  skills all failed to parse.
