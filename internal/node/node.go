@@ -486,10 +486,18 @@ func New(cfg Config) (*Node, error) {
 		grpc.ChainUnaryInterceptor(
 			grpcinterceptors.RequestID(log),
 			grpcinterceptors.Recovery(log),
+			// An operator credential administers the cluster; it does
+			// not take part in replication. Enforced at the server,
+			// because a check on the client is one the attacker
+			// controls.
+			grpcinterceptors.OperatorNotAPeer(),
 		),
 		grpc.ChainStreamInterceptor(
 			grpcinterceptors.RequestIDStream(log),
 			grpcinterceptors.RecoveryStream(log),
+			// Raft's transport is streaming, so without this half the
+			// guard covers nothing that matters.
+			grpcinterceptors.OperatorNotAPeerStream(),
 		),
 	)
 

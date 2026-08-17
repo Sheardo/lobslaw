@@ -3577,7 +3577,32 @@ read as though it were the cluster's, and answering confidently with nothing in 
 
 ### Acceptance
 
-- [ ] `lobslaw cluster sign-operator` issues a credential that administers but cannot join.
+- [x] `lobslaw cluster sign-operator` issues a credential that administers but cannot join.
+      **Two halves, and only both make the claim true.**
+
+      A node certificate carries `ServerAuth` as well as `ClientAuth`, because a node both dials
+      its peers and serves them — which is exactly what made handing one to a laptop equivalent
+      to handing over a cluster membership. An operator dials and is never dialled, so its
+      certificate is CLIENT AUTHENTICATION ONLY and nothing can serve with it.
+
+      That alone is not enough: a peer dials as a client too, so ClientAuth would still permit
+      opening a raft stream. The certificate carries `OU=operator`, and the server REFUSES that OU
+      on the raft transport — enforced at the server, because a check on the client is one the
+      attacker controls, and on the STREAMING interceptor too, because raft's transport is
+      streaming and a unary-only guard would cover nothing that matters.
+
+      An unidentified caller is refused on the peer-only path rather than admitted. mTLS is
+      mandatory on that listener, so a call arriving with no verified chain is not a configuration
+      this cluster has — and guessing in favour of the caller is the wrong way to be wrong about
+      consensus.
+
+      The OU rather than a CommonName prefix, because the CN is already the identity every service
+      reads for attribution; overloading it would make every reader parse a prefix, and the first
+      one that forgot would treat an operator as a node.
+
+      Shorter-lived than a node's by default: a person's credential lives on a laptop that
+      travels. Revoking it no longer requires rotating any node's identity, and an audit entry
+      names who rather than which host.
 - [ ] A named context replaces the four connection flags.
 - [ ] `memory`, `policy` and `audit` work against a remote node.
 - [ ] `session` and `identity` have services and live forms.

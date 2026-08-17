@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
@@ -22,7 +23,7 @@ func dispatchCluster(args []string) bool {
 	sub := args[idx+1:]
 	if len(sub) == 0 {
 		fmt.Fprintln(os.Stderr, "lobslaw cluster: subcommand required")
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, sign-operator")
 		os.Exit(2)
 	}
 	switch sub[0] {
@@ -30,11 +31,13 @@ func dispatchCluster(args []string) bool {
 		clusterCAInit(sub[1:])
 	case "sign-node":
 		clusterSignNode(sub[1:])
+	case "sign-operator":
+		clusterSignOperator(sub[1:])
 	case "reset":
 		clusterReset(sub[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "lobslaw cluster: unknown subcommand %q\n", sub[0])
-		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, reset")
+		fmt.Fprintln(os.Stderr, "available subcommands: ca-init, sign-node, sign-operator, reset")
 		os.Exit(2)
 	}
 	return true
@@ -278,4 +281,99 @@ func ensureDir(path string) error {
 func exitWith(msg string) {
 	fmt.Fprintln(os.Stderr, "lobslaw:", msg)
 	os.Exit(1)
+}
+
+// clusterSignOperator issues a credential for a PERSON.
+//
+// Distinct from sign-node because a node certificate is the wrong
+// thing to hand somebody: it carries ServerAuth, so a laptop holding
+// one can present itself as a cluster member. Revoking one operator
+// would also mean rotating a node's identity, and every action they
+// took would be attributed to a host rather than to them.
+func clusterSignOperator(args []string) {
+	fs := flag.NewFlagSet("cluster sign-operator", flag.ExitOnError)
+	cfgPath := fs.String("config", envOr("LOBSLAW_CONFIG", ""),
+		"path to config.toml; pre-fills --ca-cert from [cluster.mtls]")
+	caCert := fs.String("ca-cert", envOr("LOBSLAW_CA_CERT", ""), "path to the CA public certificate")
+	caKey := fs.String("ca-key", envOr("LOBSLAW_CA_KEY", ""),
+		"path to the CA private key (consumed only by this subcommand)")
+	out := fs.String("out", "", "directory to write operator.pem, operator-key.pem and ca.pem into")
+	validFor := fs.Duration("valid-for", 90*24*time.Hour,
+		"validity duration; shorter than a node's by default because a person's credential travels")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	rest := fs.Args()
+	if len(rest) != 1 || strings.TrimSpace(rest[0]) == "" {
+		exitWith("cluster sign-operator: exactly one operator name is required\n\n" +
+			"  lobslaw cluster sign-operator alice --out ~/.config/lobslaw/prod")
+	}
+	name := strings.TrimSpace(rest[0])
+
+	if *cfgPath != "" {
+		cfg, err := config.Load(config.LoadOptions{Path: *cfgPath, SkipEnv: true})
+		if err != nil {
+			exitWith(fmt.Sprintf("cluster sign-operator: load --config %q: %v", *cfgPath, err))
+		}
+		if *caCert == "" {
+			*caCert = cfg.Cluster.MTLS.CACert
+		}
+		// The runtime config never carries the CA private key. Probe
+		// the init-flow layout, as sign-node does.
+		if *caKey == "" && *caCert != "" {
+			guess := filepath.Join(filepath.Dir(*caCert), "ca-key.pem")
+			if _, err := os.Stat(guess); err == nil {
+				*caKey = guess
+			}
+		}
+	}
+	if *caCert == "" || *caKey == "" {
+		exitWith("cluster sign-operator: --ca-cert and --ca-key are required " +
+			"(or pass --config to read them from [cluster.mtls])")
+	}
+	if *out == "" {
+		exitWith("cluster sign-operator: --out is required; it names the directory the operator " +
+			"will point --context at")
+	}
+
+	certPath := filepath.Join(*out, "operator.pem")
+	keyPath := filepath.Join(*out, "operator-key.pem")
+	if err := ensureDir(certPath); err != nil {
+		exitWith(err.Error())
+	}
+
+	ca, key, err := mtls.LoadCA(*caCert, *caKey)
+	if err != nil {
+		exitWith(fmt.Sprintf("load CA: %v", err))
+	}
+	certPEM, keyPEM, err := mtls.SignOperatorCert(ca, key, mtls.SignOpts{
+		NodeID:   name,
+		ValidFor: *validFor,
+	})
+	if err != nil {
+		exitWith(fmt.Sprintf("sign operator cert: %v", err))
+	}
+	if err := mtls.WriteNodeFiles(certPath, keyPath, certPEM, keyPEM); err != nil {
+		exitWith(fmt.Sprintf("write operator files: %v", err))
+	}
+
+	// The CA public cert travels with it. An operator needs it to
+	// verify the cluster, and a credential they cannot use without
+	// hunting down a second file is one they will copy carelessly.
+	caPEM, err := os.ReadFile(*caCert)
+	if err != nil {
+		exitWith(fmt.Sprintf("read CA cert for copy: %v", err))
+	}
+	if err := mtls.WriteCAPublic(filepath.Join(*out, "ca.pem"), caPEM); err != nil {
+		exitWith(fmt.Sprintf("copy CA public cert: %v", err))
+	}
+
+	fmt.Printf("Signed an OPERATOR certificate for %q:\n", name)
+	fmt.Printf("  cert: %s\n  key : %s\n  ca  : %s\n",
+		certPath, keyPath, filepath.Join(*out, "ca.pem"))
+	fmt.Printf("Valid for %s.\n\n", *validFor)
+	fmt.Println("This credential administers the cluster and CANNOT take part in replication:")
+	fmt.Println("  - client authentication only, so nothing can serve with it")
+	fmt.Println("  - refused on the raft transport, enforced at the server")
+	fmt.Println("Revoking it does not require rotating any node's identity.")
 }
