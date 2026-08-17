@@ -56,7 +56,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R11** | [Channel breadth](#r11--channel-breadth) | ⬜ | 🟡 P2 | L | — |
 | **R12** | [Memory transparency](#r12--memory-transparency) | ✅ | 🟡 P2 | M | — |
 | **R13** | [Progressive skill disclosure](#r13--progressive-skill-disclosure) | ✅ | 🟠 P1 | M | R15, R16 |
-| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | 🟡 | 🟠 P1 | S | — |
+| **R14** | [Pinned tier-0 memory](#r14--pinned-tier-0-memory) | ✅ | 🟠 P1 | S | — |
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
 | **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ✅ | 🟡 P2 | M | R17 |
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
@@ -2012,8 +2012,33 @@ provenance of the *content*.
       attempt — and stop touching the store; the user still gets a reply.
 - [x] promptguard on write: these land in system position, and provenance of the store is not
       provenance of the content.
-- [ ] Dream acting on the threshold. `NeedsConsolidation` is the signal; wiring Dream to propose a
-      merge from it is the remaining half, and belongs with the Dream phase rather than here.
+- [x] Dream acting on the threshold.
+      `NeedsConsolidation` was a signal with nothing reading it. Its own doc says why it fires
+      early — "consolidate BEFORE a write fails, so the pressure produces curation in the
+      background rather than an error the user sees" — and nothing did the curating, so the
+      pressure produced the error instead.
+
+      **Background curation, not an approval flow**, which is what that doc describes. It follows
+      the merge phase's shape exactly: propose to the Summarizer, act only on a result that is
+      demonstrably safe, and do nothing at all when no Summarizer is wired — a Dream pass on a
+      node with no LLM must not quietly rewrite the one memory the user authored by hand.
+
+      **The refusals are what make it safe unattended.** A summariser asked to compact somebody's
+      notes can return anything, and what it returns REPLACES memory no retrieval pass can
+      reconstruct. Refused: an empty result (the user would have to remember what they had asked
+      to be remembered), one that is not shorter (the assistant rewording their notes for no
+      benefit, again every pass), one that is fewer entries but MORE characters (length is what
+      the cap measures), and one still over the cap. A single-entry block is left alone entirely:
+      shortening it is editing what the user wrote rather than deduplicating what they wrote
+      twice.
+
+      The rewrite goes through the same `mutate` path as every other write, so the promptguard
+      scan applies — a consolidation arrives from a MODEL and lands in system position on every
+      future turn.
+
+      A refusal logs at ERROR, not WARN: it means the block is still near its cap *and* the thing
+      meant to fix it produced something unusable, so the user is heading for the failure this
+      exists to prevent.
 
 Editing is by unique substring rather than by id, and an ambiguous fragment is refused rather than
 guessed at — editing the wrong memory is worse than being told to be more specific.

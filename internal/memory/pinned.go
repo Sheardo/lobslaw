@@ -304,3 +304,56 @@ func (p *PinnedStore) NeedsConsolidation(kind PinnedKind, userID string) (bool, 
 	}
 	return float64(used) >= float64(limit)*ConsolidationThreshold, nil
 }
+
+// ReplaceAll swaps a block's entries wholesale.
+//
+// For Dream's consolidation pass, which produces a new set rather than
+// editing one entry. It goes through the same mutate path as every
+// other write — so the promptguard scan and the cap check apply
+// identically. A consolidation that returned an instruction-shaped
+// entry would otherwise land in system position on every future turn,
+// and it arrived from a model rather than from the user.
+func (p *PinnedStore) ReplaceAll(ctx context.Context, kind PinnedKind, userID string, entries []string) error {
+	return p.mutate(ctx, kind, userID, func([]string) ([]string, error) {
+		out := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if e = strings.TrimSpace(e); e != "" {
+				out = append(out, e)
+			}
+		}
+		return out, nil
+	})
+}
+
+// pinnedOwner identifies one block.
+type pinnedOwner struct {
+	kind  PinnedKind
+	owner string
+}
+
+// pinnedOwners enumerates the blocks that exist.
+//
+// Read from the store rather than from a list of known users: a user
+// who has never pinned anything has no block, and one whose account is
+// gone still has theirs until it is forgotten. Either way the answer
+// is what is actually stored.
+func pinnedOwners(store *Store) ([]pinnedOwner, error) {
+	var out []pinnedOwner
+	err := store.ForEach(BucketPinned, func(_ string, value []byte) error {
+		var rec lobslawv1.PinnedMemory
+		if err := proto.Unmarshal(value, &rec); err != nil {
+			// One unreadable record must not stop the pass: the others
+			// are still over their thresholds.
+			return nil
+		}
+		if rec.GetUserId() == "" || rec.GetKind() == "" {
+			return nil
+		}
+		out = append(out, pinnedOwner{kind: PinnedKind(rec.GetKind()), owner: rec.GetUserId()})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
