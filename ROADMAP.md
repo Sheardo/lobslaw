@@ -1476,7 +1476,31 @@ so the existing resolver/capability/roles tests stay green throughout.
 - [x] Health tracking: a provider that failed recently is skipped rather than re-tried every turn.
       Per-node, not Raft; no half-open probe state — the chain is the probe.
 - [ ] A chain step falls through without abandoning the chain.
-      **Blocked on something larger: chains do not route at all.** `Resolver.Resolve` has no
+      **Unblocked — chains route now.** `Resolver.Resolve` is on the turn path: the resolved chain
+      picks WHERE THE BACKUP WALK BEGINS, so everything the walk already did (the trust floor at
+      every candidate, health cooldowns, failure classification, a span per attempt) applies
+      unchanged and a chain decides its start.
+
+      The signal that was missing: `min_complexity` and `domains` had no producer anywhere, so of
+      the three trigger kinds only `always` could ever have fired. A preflight judge now supplies
+      a complexity score, domain tags and a hint from the cheap `[compute.roles] preflight` model
+      — the role already existed for exactly this shape of work. It is bounded and its failures
+      are cheap: an unavailable or nonsensical preflight yields the neutral judgment and the turn
+      routes on the default, because a turn must not die because the thing that decides HOW to
+      route it was unavailable.
+
+      **A found bug, worth recording.** When no chain matches, the resolver synthesises a
+      fallback picking the highest-trust provider, breaking ties alphabetically. That answers
+      "who could serve this at all" and is the wrong answer to "where should this start" — with
+      two equal-trust providers it silently moved every unmatched turn off `roles.main` and onto
+      whichever label sorted first. Routing now overrides the primary ONLY when a chain actually
+      matched. Caught by a test asserting a complexity-5 greeting still starts at the primary.
+
+      What remains is the multi-step half: a chain's later steps are resolved and carried on the
+      turn, but only the first is dispatched. Step-level fallthrough and reviewer handoff (each
+      step's output rendered into the next step's `prompt_template`) is the follow-up.
+
+      *Previously recorded here:* `Resolver.Resolve` has no
       callers — verified exhaustively, `ResolveRequest` is constructed nowhere and
       `Node.Resolver()` is never read. The turn path is `ProviderRegistry.Chain`, which walks
       `backup` links and knows nothing about triggers, multi-step chains or per-chain trust floors.
@@ -1511,7 +1535,18 @@ so the existing resolver/capability/roles tests stay green throughout.
       defence in depth otherwise. The duplicate boot check added alongside it has been removed:
       it warned for backups, implying a leniency the real check does not offer.
 
-- [ ] `hint = "deep"` resolves through a chain an operator can inspect and override.
+- [x] `hint = "deep"` resolves through a chain an operator can inspect and override.
+      A hint selects the chain whose LABEL matches it, so `deep` means whatever the `deep` chain
+      in the operator's config says it means, and editing that chain redefines the hint. Sugar
+      over chains, not a second mechanism: a hint naming no chain falls through to ordinary
+      trigger matching rather than inventing a route, and a hinted chain is held to the same
+      trust floor as a triggered one.
+
+      An explicit hint from a channel or API caller SKIPS the preflight call entirely — somebody
+      who said "deep" has already answered the only question it was going to ask. An
+      unrecognised hint, from the caller or from the model, is discarded rather than passed on:
+      it would match no chain and route to the default, which is indistinguishable from having
+      had no opinion.
 - [x] Per-attempt audit entries (provider, latency, outcome, cost).
       Landed as R24's span model rather than as a separate mechanism — a per-attempt record and a
       turn trace are the same data, and building both would have produced two accounts of one turn

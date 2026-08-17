@@ -98,6 +98,21 @@ max_tool_calls_per_turn   = 30
 max_spend_usd_per_turn    = 0.50
 max_egress_bytes_per_turn = 10_000_000
 
+# Chains route turns. A chain fires when its trigger matches the
+# preflight's judgment of the turn, and picks where the provider
+# backup-walk begins — so the trust floor, health cooldowns and
+# per-attempt failover all still apply to everything after it.
+#
+# A chain LABELLED "fast" / "balanced" / "deep" / "reasoning" is also
+# what the matching hint selects, so `hint` is sugar over these and
+# editing the chain redefines what the hint means.
+#
+# [[compute.chains]]
+# label = "deep"
+# steps = [{ provider = "big-model" }]
+# [compute.chains.trigger]
+# min_complexity = 70
+
 # Plugins are installed with `lobslaw plugin install <source>`, which
 # writes into the skills root. There is no [[compute.plugins]] section —
 # there was one, and nothing read it.

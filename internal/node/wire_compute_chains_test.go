@@ -1,132 +1,159 @@
 package node
 
 import (
-	"bytes"
-	"log/slog"
-	"strings"
 	"testing"
 
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// `[[compute.chains]]` is parsed, validated for coherence, and then
-// nothing routes through it: Resolver.Resolve has no callers, and the
-// turn path is the provider backup chain, which knows about `backup`
-// links and nothing about triggers or multi-step chains.
+// Chains route now.
 //
-// That is the same shape as the trust floor before it was enforced —
-// config that looks like it works. The difference is that a floor
-// silently permitted something, where a chain silently does nothing;
-// but an operator reading their own config cannot tell either way, and
-// that is the part worth fixing now rather than when the routing
-// lands.
+// They used to be parsed, validated for coherence, logged at boot — and
+// inert: Resolver.Resolve had no callers, and the turn path went
+// straight to ProviderRegistry.Chain(PrimaryLabel), which walks
+// `backup` links and knows nothing about triggers or per-chain floors.
+// This file used to assert the boot warning that admitted as much.
+//
+// What replaced it: the resolver picks WHERE THE BACKUP WALK BEGINS.
+// Everything the walk already did — the floor at every candidate,
+// health cooldowns, a span per attempt — is unchanged.
 
-func nodeWithChains(t *testing.T, chains []config.ChainConfig, defaultChain string) (*Node, *bytes.Buffer) {
+func chainNode(t *testing.T, chains []config.ChainConfig, defaultChain string) *Node {
 	t.Helper()
-	var logs bytes.Buffer
-	n := &Node{
-		log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	}
+	n := &Node{}
 	n.cfg.Compute = config.ComputeConfig{
-		Providers: []config.ProviderConfig{{
-			Label: "main", Endpoint: "https://example.invalid", Model: "m",
-			TrustTier: types.TrustPrivate,
-		}},
+		Providers: []config.ProviderConfig{
+			{Label: "cheap", Endpoint: "https://example.invalid", Model: "s", TrustTier: types.TrustPrivate},
+			{Label: "big", Endpoint: "https://example.invalid", Model: "l", TrustTier: types.TrustPrivate},
+		},
 		Chains:       chains,
 		DefaultChain: defaultChain,
 	}
-	return n, &logs
+	r, err := compute.NewResolver(&n.cfg.Compute)
+	if err != nil {
+		t.Fatalf("resolver: %v", err)
+	}
+	n.resolver = r
+	return n
 }
 
-func TestAConfiguredChainIsReportedAsInert(t *testing.T) {
+func deepChain() config.ChainConfig {
+	return config.ChainConfig{
+		Label:   "deep",
+		Trigger: config.ChainTriggerConfig{MinComplexity: 70},
+		Steps:   []config.ChainStepConfig{{Provider: "big"}},
+	}
+}
+
+// A hard turn reaches the chain configured for hard turns. Before this,
+// it reached whatever roles.main pointed at, whatever the config said.
+func TestAComplexTurnRoutesToItsChain(t *testing.T) {
 	t.Parallel()
-	n, logs := nodeWithChains(t, []config.ChainConfig{{
+	n := chainNode(t, []config.ChainConfig{deepChain()}, "")
+	got, err := n.resolver.Resolve(compute.ResolveRequest{Complexity: 85})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ChainLabel != "deep" {
+		t.Errorf("chain = %q, want deep", got.ChainLabel)
+	}
+	if got.Steps[0].Provider.Label != "big" {
+		t.Errorf("start = %q, want big", got.Steps[0].Provider.Label)
+	}
+}
+
+// Below the trigger it must NOT fire, or a min_complexity threshold is
+// decoration.
+func TestASimpleTurnDoesNotTakeTheDeepChain(t *testing.T) {
+	t.Parallel()
+	n := chainNode(t, []config.ChainConfig{deepChain()}, "")
+	got, err := n.resolver.Resolve(compute.ResolveRequest{Complexity: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ChainLabel == "deep" {
+		t.Error("a complexity-20 turn took the deep chain")
+	}
+}
+
+// The hint is sugar over chains: it selects the chain of the same
+// LABEL, so an operator can read what `deep` means in their own config
+// file and redefine it by editing that chain.
+func TestAHintResolvesThroughAChainAnOperatorCanRead(t *testing.T) {
+	t.Parallel()
+	n := chainNode(t, []config.ChainConfig{deepChain()}, "")
+	got, err := n.resolver.Resolve(compute.ResolveRequest{
+		Complexity: 5, // low: nothing here triggers except the hint
+		Hint:       compute.HintDeep,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ChainLabel != "deep" {
+		t.Errorf("chain = %q; the hint did not select its chain", got.ChainLabel)
+	}
+	if got.TriggerReason != "hint=deep" {
+		t.Errorf("reason = %q; an operator cannot see the hint fired", got.TriggerReason)
+	}
+}
+
+// An operator who redefines the `deep` chain has redefined what the
+// hint means. That is the whole point of it being sugar.
+func TestOverridingTheChainOverridesTheHint(t *testing.T) {
+	t.Parallel()
+	overridden := config.ChainConfig{
 		Label: "deep",
-		Steps: []config.ChainStepConfig{{Provider: "main", Role: "primary"}},
+		Steps: []config.ChainStepConfig{{Provider: "cheap"}},
+	}
+	n := chainNode(t, []config.ChainConfig{overridden}, "")
+	got, err := n.resolver.Resolve(compute.ResolveRequest{Hint: compute.HintDeep})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Steps[0].Provider.Label != "cheap" {
+		t.Errorf("start = %q; the operator's definition of deep was ignored",
+			got.Steps[0].Provider.Label)
+	}
+}
+
+// A hint naming no chain must not invent a route. Falling through to
+// ordinary matching keeps one mental model rather than two.
+func TestAHintWithNoChainFallsThrough(t *testing.T) {
+	t.Parallel()
+	n := chainNode(t, []config.ChainConfig{deepChain()}, "")
+	got, err := n.resolver.Resolve(compute.ResolveRequest{
+		Complexity: 85,
+		Hint:       compute.HintFast, // no "fast" chain configured
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ChainLabel != "deep" {
+		t.Errorf("chain = %q; an unmatched hint should fall through to triggers", got.ChainLabel)
+	}
+}
+
+// A chain is atomic: a step below the floor rejects the whole chain,
+// because a "reviewer step" on a weaker provider leaks the turn to
+// that weaker tier.
+func TestAHintedChainBelowTheFloorDoesNotBypassIt(t *testing.T) {
+	t.Parallel()
+	n := chainNode(t, []config.ChainConfig{{
+		Label: "deep",
+		Steps: []config.ChainStepConfig{{Provider: "cheap"}},
 	}}, "")
-
-	if err := n.wireResolver(); err != nil {
+	n.cfg.Compute.Providers[0].TrustTier = types.TrustPublic
+	r, err := compute.NewResolver(&n.cfg.Compute)
+	if err != nil {
 		t.Fatal(err)
 	}
-	out := logs.String()
-	if !strings.Contains(out, "do NOT route turns") {
-		t.Fatalf("no warning was emitted:\n%s", out)
-	}
-	// Naming the chain, because "chains do nothing" without saying
-	// which leaves an operator checking a config they already read.
-	if !strings.Contains(out, "deep") {
-		t.Errorf("the warning does not name the chain:\n%s", out)
-	}
-	// And naming what IS used, or the operator is told what is broken
-	// without being told what to look at instead.
-	if !strings.Contains(out, "roles.main") || !strings.Contains(out, "backup") {
-		t.Errorf("the warning does not say what routes instead:\n%s", out)
-	}
-}
-
-// A deployment that never wrote a chain does not need telling about a
-// feature it is not using. A boot warning that fires for everybody is
-// one nobody reads.
-func TestNoChainsMeansNoWarning(t *testing.T) {
-	t.Parallel()
-	n, logs := nodeWithChains(t, nil, "")
-
-	if err := n.wireResolver(); err != nil {
-		t.Fatal(err)
-	}
-	if logs.Len() != 0 {
-		t.Errorf("a deployment with no chains was warned:\n%s", logs.String())
-	}
-}
-
-// default_chain on its own is the same misunderstanding with no
-// [[compute.chains]] block to make it obvious.
-func TestADefaultChainAloneStillWarns(t *testing.T) {
-	t.Parallel()
-	n, logs := nodeWithChains(t, []config.ChainConfig{{
-		Label: "fallback",
-		Steps: []config.ChainStepConfig{{Provider: "main"}},
-	}}, "fallback")
-
-	if err := n.wireResolver(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(logs.String(), "fallback") {
-		t.Errorf("default_chain was not reported:\n%s", logs.String())
-	}
-}
-
-// Warn, not refuse. A config accepted yesterday must not stop a node
-// booting today, and a chain is inert rather than dangerous — the turn
-// still runs, on the provider it would have run on anyway.
-func TestInertChainsDoNotBlockBoot(t *testing.T) {
-	t.Parallel()
-	n, _ := nodeWithChains(t, []config.ChainConfig{{
-		Label: "deep",
-		Steps: []config.ChainStepConfig{{Provider: "main"}},
-	}}, "")
-
-	if err := n.wireResolver(); err != nil {
-		t.Errorf("an inert chain blocked boot: %v", err)
-	}
-	if n.resolver == nil {
-		t.Error("the resolver was not built; its validation is the reason to keep it")
-	}
-}
-
-// The validation is why the resolver survives at all. A chain naming a
-// provider that does not exist must still fail, or deleting the
-// routing would silently start accepting broken chains.
-func TestABrokenChainStillFailsToWire(t *testing.T) {
-	t.Parallel()
-	n, _ := nodeWithChains(t, nil, "nonexistent")
-	n.cfg.Compute.Chains = []config.ChainConfig{{
-		Label: "deep",
-		Steps: []config.ChainStepConfig{{Provider: "no-such-provider"}},
-	}}
-
-	if err := n.wireResolver(); err == nil {
-		t.Error("a chain naming an unknown provider wired cleanly")
+	got, err := r.Resolve(compute.ResolveRequest{
+		Hint:         compute.HintDeep,
+		MinTrustTier: types.TrustLocal,
+	})
+	if err == nil && got != nil && got.ChainLabel == "deep" {
+		t.Error("a hint routed the turn to a provider below the trust floor")
 	}
 }

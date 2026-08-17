@@ -38,6 +38,17 @@ type ResolveRequest struct {
 	// with TrustTier < MinTrustTier is rejected even if the chain
 	// would otherwise allow it.
 	MinTrustTier types.TrustTier
+
+	// Hint is the coarse routing vocabulary — "fast", "deep" — from
+	// the caller or the preflight.
+	//
+	// SUGAR OVER CHAINS, NOT A SECOND MECHANISM. A hint selects the
+	// chain whose LABEL matches it, so `hint = "deep"` resolves
+	// through a chain the operator can read in their config file and
+	// redefine by editing it. A hint naming no chain falls through to
+	// ordinary trigger matching, because inventing a route for it
+	// would be the second mental model this was meant to avoid.
+	Hint Hint
 }
 
 // ResolveDecision is the output — a concrete chain the caller can
@@ -192,6 +203,24 @@ func (r *Resolver) Resolve(req ResolveRequest) (*ResolveDecision, error) {
 	if !req.MinTrustTier.IsValid() {
 		// Empty is treated as "no floor" — public is the most permissive.
 		req.MinTrustTier = types.TrustPublic
+	}
+
+	// A hint is an answer, so it is consulted before triggers. It
+	// still goes through buildDecision, so a hinted chain is held to
+	// exactly the same trust floor as a triggered one.
+	if req.Hint != "" {
+		for _, ch := range r.chains {
+			if ch.Label != string(req.Hint) {
+				continue
+			}
+			if decision, err := r.buildDecision(ch, req, "hint="+string(req.Hint)); err == nil {
+				return decision, nil
+			}
+			// A hinted chain that fails the floor falls through rather
+			// than failing the turn: the hint said how to answer, not
+			// that answering was conditional on it.
+			break
+		}
 	}
 
 	for _, ch := range r.chains {
