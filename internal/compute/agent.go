@@ -79,6 +79,18 @@ type AgentConfig struct {
 	// involves tool calls (i.e. most of them).
 	Executor *Executor
 
+	// Resolver picks which chain a turn runs on, from
+	// [[compute.chains]] triggers and the preflight's judgment. Nil
+	// starts every turn at PrimaryLabel, which is what happened before
+	// chains routed at all.
+	Resolver *Resolver
+
+	// Judge produces the routing signal — a complexity score, domain
+	// tags and a hint — from a cheap preflight model. Nil is usable
+	// and yields the neutral judgment, so only `always` and
+	// hint-labelled chains can match.
+	Judge *Judge
+
 	// Registry supplies the tool list advertised to the LLM on
 	// every turn. Channels shouldn't each have to know to plumb
 	// this — the agent pulls its own tool list at turn start. Nil
@@ -342,6 +354,12 @@ type ProcessMessageRequest struct {
 	Channel   string
 	ChannelID string
 
+	// Hint routes this turn explicitly — "fast", "deep". Set by a
+	// channel or an API caller who already knows how much thought the
+	// turn deserves. An explicit hint SKIPS the preflight call: it
+	// answers the only question the preflight was going to ask.
+	Hint Hint
+
 	// IsReviewFork marks a turn as the post-turn review replaying a
 	// conversation. The recursion guard: without it the first review
 	// triggers the second, and a review of a review is meaningless and
@@ -500,6 +518,11 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// A nil recorder leaves the context untouched, which is what a
 	// deployment with tracing off gets.
 	ctx = trace.WithTurn(ctx, a.cfg.Traces, req.TurnID)
+	// Routed ONCE, at turn start. A tool-call loop dispatches many
+	// times, and re-judging on each would pay for a preflight per
+	// round-trip and could route one turn two different ways
+	// mid-conversation.
+	ctx = WithRoute(ctx, a.resolveRoute(ctx, req))
 	a.fillDefaults(ctx, &req)
 	seeded := a.seedMessages(req)
 	// The user message is the last thing seedMessages appends, so
@@ -1178,7 +1201,14 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 		return a.bareDispatch(ctx, req)
 	}
 
-	chain := a.cfg.Providers.Chain(a.cfg.PrimaryLabel)
+	// The chain decides where the walk BEGINS; the walk itself is
+	// unchanged, so the trust floor, health cooldowns and per-attempt
+	// spans all still apply to every candidate after the first.
+	start := a.cfg.PrimaryLabel
+	if route := RouteFrom(ctx); route != nil && route.StartLabel != "" {
+		start = route.StartLabel
+	}
+	chain := a.cfg.Providers.Chain(start)
 	if len(chain) == 0 {
 		return a.bareDispatch(ctx, req)
 	}

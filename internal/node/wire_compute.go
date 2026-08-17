@@ -180,33 +180,31 @@ func (n *Node) wireResolver() error {
 		return fmt.Errorf("resolver: %w", err)
 	}
 	n.resolver = r
-	n.warnChainsAreInert()
 	return nil
 }
 
-// warnChainsAreInert tells an operator their chains do not route.
+// newJudge builds the routing signal from the preflight role.
 //
-// Warn rather than refuse. A config that was accepted yesterday must
-// not stop a node booting today, and a chain is inert rather than
-// dangerous — the turn still runs, on the provider it would have run
-// on anyway. What it is not is what the operator thinks.
-//
-// Only when chains are actually configured. A deployment that never
-// wrote one does not need to be told about a feature it is not using,
-// and a boot warning that fires for everybody is one nobody reads.
-func (n *Node) warnChainsAreInert() {
-	if len(n.cfg.Compute.Chains) == 0 && n.cfg.Compute.DefaultChain == "" {
-		return
+// The preflight role already existed for this shape of work — a small,
+// fast model classifying ahead of the main turn — and falls back to
+// main when unset, so a deployment that never configured one still
+// routes, just at the main model's price.
+func (n *Node) newJudge() *compute.Judge {
+	if n.roleMap == nil {
+		return nil
 	}
-	labels := make([]string, 0, len(n.cfg.Compute.Chains))
-	for _, ch := range n.cfg.Compute.Chains {
-		labels = append(labels, ch.Label)
+	label := n.cfg.Compute.Roles.Preflight
+	if label == "" {
+		label = n.primaryProviderLabel()
 	}
-	n.log.Warn("compute: [[compute.chains]] are validated but do NOT route turns yet; "+
-		"provider selection uses roles.main plus the `backup` links between providers",
-		"chains", labels,
-		"default_chain", n.cfg.Compute.DefaultChain,
-		"routing_in_use", "roles.main + provider.backup")
+	var model string
+	for _, p := range n.cfg.Compute.Providers {
+		if p.Label == label {
+			model = p.Model
+			break
+		}
+	}
+	return compute.NewJudge(n.roleMap.For(compute.RolePreflight), model, n.log)
 }
 
 // wireLLMProviders builds the LLM clients: injection wins for the main
@@ -334,6 +332,8 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		PrimaryLabel: primaryLabel,
 		Traces:       n.traces,
 		Providers:    n.providerRegistry,
+		Resolver:     n.resolver,
+		Judge:        n.newJudge(),
 		Health:       n.providerHealth,
 		Executor:     n.executor,
 		Registry:     n.toolRegistry,
