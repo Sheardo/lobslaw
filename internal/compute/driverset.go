@@ -22,12 +22,13 @@ import (
 // implementations import compute for the request types, so compute
 // cannot import them back. internal/node assembles the real set.
 type DriverSet struct {
-	chat   map[string]ChatDriverFactory
-	speak  map[string]SpeakDriverFactory
-	image  map[string]ImageDriverFactory
-	job    map[string]JobDriverFactory
-	vision map[string]VisionDriverFactory
-	audio  map[string]AudioDriverFactory
+	chat      map[string]ChatDriverFactory
+	speak     map[string]SpeakDriverFactory
+	image     map[string]ImageDriverFactory
+	job       map[string]JobDriverFactory
+	vision    map[string]VisionDriverFactory
+	audio     map[string]AudioDriverFactory
+	embedding map[string]EmbeddingDriverFactory
 }
 
 // ChatDriverConfig is what every chat driver is built from. Fields a
@@ -119,6 +120,11 @@ const (
 	// the SHAPE rather than the vendor, because several providers offer
 	// it and none of them owns it.
 	DriverChatMultimodal = "openrouter"
+
+	// DriverMiniMax is MiniMax's embedding shape: {texts, model, type}
+	// returning {vectors}, and reporting failure in a body field on an
+	// HTTP 200.
+	DriverMiniMax = "minimax"
 )
 
 // MockChatFactory builds a mock chat driver from config.

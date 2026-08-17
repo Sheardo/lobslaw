@@ -2770,9 +2770,9 @@ This entry said ⬜ while three modalities were shipping, which is how a roadmap
 Reconciling the boxes against what exists is worth doing before R26 builds a second vendor on top
 of them.
 
-- [ ] One `Driver` type; no `VisionFormat` / `AudioFormat` /
+- [x] One `Driver` type; no `VisionFormat` / `AudioFormat` /
       `EmbeddingFormat` remain.
-      **Vision and audio are done; embeddings remain, and PDF never had the problem.** `read_image` switched on a
+      **Done.** No wire-protocol format enum survives. `read_image` switched on a
       `VisionFormat` in two places — once to build the request, once to decode the reply — with
       three vendors inlined in each, so `driver = "anthropic"` selected the chat wire shape and
       said nothing about the vision one. It now resolves a `VisionDriver` from the `DriverSet`
@@ -2802,8 +2802,25 @@ of them.
       now points at the driver seam instead so the next vendor does not reintroduce the switch
       that has twice been taken out.
 
-      Embeddings is what remains: `EmbeddingFormat` is threaded through the client struct and
-      switched on at five sites, including a batch path whose index mapping needs care.
+      Embeddings was the worst of them: `EmbeddingFormat` threaded through the client struct and
+      switched on at FIVE sites, with no tests at all. The client keeps what is genuinely its own
+      — the endpoint suffix rule, the egress-scoped HTTP client, the declared dimension, and the
+      re-projection of vectors around filtered-out empty inputs — and the drivers own the bytes.
+      It takes a FACTORY rather than a built driver, because the suffix rule runs first and the
+      driver needs the normalised endpoint.
+
+      The single and batch paths stayed separate methods rather than collapsing into one: OpenAI
+      sends `input` as a bare string for one text and an array for many, and unifying them would
+      have changed the bytes every existing deployment sends to save a method.
+
+      Writing the missing tests turned up the sharpest thing in the whole conversion. **The
+      OpenAI batch response is placed by its `index` field, not by arrival order** — the API does
+      not promise the array comes back sorted, and a batch reassembled in arrival order attaches
+      every memory to the wrong text. Nothing downstream can detect that, because a vector is a
+      plausible vector whichever text it came from.
+
+      `mimeForAudioFormat` in `speak.go` survives and should: it maps an output CONTAINER to a
+      MIME type (`wav` → `audio/wav`), which is not wire-protocol dispatch.
 - [ ] A node boots from a config whose every provider is `driver =
       "mock"`, with no network access, and serves a full turn.
 - [ ] A vision provider whose primary returns 503 falls through to its

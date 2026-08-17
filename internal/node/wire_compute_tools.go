@@ -167,13 +167,19 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embeddings api key: %w", err)
 	}
+	// Resolved at BOOT: an embeddings block naming a driver this node
+	// cannot build should fail on start-up, not on the first recall.
+	embFactory, err := n.drivers().EmbeddingFactory(n.cfg.Compute.Embeddings.Format)
+	if err != nil {
+		return nil, fmt.Errorf("embeddings: %w", err)
+	}
 	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
-		Endpoint: n.cfg.Compute.Embeddings.Endpoint,
-		APIKey:   embKey,
-		Model:    n.cfg.Compute.Embeddings.Model,
-		Dims:     n.cfg.Compute.Embeddings.Dims,
-		Format:   compute.EmbeddingFormat(n.cfg.Compute.Embeddings.Format),
-		Logger:   n.log,
+		Endpoint:      n.cfg.Compute.Embeddings.Endpoint,
+		DriverFactory: embFactory,
+		APIKey:        embKey,
+		Model:         n.cfg.Compute.Embeddings.Model,
+		Dims:          n.cfg.Compute.Embeddings.Dims,
+		Logger:        n.log,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("embedding client: %w", err)
