@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordingStarter struct {
@@ -156,5 +157,53 @@ func TestTheProviderLabelReachesTheCommitment(t *testing.T) {
 	}
 	if s.label != "video-vendor" {
 		t.Errorf("label = %q; the job cannot be priced when it completes", s.label)
+	}
+}
+
+// countingJobDriver records whether anything polled it.
+type countingJobDriver struct {
+	MockJobDriver
+	polls int
+}
+
+func (d *countingJobDriver) Poll(ctx context.Context, h JobHandle) (JobState, error) {
+	d.polls++
+	return d.MockJobDriver.Poll(ctx, h)
+}
+
+// The turn must return IMMEDIATELY. A generate_video that waited for
+// the job would hold the session lease and trip the responsiveness
+// timeout long before a video exists — the whole reason this modality
+// is a commitment rather than a tool call that blocks.
+func TestSubmittingAVideoNeverPolls(t *testing.T) {
+	t.Parallel()
+	d := &countingJobDriver{MockJobDriver: MockJobDriver{PollsBeforeDone: 1}}
+	s := &recordingStarter{}
+	b := NewBuiltins()
+	if err := RegisterVideoBuiltin(b, VideoConfig{Driver: d, Start: s.start, Label: "v"}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("generate_video")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, code, err := fn(context.Background(), map[string]string{
+			"prompt": "a cat on a skateboard",
+		}); err != nil || code != 0 {
+			t.Errorf("code=%d err=%v", code, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("generate_video did not return; it is waiting for the job")
+	}
+
+	if d.polls != 0 {
+		t.Errorf("the submit path polled %d times; the turn was waiting for the job", d.polls)
+	}
+	if s.calls != 1 {
+		t.Errorf("the job was submitted but recorded %d times; nothing would collect it", s.calls)
 	}
 }
