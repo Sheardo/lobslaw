@@ -83,10 +83,14 @@ The status column and the acceptance boxes had drifted apart, in both directions
 - **R25 and R26** had sections but no row in the table above, so they were invisible to anyone
   reading the index.
 
-**Still unreconciled, and deliberately not guessed at:** R1 and R5 are marked ✅ with *no* boxes
-ticked at all. That pattern reads as criteria written and never verified rather than work left
-undone — both are plainly built — but ticking them from memory would be inventing evidence. They
-need a pass that checks each box against a test.
+**R1 and R5 are now reconciled** (2026-08-17). Both were marked ✅ with *no* boxes ticked, which
+read as criteria written and never verified rather than work left undone. Ticking them from memory
+would have been inventing evidence — and checking them found a real bug: R5 claimed a record
+containing `</untrusted>` could not escape its block, and it could. Everything else was true, and
+three boxes across the two were true in a way nothing tested.
+
+The lesson is worth keeping: a ✅ with unticked boxes is not bookkeeping debt, it is an untested
+claim.
 
 **Remaining P0: R2 (durable confirmations), R5 (trust contract + ingest scanning), and the
 persisted pending queue in R3.** R2 is now cheap — #29 landed per-record revisions plus
@@ -346,11 +350,31 @@ memory wired, so single-node behaviour is bit-identical to today apart from surv
 
 ### Acceptance
 
-- [ ] Restart mid-conversation; the next Telegram message continues with full context.
-- [ ] Two gateway nodes alternating on the same chat produce one coherent history.
-- [ ] A REST client passing `session_id` gets continuity; one that omits it gets a fresh session.
-- [ ] A conversation past `max_messages` retains a summary of the dropped prefix, and the model
+- [x] Restart mid-conversation; the next Telegram message continues with full context.
+      Covered by `TestConversationLogPersistsAndReloads` (a fresh log IS a restarted process) and
+      `TestRESTSessionSurvivesServerRestart`. Verified rather than assumed.
+- [x] Two gateway nodes alternating on the same chat produce one coherent history.
+      **The restart case is not this case.** Persistence was tested; ALTERNATION was not, and it
+      is where the risk lives: each node keeps its own in-memory cache, so after B appends, A's
+      `Load` could serve its stale cache and lose B's turn. A single hand-off would not expose
+      that — the node reading has no cache of its own to prefer.
+
+      Also tested: a node whose durable write failed while it was a follower must not then serve
+      its thin cache in place of the fuller durable history once the store is reachable again, or
+      a brief follower period leaves one node permanently behind.
+- [x] A REST client passing `session_id` gets continuity; one that omits it gets a fresh session.
+      Both halves already covered, plus isolation between sessions, scoping to an owner, and
+      rejection of separators in the id.
+- [x] A conversation past `max_messages` retains a summary of the dropped prefix, and the model
       demonstrably still knows a fact stated only in the dropped region.
+      The trim and the summary were each tested in isolation. What was not: that `Load` returns
+      the summary ALONGSIDE the trimmed messages, which is the only route by which a fact from
+      the dropped region reaches the next turn — from there it travels as
+      `ConversationSummary` into the prompt.
+
+      A transcript that is only a summary is still a transcript. After a long idle period the
+      recent messages can age out entirely, and falling through to the cache there would discard
+      the one thing still remembering the conversation.
 
 ---
 
