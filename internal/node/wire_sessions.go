@@ -57,7 +57,9 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 	}
 	var titler compute.Titler
 	if te := n.cfg.Compute.Context.TitlesEnabled; te == nil || *te {
-		titler = compute.NewLLMTitler(provider, "", derefInt(n.cfg.Compute.Context.TitleMaxChars))
+		// 0 takes the titler's own default. A title's length does not
+		// vary by deployment, so it is a constant rather than a setting.
+		titler = compute.NewLLMTitler(provider, "", 0)
 	}
 	svc := memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
 		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
@@ -69,7 +71,7 @@ func (n *Node) newSessionCompactor() gateway.SessionCompactor {
 	inner := compute.NewCompactor(
 		&sessionSummaryAdapter{inner: svc},
 		compute.NewLLMSummarizer(provider, "", compute.SummarizerConfig{
-			MaxCompletionTokens: derefInt(cfg.CompactMaxCompletionTokens),
+			MaxCompletionTokens: completionCapFor(derefInt(cfg.CompactMaxSummaryTokens)),
 			ToolResultBytes:     derefInt(cfg.CompactToolResultBytes),
 			ExtraInstructions:   cfg.CompactInstructions,
 		}),
@@ -123,7 +125,7 @@ func (n *Node) registerSessionTools() error {
 // depth and its degraded-mode cache.
 func (n *Node) conversationConfig() gateway.ConversationConfig {
 	return gateway.ConversationConfig{
-		TailMessages:  derefInt(n.cfg.Compute.Context.TailMessages),
+		TailMessages:  tailMessagesFor(derefInt(n.cfg.Compute.Context.TailTokens)),
 		CacheMessages: n.cfg.Gateway.SessionCacheMessages,
 		CacheTTL:      n.cfg.Gateway.SessionCacheTTL,
 	}
@@ -471,3 +473,63 @@ func (n *Node) newSessionLeaser() gateway.SessionLeaser {
 		Logger: n.log,
 	})}
 }
+
+// Two derived caps, where there used to be two more settings.
+//
+// A second cap on a thing another setting already caps can contradict
+// it, and the tighter of the two wins SILENTLY: a tail_messages of 5
+// beside a generous tail_tokens truncates history for a reason nobody
+// can see in the config. Deriving them means an operator cannot set
+// the pair to disagree — better than a validation error, which only
+// tells them after they already have.
+
+// tailMessagesFor bounds how many stored messages are read per turn.
+//
+// This was never a preference; it is an I/O guard, so that reading ten
+// thousand messages to then discard all but forty is not paid for on
+// every turn. What an operator actually means is tail_tokens, so the
+// guard follows from it — generously, so the TOKEN cap is always the
+// one that binds and the message cap only stops absurd reads.
+func tailMessagesFor(tailTokens int) int {
+	if tailTokens <= 0 {
+		// Explicit 0 is "unbounded tokens". The read still needs a
+		// ceiling or a long conversation loads entirely into memory
+		// before anything trims it.
+		return maxTailMessages
+	}
+	n := tailTokens / minTokensPerMessage
+
+	if n < minTailMessages {
+		return minTailMessages
+	}
+
+	if n > maxTailMessages {
+		return maxTailMessages
+	}
+	return n
+}
+
+// completionCapFor bounds what the summariser may generate.
+//
+// Distinct from the summary cap only in being a safety margin on it:
+// the output is truncated to the summary cap regardless, so this exists
+// to stop a model that ignores its instructions generating megabytes.
+// Double is ample for that and cannot be set to contradict the cap it
+// protects.
+func completionCapFor(maxSummaryTokens int) int {
+	if maxSummaryTokens <= 0 {
+		return 0 // take the summariser's own default
+	}
+	return maxSummaryTokens * 2
+}
+
+const (
+	// minTokensPerMessage is the assumed floor for a stored message.
+	// Deliberately small: it makes the derived message cap generous,
+	// which is what keeps the token budget the binding constraint.
+	// At the defaults (4000 tail tokens) it reproduces the 100 the
+	// message cap used to default to.
+	minTokensPerMessage = 40
+	minTailMessages     = 20
+	maxTailMessages     = 500
+)

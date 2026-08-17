@@ -462,6 +462,22 @@ type ComputeConfig struct {
 // every turn re-sends every previous turn, and a replayed tool result
 // can be as large as Executor.MaxOutputBytes (10 MB). These two knobs
 // make it roughly flat.
+// ContextConfig is [compute.context].
+//
+// Three settings were removed here rather than kept and validated:
+// tail_messages, compact_max_completion_tokens and title_max_chars.
+//
+// The first two were second caps on things another setting already
+// capped, and a second cap can contradict the first — a tail_messages
+// of 5 alongside a generous tail_tokens truncates history for a reason
+// the operator cannot see, because the tighter of two caps wins
+// silently. They are now DERIVED from the setting that carries the
+// meaning. A validation error would tell an operator they got it
+// wrong; deriving means they cannot.
+//
+// title_max_chars was a UI constant wearing a policy's clothes. A
+// title's length does not vary by deployment, and a channel that wants
+// them shorter can shorten them.
 type ContextConfig struct {
 	// TailTokens caps the estimated tokens of replayed history per
 	// turn; oldest messages drop first. Explicit 0 = unbounded
@@ -490,33 +506,16 @@ type ContextConfig struct {
 	// problem compaction exists to solve.
 	CompactMaxSummaryTokens *int `koanf:"compact_max_summary_tokens,omitempty"`
 
-	// TailMessages caps how many stored messages are read per turn
-	// before the token budget trims them. A message cap as well as a
-	// token cap because reading 10k messages to then discard all but
-	// 40 is wasted I/O on every turn.
-	TailMessages *int `koanf:"tail_messages,omitempty"`
-
 	// CompactEnabled turns compaction off without unsetting the
 	// summariser role (which other subsystems also use). Unset =
 	// enabled whenever a summariser resolves.
 	CompactEnabled *bool `koanf:"compact_enabled,omitempty"`
-
-	// CompactMaxCompletionTokens caps the summariser call itself.
-	// Distinct from CompactMaxSummaryTokens: this bounds what the
-	// model may generate, that bounds what is kept. The second is
-	// enforced by truncation, so a model ignoring the first still
-	// can't inflate every later turn.
-	CompactMaxCompletionTokens *int `koanf:"compact_max_completion_tokens,omitempty"`
 
 	// CompactToolResultBytes is how much of each tool result the
 	// summariser sees. The summariser exists to save tokens; feeding
 	// it megabytes of grep output defeats that on the very call
 	// meant to help.
 	CompactToolResultBytes *int `koanf:"compact_tool_result_bytes,omitempty"`
-
-	// TitleMaxChars caps generated conversation titles. Titles are
-	// for scanning a list, so long ones cost more than they help.
-	TitleMaxChars *int `koanf:"title_max_chars,omitempty"`
 
 	// TitlesEnabled turns title generation off while leaving
 	// compaction on. Titles cost one extra small call per
