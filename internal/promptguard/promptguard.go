@@ -24,6 +24,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 )
 
 // Detector names the rule that fired. Stored on the record, so it has
@@ -119,11 +121,18 @@ func scanInvisible(s string) *Finding {
 // --- delimiter fragments ---------------------------------------------
 
 // A record cannot close a delimiter it is wrapped in unless it
-// contains one. These are the tags this codebase actually emits, plus
-// the chat-template control tokens several models honour.
-var delimiterFragments = []string{
-	"</untrusted",
-	"<untrusted",
+// contains one.
+//
+// The WRAPPER TAGS come from promptgen, which writes them. Keeping a
+// second copy here was two authorities for one fact: adding a wrapper
+// tag there would leave this scanner silently not covering it, and
+// nothing would fail.
+//
+// The CONTROL TOKENS below are this package's own, because nothing in
+// promptgen emits them — they are what the model's chat template
+// honours, which is a different concern that happens to need the same
+// treatment.
+var controlTokens = []string{
 	"</relevant_context",
 	"<|im_start|>",
 	"<|im_end|>",
@@ -133,9 +142,13 @@ var delimiterFragments = []string{
 	"[/INST]",
 }
 
+func delimiterFragments() []string {
+	return append(promptgen.Delimiters(), controlTokens...)
+}
+
 func scanDelimiters(s string) *Finding {
 	lower := strings.ToLower(s)
-	for _, frag := range delimiterFragments {
+	for _, frag := range delimiterFragments() {
 		if strings.Contains(lower, strings.ToLower(frag)) {
 			return &Finding{DetectorDelimiter, "contains " + frag}
 		}

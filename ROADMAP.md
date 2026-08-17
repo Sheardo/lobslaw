@@ -826,12 +826,46 @@ for `ghp_`, `sk-`, `xoxb-`, bearer tokens and PEM blocks before they reach logs 
 
 ### Acceptance
 
-- [ ] Recall renders inside `<untrusted>` with a `memory:recall` source, in user position.
-- [ ] A record containing `</untrusted>` cannot escape its block on any path.
-- [ ] A record containing zero-width characters or an "ignore previous instructions" phrase is
+- [x] Recall renders inside `<untrusted>` with a `memory:recall` source, in user position.
+- [x] A record containing `</untrusted>` cannot escape its block on any path.
+      **This one was false.** `WrapContext` wrote content verbatim between the tags, so a record
+      containing `</untrusted>` closed its own block and everything after it read as instructions
+      rather than as data.
+
+      The ingest scanner quarantines records carrying a wrapper tag, which covers everything that
+      went through ingest — and the box says ON ANY PATH. A record stored before the scanner
+      existed, imported by another route, or content arriving from somewhere other than recall
+      had no defence at all. The tags are neutralised at the render boundary now, which is the
+      backstop that makes the claim true.
+
+      Only the delimiter's opening bracket is escaped, and only where it begins one of these
+      tags. Escaping every `<` would mangle any memory containing code — most of them here — and
+      a defence that corrupts ordinary content is one somebody turns off.
+
+      The scanner kept its own copy of the delimiter list. Two authorities for one fact: adding a
+      wrapper tag would have left the scanner silently not covering it. `promptgen` owns the tags
+      it writes; the scanner keeps only the chat-template control tokens, which nothing here
+      emits.
+- [x] A record containing zero-width characters or an "ignore previous instructions" phrase is
       quarantined at ingest and excluded from recall.
-- [ ] Prompt prefix stays stable across turns in a session (cache-hit assertion).
-- [ ] `BuildSafety` names every delimiter that can appear in a request. Test enumerates both sides.
+      Detection was tested. **Exclusion was not** — the only tests were of `IsQuarantined`
+      itself, which proves the tag can be read and nothing about whether recall reads it. Recall
+      is the path that replays a record into the SYSTEM PROMPT on every later turn, with no tool
+      call in front of it and nowhere the user would see it; a record flagged at ingest and then
+      recalled anyway is worse than one never flagged, because the flag is the reason nobody
+      looked again.
+
+      Tested both ways, because a guard that dropped everything would look identical to one that
+      worked.
+- [x] Prompt prefix stays stable across turns in a session (cache-hit assertion).
+      One section was known to be deterministic; the WHOLE prefix across two turns was not
+      checked. A section that changes between turns truncates the cacheable prefix at that point,
+      so everything after it is re-billed in full on every turn of a conversation.
+- [x] `BuildSafety` names every delimiter that can appear in a request. Test enumerates both sides.
+      Both sides now come from one list, so "enumerates both sides" is a property rather than a
+      pair of lists somebody keeps in step. A test also asserts the longer tags are listed first,
+      or `<untrusted` would neutralise the front of `<untrusted-user` and leave a half-escaped
+      tag nobody predicted.
 
 ---
 
