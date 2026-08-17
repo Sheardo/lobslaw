@@ -30,6 +30,7 @@ const skillsUsage = `lobslaw skills — install and inspect skills on a RUNNING 
   import <dir> [--tier=operator]  read a skill directory and install it
   export <name> <version> <dir>   write a stored skill back out, byte-identical
   remove <name> <version>         remove one version
+  rollback <name> <version>       make a stored version the one in force
 
 Connection comes from --config ([cluster] advertise_addr and
 [cluster.mtls]), or from --addr / --ca-cert / --node-cert / --node-key.
@@ -61,6 +62,8 @@ func dispatchSkills(args []string) bool {
 		err = skillsExport(sub[1:])
 	case "remove":
 		err = skillsRemove(sub[1:])
+	case "rollback":
+		err = skillsRollback(sub[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown skills subcommand %q\n\n%s\n", sub[0], skillsUsage)
 		os.Exit(2)
@@ -349,4 +352,46 @@ func tierLabel(t lobslawv1.SkillTier) string {
 	default:
 		return "?"
 	}
+}
+
+// skillsRollback makes a stored version the one in force.
+//
+// A rollback needs no bundle and no directory: every version ever
+// imported is still in the log, so going back to one is a matter of
+// saying which. `lobslaw skills list --all` is where to find the
+// versions that are not currently in force.
+func skillsRollback(args []string) error {
+	fs := flag.NewFlagSet("skills rollback", flag.ExitOnError)
+	var node liveNode
+	node.bind(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) != 2 {
+		return fmt.Errorf("rollback: need a name and a version\n\n%s", skillsUsage)
+	}
+
+	client, closeConn, err := skillClient(&node)
+	if err != nil {
+		return err
+	}
+	defer closeConn()
+
+	ctx, cancel := node.ctx()
+	defer cancel()
+	resp, err := client.ActivateSkill(ctx, &lobslawv1.ActivateSkillRequest{
+		Name: rest[0], Version: rest[1],
+	})
+	if err != nil {
+		return err
+	}
+	if resp.GetAlreadyActive() {
+		fmt.Printf("%s %s was already in force\n", rest[0], rest[1])
+		return nil
+	}
+	rec := resp.GetSkill()
+	fmt.Printf("rolled back to %s %s (%s)\n",
+		rec.GetName(), rec.GetVersion(), tierLabel(rec.GetTier()))
+	return nil
 }

@@ -416,6 +416,46 @@ func (s *SkillStore) deactivateOthers(ctx context.Context, name string, tier lob
 	return nil
 }
 
+// Activate makes a stored version the one in force.
+//
+// This is the whole of a rollback: every version imported is still in
+// the log, so going back to one is a matter of saying which, not of
+// re-importing anything. Nothing is re-verified and no bytes move — the
+// record being activated was already parsed through the loader when it
+// arrived.
+//
+// SCOPED TO THE TIER, like every other activation. Activating an
+// operator version does not disturb a signed version of the same name;
+// which of those wins is a precedence question the loader answers, and
+// answering it here as well would give one skill two authorities.
+//
+// Activating the version already in force succeeds and reports it. An
+// operator scripting a rollback should not have to special-case having
+// already done it, and an error there would be indistinguishable from
+// a rollback that failed.
+func (s *SkillStore) Activate(ctx context.Context, name, version string) (rec *lobslawv1.SkillRecord, alreadyActive bool, err error) {
+	rec, err = s.Get(name, version)
+	if err != nil {
+		return nil, false, err
+	}
+	if rec.GetActive() {
+		return rec, true, nil
+	}
+
+	updated := proto.Clone(rec).(*lobslawv1.SkillRecord)
+	updated.Active = true
+	if err := s.put(ctx, updated); err != nil {
+		return nil, false, err
+	}
+	// AFTER the new one is active, not before. The other order leaves a
+	// window in which no version of the skill is in force, and a node
+	// materialising in that window drops a working skill from disk.
+	if err := s.deactivateOthers(ctx, name, updated.GetTier(), version); err != nil {
+		return nil, false, err
+	}
+	return updated, false, nil
+}
+
 // Remove deletes one version.
 //
 // Blobs are left behind. They are content-addressed and shared, so

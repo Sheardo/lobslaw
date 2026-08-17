@@ -383,10 +383,11 @@ var NodeService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	SkillService_ImportSkill_FullMethodName = "/lobslaw.v1.SkillService/ImportSkill"
-	SkillService_ExportSkill_FullMethodName = "/lobslaw.v1.SkillService/ExportSkill"
-	SkillService_ListSkills_FullMethodName  = "/lobslaw.v1.SkillService/ListSkills"
-	SkillService_RemoveSkill_FullMethodName = "/lobslaw.v1.SkillService/RemoveSkill"
+	SkillService_ImportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ImportSkill"
+	SkillService_ExportSkill_FullMethodName   = "/lobslaw.v1.SkillService/ExportSkill"
+	SkillService_ListSkills_FullMethodName    = "/lobslaw.v1.SkillService/ListSkills"
+	SkillService_RemoveSkill_FullMethodName   = "/lobslaw.v1.SkillService/RemoveSkill"
+	SkillService_ActivateSkill_FullMethodName = "/lobslaw.v1.SkillService/ActivateSkill"
 )
 
 // SkillServiceClient is the client API for SkillService service.
@@ -405,6 +406,10 @@ type SkillServiceClient interface {
 	ExportSkill(ctx context.Context, in *ExportSkillRequest, opts ...grpc.CallOption) (*ExportSkillResponse, error)
 	ListSkills(ctx context.Context, in *ListSkillsRequest, opts ...grpc.CallOption) (*ListSkillsResponse, error)
 	RemoveSkill(ctx context.Context, in *RemoveSkillRequest, opts ...grpc.CallOption) (*RemoveSkillResponse, error)
+	// ActivateSkill makes a stored version the one in force. This is
+	// what `lobslaw skills rollback` calls — a rollback is nothing more
+	// than activating a version that is already in the log.
+	ActivateSkill(ctx context.Context, in *ActivateSkillRequest, opts ...grpc.CallOption) (*ActivateSkillResponse, error)
 }
 
 type skillServiceClient struct {
@@ -455,6 +460,16 @@ func (c *skillServiceClient) RemoveSkill(ctx context.Context, in *RemoveSkillReq
 	return out, nil
 }
 
+func (c *skillServiceClient) ActivateSkill(ctx context.Context, in *ActivateSkillRequest, opts ...grpc.CallOption) (*ActivateSkillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateSkillResponse)
+	err := c.cc.Invoke(ctx, SkillService_ActivateSkill_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SkillServiceServer is the server API for SkillService service.
 // All implementations should embed UnimplementedSkillServiceServer
 // for forward compatibility.
@@ -471,6 +486,10 @@ type SkillServiceServer interface {
 	ExportSkill(context.Context, *ExportSkillRequest) (*ExportSkillResponse, error)
 	ListSkills(context.Context, *ListSkillsRequest) (*ListSkillsResponse, error)
 	RemoveSkill(context.Context, *RemoveSkillRequest) (*RemoveSkillResponse, error)
+	// ActivateSkill makes a stored version the one in force. This is
+	// what `lobslaw skills rollback` calls — a rollback is nothing more
+	// than activating a version that is already in the log.
+	ActivateSkill(context.Context, *ActivateSkillRequest) (*ActivateSkillResponse, error)
 }
 
 // UnimplementedSkillServiceServer should be embedded to have
@@ -491,6 +510,9 @@ func (UnimplementedSkillServiceServer) ListSkills(context.Context, *ListSkillsRe
 }
 func (UnimplementedSkillServiceServer) RemoveSkill(context.Context, *RemoveSkillRequest) (*RemoveSkillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveSkill not implemented")
+}
+func (UnimplementedSkillServiceServer) ActivateSkill(context.Context, *ActivateSkillRequest) (*ActivateSkillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ActivateSkill not implemented")
 }
 func (UnimplementedSkillServiceServer) testEmbeddedByValue() {}
 
@@ -584,6 +606,24 @@ func _SkillService_RemoveSkill_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SkillService_ActivateSkill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateSkillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SkillServiceServer).ActivateSkill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SkillService_ActivateSkill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SkillServiceServer).ActivateSkill(ctx, req.(*ActivateSkillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SkillService_ServiceDesc is the grpc.ServiceDesc for SkillService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -606,6 +646,10 @@ var SkillService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveSkill",
 			Handler:    _SkillService_RemoveSkill_Handler,
+		},
+		{
+			MethodName: "ActivateSkill",
+			Handler:    _SkillService_ActivateSkill_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -188,6 +188,27 @@ func (s *skillService) validate(bundle *memory.Bundle) error {
 	return err
 }
 
+// ActivateSkill makes a stored version the one in force — the whole of
+// a rollback, since every version imported is still in the log.
+func (s *skillService) ActivateSkill(ctx context.Context, req *lobslawv1.ActivateSkillRequest) (*lobslawv1.ActivateSkillResponse, error) {
+	name, version := strings.TrimSpace(req.GetName()), strings.TrimSpace(req.GetVersion())
+	if name == "" || version == "" {
+		return nil, status.Error(codes.InvalidArgument, "name and version are required")
+	}
+	if s.store == nil {
+		return nil, s.errNoStore()
+	}
+	// NOT re-validated through the loader. The record was parsed when
+	// it arrived; re-parsing it here would refuse a skill that a
+	// tightened signing policy no longer admits, which is exactly the
+	// situation somebody rolling back is trying to escape.
+	rec, already, err := s.store.Activate(ctx, name, version)
+	if err != nil {
+		return nil, skillError(err)
+	}
+	return &lobslawv1.ActivateSkillResponse{Skill: rec, AlreadyActive: already}, nil
+}
+
 // skillError maps store errors onto gRPC codes.
 //
 // "Not found" and "too large" send an operator to different places —

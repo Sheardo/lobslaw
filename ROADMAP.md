@@ -60,7 +60,7 @@ Status is the tree as of 2026-08-15 (see [Status drift](#status-drift) for detai
 | **R15** | [Self-taught store](#r15--self-taught-store) | ✅ | 🟠 P1 | M | R16, R17 |
 | **R16** | [Post-turn review fork](#r16--post-turn-review-fork) | ✅ | 🟡 P2 | M | R17 |
 | **R17** | [Self-taught lifecycle (curator)](#r17--self-taught-lifecycle-curator) | ✅ | 🟡 P2 | M | — |
-| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | 🟨 | 🟠 P1 | L | R15, R17 |
+| **R18** | [Skills in the cluster store](#r18--skills-in-the-cluster-store) | ✅ | 🟠 P1 | L | R15, R17 |
 | **R19** | [Sign and pin the skill handler](#r19--sign-and-pin-the-skill-handler) | ✅ | 🔴 P0 | S | — |
 | **R22** | [Provider / modality layer](#r22--provider--modality-layer) — *[Providers](/dev/PROVIDERS)* | 🟨 | 🟠 P1 | L | R23, R24 |
 | **R23** | [External drivers as skills](#r23--external-drivers-as-skills) — *[Providers](/dev/PROVIDERS)* | ⬜ | 🟡 P2 | M | — |
@@ -2429,7 +2429,11 @@ in a shell profile and forgotten. Both at once is a coincidence somebody has to 
 promote a skill past its provenance, so an operator needing to override a signed skill locally has
 to be given a separate SOURCE rather than a way to game the order.
 
-**The CLI is built. R18 is NOT closed — that was a mistake, corrected here.**
+**R18 is closed.** It was marked closed once prematurely, on the strength of the CLI landing, and
+reopened during the 2026-08-17 roadmap review because `skills rollback` was on the acceptance list
+and did not exist. It exists now, and the three boxes describing unverified behaviour have tests.
+
+*The reopening, kept because the shape of the mistake is worth remembering:*
 
 The CLI landing was read as the last piece, and it was not: `skills rollback` is on the acceptance
 list and does not exist. `lobslaw learned` has `rollback`; `lobslaw skills` has list, import, export
@@ -2560,8 +2564,14 @@ node needs forwarding.
 
 ### Acceptance
 
-- [ ] A node with no storage mount and no skills directory serves the full skill library from the log.
-- [ ] Deleting the cache and restarting restores every skill byte-identically.
+- [x] A node with no storage mount and no skills directory serves the full skill library from the log.
+- [x] Deleting the cache and restarting restores every skill byte-identically.
+      Both were true and neither was tested. `materialise_stored_test.go` covered a signed skill
+      still verifying on disk and a hand-edited cache being corrected; what it did not cover is
+      the cache being GONE — a fresh container, a wiped volume — which is the case the operator
+      actually hits. The fixture manifest is deliberately not already-normalised (a comment, an
+      unusual key order, trailing whitespace), because those are exactly what a re-render tidies
+      away and a byte comparison is what notices.
 - [x] `import → export → diff` is empty for a signed skill, and the export still verifies.
       `TestTheRoundTripOverTheServiceIsByteIdentical` signs a manifest that is deliberately not
       already-normalised — a comment, an unusual key order, trailing whitespace — imports it,
@@ -2572,8 +2582,27 @@ node needs forwarding.
       rather than signature-checked by hand.
 - [x] A self-taught skill cannot win a name against a signed or operator skill at any version.
       Shipped ahead of the rest — see above.
-- [ ] `skills rollback` restores a prior version across the cluster.
-- [ ] An oversized payload fails at import, naming the path.
+- [x] `skills rollback` restores a prior version across the cluster.
+      **A rollback is nothing more than activating a version already in the log.** Every version
+      imported is still there, so going back to one is a matter of saying which — no bundle, no
+      re-import, no bytes moved.
+
+      NOT re-validated against the current signing policy. The record was parsed through the
+      loader when it arrived, and re-parsing it on activation would refuse a skill that a
+      tightened policy no longer admits — which is exactly the situation somebody rolling back is
+      trying to escape.
+
+      The new version is activated BEFORE the old ones are deactivated. The other order leaves a
+      window with no version of the skill in force, and a node materialising in that window drops
+      a working skill from disk.
+
+      Rolling back to the version already in force succeeds and says so. An operator scripting a
+      rollback should not have to special-case having already done it, and an error there would
+      be indistinguishable from a rollback that failed.
+- [x] An oversized payload fails at import, naming the path.
+      The gRPC receive ceiling was raised above the bundle limit precisely so this error is the
+      one that surfaces: at the default limits a bundle at the cap is exactly gRPC's own default,
+      and the operator would get "message too large" — true, unactionable, and naming nothing.
 
 ---
 

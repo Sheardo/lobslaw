@@ -142,3 +142,39 @@ func TestTierLabelsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// --- discoverability ---------------------------------------------------
+
+// A subcommand the dispatcher accepts but the help does not mention is
+// one nobody finds. `rollback` was added after the usage text was
+// written, which is exactly when this drifts.
+func TestEverySubcommandIsInTheUsage(t *testing.T) {
+	t.Parallel()
+	for _, sub := range []string{"list", "import", "export", "remove", "rollback"} {
+		if !strings.Contains(skillsUsage, "  "+sub) {
+			t.Errorf("`skills %s` is dispatched but not in the usage text", sub)
+		}
+	}
+}
+
+// The reverse: the usage must not advertise something that is not
+// wired, which sends an operator to a command that exits 2.
+func TestTheUsageAdvertisesNothingUnwired(t *testing.T) {
+	t.Parallel()
+	dispatched := map[string]bool{
+		"list": true, "import": true, "export": true,
+		"remove": true, "rollback": true,
+	}
+	for _, line := range strings.Split(skillsUsage, "\n") {
+		if !strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "   ") {
+			continue
+		}
+		verb, _, _ := strings.Cut(strings.TrimSpace(line), " ")
+		if verb == "" {
+			continue
+		}
+		if !dispatched[verb] {
+			t.Errorf("the usage advertises %q, which the dispatcher does not handle", verb)
+		}
+	}
+}
