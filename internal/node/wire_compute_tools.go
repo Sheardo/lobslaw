@@ -85,6 +85,9 @@ func (n *Node) registerAgentTools(builtins *compute.Builtins, embedder compute.E
 	// their endpoint by capability, so they have to see the merged set.
 	n.applyModelsDevAutoCapabilities(context.Background())
 
+	if err := n.wireSkillViewTool(builtins); err != nil {
+		return nil, err
+	}
 	if err := n.wireVisionTools(builtins); err != nil {
 		return nil, err
 	}
@@ -841,4 +844,24 @@ func visionCredential(driver, apiKey string) compute.Credential {
 	default:
 		return compute.NewBearerCredential(apiKey)
 	}
+}
+
+// wireSkillViewTool installs skill_view, the level-1 and level-2 half
+// of progressive disclosure.
+//
+// Not registered when there is no skill registry: a node with no
+// skills would advertise a tool that can only ever say "no skill named
+// that is installed", which teaches the model to stop asking.
+func (n *Node) wireSkillViewTool(builtins *compute.Builtins) error {
+	docs := n.skillDocs()
+	if docs == nil {
+		return nil
+	}
+	if err := compute.RegisterSkillViewBuiltin(builtins, compute.SkillViewConfig{Docs: docs}); err != nil {
+		return fmt.Errorf("register skill_view: %w", err)
+	}
+	if err := n.toolRegistry.Register(compute.SkillViewToolDef()); err != nil {
+		return fmt.Errorf("register skill_view tool def: %w", err)
+	}
+	return nil
 }
