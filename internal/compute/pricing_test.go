@@ -197,8 +197,14 @@ func TestRecordCostComposes(t *testing.T) {
 	if rec.ProviderLabel != "openrouter" || rec.Model != "gpt-4o-mini" {
 		t.Errorf("label/model not captured: %+v", rec)
 	}
-	if rec.Usage != usage {
-		t.Errorf("usage not captured: %+v", rec.Usage)
+	// A token call is now recorded as a ModalUsage with the token
+	// breakdown nested, so the detail survives alongside a unit that
+	// can describe a generation.
+	if rec.Usage.Unit != UnitTokens {
+		t.Errorf("unit = %q, want tokens", rec.Usage.Unit)
+	}
+	if rec.Usage.Tokens == nil || *rec.Usage.Tokens != usage {
+		t.Errorf("token detail not captured: %+v", rec.Usage.Tokens)
 	}
 	if !approxEqual(rec.CostUSD, 0.002, 1e-9) {
 		t.Errorf("cost: got %f, want 0.002", rec.CostUSD)

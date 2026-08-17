@@ -35,6 +35,12 @@ type ImageConfig struct {
 	// model was billed rather than only which provider.
 	Model string
 
+	// BilledTo distinguishes a prepaid plan from a balance. A plan has
+	// no marginal cost per call, so pricing it as though it did would
+	// inflate every turn this provider served — the meaningful number
+	// there is the quantity drawn against the quota.
+	BilledTo Billing
+
 	// MaxPromptChars bounds one prompt. Image APIs reject over-long
 	// prompts with a 400, which costs a round trip to learn something
 	// checkable here. Zero picks DefaultImagePromptChars.
@@ -89,8 +95,8 @@ func newImageHandler(cfg ImageConfig) BuiltinFunc {
 		// Billed per IMAGE, not per token. One request today; a
 		// provider asked for variations would report the number it
 		// actually returned.
-		usage := Usage{Unit: types.UnitImages, Quantity: 1}
-		CollectCost(ctx, RecordCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
+		usage := MeteredUsage(UnitImages, 1, cfg.BilledTo)
+		CollectCost(ctx, RecordModalCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
 
 		got, err := cfg.Resolver.Resolve(ctx, art, imageFileName(prompt))
 		if err != nil {

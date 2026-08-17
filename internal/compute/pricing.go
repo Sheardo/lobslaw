@@ -127,22 +127,42 @@ func EstimateCost(usage Usage, pricing types.ProviderPricing) float64 {
 	cost += float64(nonCached) * pricing.InputUSDPer1K / 1000.0
 	cost += float64(usage.CachedTokens) * pricing.CachedUSDPer1K / 1000.0
 	cost += float64(usage.CompletionTokens) * pricing.OutputUSDPer1K / 1000.0
-
-	// Non-token billing, added rather than substituted: a turn can be
-	// billed both ways, and a reply that generates a picture costs its
-	// tokens AND its image.
-	//
-	// An unpriced unit contributes nothing and is NOT an error. A
-	// plan-billed provider has no marginal cost per call, and refusing
-	// to account for the turn because nobody wrote down a rate would
-	// stop the turn rather than the billing. The quantity is still
-	// recorded on the span, so consumption is visible even where the
-	// marginal cost is genuinely nil.
-
-	if usage.Metered() {
-		cost += usage.Quantity * pricing.UnitUSD[usage.Unit]
-	}
 	return cost
+}
+
+// EstimateModalCost prices one call however it is billed.
+//
+// ModalUsage is THE model for this; compute.Usage stays token-only.
+// The two nearly became two: a parallel Unit/Quantity was added to
+// Usage before this type was noticed, and two accounts of what a turn
+// cost eventually disagree about the answer.
+//
+// BILLING PLAN COSTS NOTHING, deliberately. A prepaid plan has no
+// marginal cost per call, and inventing one would inflate every turn a
+// plan-billed provider served. The QUANTITY still travels, because
+// consumption against a quota is the meaningful number there.
+//
+// An unpriced unit likewise contributes nothing and is not an error: a
+// modality that refused to run because nobody wrote down a rate would
+// be refusing over the accounting rather than the work.
+func EstimateModalCost(u ModalUsage, pricing types.ProviderPricing) float64 {
+
+	if u.BilledTo == BillingPlan {
+		return 0
+	}
+	if u.Unit == UnitTokens {
+		if u.Tokens == nil {
+			return 0
+		}
+		return EstimateCost(*u.Tokens, pricing)
+	}
+	return u.Quantity * pricing.UnitUSD[string(u.Unit)]
+}
+
+// MeteredUsage builds a ModalUsage for a call billed in something
+// other than tokens.
+func MeteredUsage(unit Unit, quantity float64, billedTo Billing) ModalUsage {
+	return ModalUsage{Unit: unit, Quantity: quantity, BilledTo: billedTo}
 }
 
 // CostRecord is one attributed call — usage + computed cost + the
@@ -151,17 +171,27 @@ func EstimateCost(usage Usage, pricing types.ProviderPricing) float64 {
 type CostRecord struct {
 	ProviderLabel string
 	Model         string
-	Usage         Usage
-	CostUSD       float64
+	// Usage is the modal form: tokens, seconds of video, images, or a
+	// draw against a plan. It was the token-only Usage, which could
+	// not describe a generation at all.
+	Usage   ModalUsage
+	CostUSD float64
 }
 
 // RecordCost builds a CostRecord from a Usage + resolved provider.
 // Convenience wrapper — the agent loop calls this per LLM round-trip.
 func RecordCost(providerLabel, model string, usage Usage, pricing types.ProviderPricing) CostRecord {
+	return RecordModalCost(providerLabel, model,
+		TokenUsage(usage, EstimateCost(usage, pricing)), pricing)
+}
+
+// RecordModalCost builds a CostRecord for a call billed in anything —
+// tokens, seconds of video, images, or a draw against a plan.
+func RecordModalCost(providerLabel, model string, usage ModalUsage, pricing types.ProviderPricing) CostRecord {
 	return CostRecord{
 		ProviderLabel: providerLabel,
 		Model:         model,
 		Usage:         usage,
-		CostUSD:       EstimateCost(usage, pricing),
+		CostUSD:       EstimateModalCost(usage, pricing),
 	}
 }

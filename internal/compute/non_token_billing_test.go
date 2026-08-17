@@ -16,9 +16,9 @@ import (
 func TestANonTokenCallIsPriced(t *testing.T) {
 	t.Parallel()
 	pricing := types.ProviderPricing{
-		UnitUSD: map[string]float64{types.UnitVideoSeconds: 0.35},
+		UnitUSD: map[string]float64{string(UnitVideoSeconds): 0.35},
 	}
-	got := EstimateCost(Usage{Unit: types.UnitVideoSeconds, Quantity: 8}, pricing)
+	got := EstimateModalCost(MeteredUsage(UnitVideoSeconds, 8, BillingBalance), pricing)
 	if got != 8*0.35 {
 		t.Errorf("8 seconds at $0.35 = %v, want %v", got, 8*0.35)
 	}
@@ -31,9 +31,9 @@ func TestANonTokenCallIsPriced(t *testing.T) {
 func TestAFractionalQuantityIsPriced(t *testing.T) {
 	t.Parallel()
 	pricing := types.ProviderPricing{
-		UnitUSD: map[string]float64{types.UnitVideoSeconds: 0.10},
+		UnitUSD: map[string]float64{string(UnitVideoSeconds): 0.10},
 	}
-	got := EstimateCost(Usage{Unit: types.UnitVideoSeconds, Quantity: 2.5}, pricing)
+	got := EstimateModalCost(MeteredUsage(UnitVideoSeconds, 2.5, BillingBalance), pricing)
 	if got != 0.25 {
 		t.Errorf("2.5 seconds at $0.10 = %v, want 0.25", got)
 	}
@@ -46,9 +46,13 @@ func TestTokenAndUnitCostsAreAdded(t *testing.T) {
 	t.Parallel()
 	pricing := types.ProviderPricing{
 		InputUSDPer1K: 1.0,
-		UnitUSD:       map[string]float64{types.UnitImages: 0.04},
+		UnitUSD:       map[string]float64{string(UnitImages): 0.04},
 	}
-	got := EstimateCost(Usage{PromptTokens: 1000, Unit: types.UnitImages, Quantity: 2}, pricing)
+	// Tokens and units are separate CALLS now, each with its own
+	// record — the same turn is billed both ways rather than one
+	// ModalUsage carrying both.
+	got := EstimateCost(Usage{PromptTokens: 1000}, pricing) +
+		EstimateModalCost(MeteredUsage(UnitImages, 2, BillingBalance), pricing)
 	want := 1.0 + 0.08
 	if got != want {
 		t.Errorf("got %v, want %v (tokens plus images)", got, want)
@@ -60,7 +64,7 @@ func TestTokenAndUnitCostsAreAdded(t *testing.T) {
 // turn rather than the billing.
 func TestAnUnpricedUnitCostsNothingAndIsNotAnError(t *testing.T) {
 	t.Parallel()
-	got := EstimateCost(Usage{Unit: types.UnitCredits, Quantity: 5}, types.ProviderPricing{})
+	got := EstimateModalCost(MeteredUsage(UnitCredits, 5, BillingBalance), types.ProviderPricing{})
 	if got != 0 {
 		t.Errorf("got %v; an unpriced unit should contribute nothing", got)
 	}
@@ -70,9 +74,9 @@ func TestAnUnpricedUnitCostsNothingAndIsNotAnError(t *testing.T) {
 // plan-billed provider's consumption is invisible.
 func TestAnUnpricedUnitStillRecordsItsQuantity(t *testing.T) {
 	t.Parallel()
-	rec := RecordCost("vendor", "model-x",
-		Usage{Unit: types.UnitCredits, Quantity: 5}, types.ProviderPricing{})
-	if rec.Usage.Unit != types.UnitCredits || rec.Usage.Quantity != 5 {
+	rec := RecordModalCost("vendor", "model-x",
+		MeteredUsage(UnitCredits, 5, BillingBalance), types.ProviderPricing{})
+	if rec.Usage.Unit != UnitCredits || rec.Usage.Quantity != 5 {
 		t.Errorf("usage = %+v; the consumption was not recorded", rec.Usage)
 	}
 	if rec.CostUSD != 0 {
@@ -95,16 +99,17 @@ func TestATokenOnlyCallIsUnchanged(t *testing.T) {
 
 // Metered is what distinguishes the two, so a zero quantity must not
 // count as a metered call and pick up a spurious rate.
-func TestAZeroQuantityIsNotMetered(t *testing.T) {
+func TestAPlanDrawCostsNothingButKeepsItsQuantity(t *testing.T) {
 	t.Parallel()
-	for _, u := range []Usage{
-		{Unit: types.UnitImages, Quantity: 0},
-		{Unit: "", Quantity: 3},
-		{},
-	} {
-		if u.Metered() {
-			t.Errorf("%+v reported as metered", u)
-		}
+	// A plan draw costs nothing however large the quantity, and an
+	// unpriced unit costs nothing however it is billed.
+	plan := MeteredUsage(UnitVideoSeconds, 60, BillingPlan)
+	priced := types.ProviderPricing{UnitUSD: map[string]float64{string(UnitVideoSeconds): 1}}
+	if got := EstimateModalCost(plan, priced); got != 0 {
+		t.Errorf("a plan draw cost %v; a prepaid plan has no marginal cost", got)
+	}
+	if plan.Quantity != 60 {
+		t.Error("the plan draw lost its quantity, which is the meaningful number there")
 	}
 }
 
@@ -116,9 +121,9 @@ func TestAZeroQuantityIsNotMetered(t *testing.T) {
 func TestCollectedCostsReachTheCaller(t *testing.T) {
 	t.Parallel()
 	ctx, costs := WithCostCollector(context.Background())
-	CollectCost(ctx, RecordCost("vendor", "m",
-		Usage{Unit: types.UnitImages, Quantity: 1},
-		types.ProviderPricing{UnitUSD: map[string]float64{types.UnitImages: 0.04}}))
+	CollectCost(ctx, RecordModalCost("vendor", "m",
+		MeteredUsage(UnitImages, 1, BillingBalance),
+		types.ProviderPricing{UnitUSD: map[string]float64{string(UnitImages): 0.04}}))
 
 	got := costs.Drain()
 	if len(got) != 1 {
@@ -170,7 +175,7 @@ func TestGeneratingAnImageBillsTheTurn(t *testing.T) {
 		Resolver: billingResolver(t),
 		Label:    "picture-vendor",
 		Model:    "img-1",
-		Pricing:  types.ProviderPricing{UnitUSD: map[string]float64{types.UnitImages: 0.04}},
+		Pricing:  types.ProviderPricing{UnitUSD: map[string]float64{string(UnitImages): 0.04}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +196,7 @@ func TestGeneratingAnImageBillsTheTurn(t *testing.T) {
 	if got[0].CostUSD != 0.04 {
 		t.Errorf("cost = %v, want 0.04", got[0].CostUSD)
 	}
-	if got[0].Usage.Unit != types.UnitImages || got[0].Usage.Quantity != 1 {
+	if got[0].Usage.Unit != UnitImages || got[0].Usage.Quantity != 1 {
 		t.Errorf("usage = %+v; the unit did not travel", got[0].Usage)
 	}
 	if got[0].ProviderLabel != "picture-vendor" || got[0].Model != "img-1" {
@@ -211,7 +216,7 @@ func TestSynthesisingSpeechBillsPerCharacter(t *testing.T) {
 		Label:    "voice-vendor",
 		Model:    "tts-1",
 		Pricing: types.ProviderPricing{
-			UnitUSD: map[string]float64{types.UnitAudioCharacters: 0.00002},
+			UnitUSD: map[string]float64{string(UnitAudioCharacters): 0.00002},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -246,7 +251,7 @@ func TestAFailedGenerationBillsNothing(t *testing.T) {
 		Resolver: billingResolver(t),
 		Label:    "voice-vendor",
 		Pricing: types.ProviderPricing{
-			UnitUSD: map[string]float64{types.UnitAudioCharacters: 0.1},
+			UnitUSD: map[string]float64{string(UnitAudioCharacters): 0.1},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -294,9 +299,9 @@ type billingDispatcher struct{ cost float64 }
 func (billingDispatcher) Has(name string) bool { return name == "make_a_video" }
 
 func (d billingDispatcher) Invoke(ctx context.Context, _ SkillInvokeRequest) (*SkillInvokeResult, error) {
-	CollectCost(ctx, RecordCost("video-vendor", "veo-1",
-		Usage{Unit: types.UnitVideoSeconds, Quantity: 8},
-		types.ProviderPricing{UnitUSD: map[string]float64{types.UnitVideoSeconds: d.cost}}))
+	CollectCost(ctx, RecordModalCost("video-vendor", "veo-1",
+		MeteredUsage(UnitVideoSeconds, 8, BillingBalance),
+		types.ProviderPricing{UnitUSD: map[string]float64{string(UnitVideoSeconds): d.cost}}))
 	return &SkillInvokeResult{ExitCode: 0, Stdout: []byte(`{"ok":true}`)}, nil
 }
 
@@ -355,5 +360,63 @@ func TestAGenerationCanExceedTheSpendCap(t *testing.T) {
 	if !resp.NeedsConfirmation {
 		t.Errorf("$800 of video against a $1 cap did not stop the turn (spend %v)",
 			resp.BudgetState.SpendUSD)
+	}
+}
+
+// --- the modal model is the only model ---------------------------------
+
+// ModalUsage already existed for exactly this, its own doc saying it
+// would "eventually absorb" the token-only Usage. A parallel
+// Unit/Quantity was added to Usage before that was noticed, which is
+// the two-authorities problem in miniature: two accounts of what a
+// turn cost eventually disagree about the answer.
+
+// A prepaid plan has no marginal cost per call, so pricing it as
+// though it did would inflate every turn that provider served.
+func TestAPlanDrawIsNotPricedButIsCounted(t *testing.T) {
+	t.Parallel()
+	priced := types.ProviderPricing{
+		UnitUSD: map[string]float64{string(UnitVideoSeconds): 1.00},
+	}
+	plan := MeteredUsage(UnitVideoSeconds, 60, BillingPlan)
+	if got := EstimateModalCost(plan, priced); got != 0 {
+		t.Errorf("a plan draw cost %v; a prepaid plan has no marginal cost", got)
+	}
+
+	// The same quantity against a balance IS priced, or the plan case
+	// would be indistinguishable from a missing rate.
+	balance := MeteredUsage(UnitVideoSeconds, 60, BillingBalance)
+	if got := EstimateModalCost(balance, priced); got != 60 {
+		t.Errorf("a balance draw cost %v, want 60", got)
+	}
+
+	rec := RecordModalCost("plan-vendor", "veo", plan, priced)
+	if rec.Usage.Quantity != 60 {
+		t.Error("the plan draw lost its quantity, which is the meaningful number there")
+	}
+}
+
+// A token call still prices exactly as it did, through the nested
+// breakdown. This change must not alter what any existing turn costs.
+func TestATokenCallPricesThroughTheModalForm(t *testing.T) {
+	t.Parallel()
+	pricing := types.ProviderPricing{InputUSDPer1K: 2, OutputUSDPer1K: 6}
+	tokens := Usage{PromptTokens: 1000, CompletionTokens: 500}
+	want := EstimateCost(tokens, pricing)
+
+	got := EstimateModalCost(TokenUsage(tokens, want), pricing)
+	if got != want {
+		t.Errorf("modal form priced a token call as %v, direct form as %v", got, want)
+	}
+}
+
+// A token ModalUsage with no breakdown cannot be priced from a
+// quantity — total tokens do not say how many were input.
+func TestATokenUsageWithNoBreakdownCostsNothing(t *testing.T) {
+	t.Parallel()
+	pricing := types.ProviderPricing{InputUSDPer1K: 2}
+	got := EstimateModalCost(ModalUsage{Unit: UnitTokens, Quantity: 1000}, pricing)
+	if got != 0 {
+		t.Errorf("got %v; a token count with no input/output split cannot be priced", got)
 	}
 }

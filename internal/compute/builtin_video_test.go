@@ -11,13 +11,14 @@ import (
 type recordingStarter struct {
 	calls  int
 	handle JobHandle
+	label  string
 	prompt string
 	err    error
 }
 
-func (r *recordingStarter) start(_ context.Context, h JobHandle, prompt string) (string, error) {
+func (r *recordingStarter) start(_ context.Context, h JobHandle, providerLabel, prompt string) (string, error) {
 	r.calls++
-	r.handle, r.prompt = h, prompt
+	r.handle, r.label, r.prompt = h, providerLabel, prompt
 	if r.err != nil {
 		return "", r.err
 	}
@@ -130,5 +131,30 @@ func TestVideoRequiresDriverAndStarter(t *testing.T) {
 		Start: (&recordingStarter{}).start,
 	}); err == nil {
 		t.Error("registered generate_video with no driver")
+	}
+}
+
+// The provider label travels onto the commitment because the COST is
+// not known until the job finishes, by which time the turn is long
+// over — the only way to price seconds of video is to be able to find
+// the provider's rate card again.
+func TestTheProviderLabelReachesTheCommitment(t *testing.T) {
+	t.Parallel()
+	s := &recordingStarter{}
+	b := NewBuiltins()
+	d, _ := MockJobFactory(JobDriverConfig{})
+	if err := RegisterVideoBuiltin(b, VideoConfig{
+		Driver: d, Start: s.start, Label: "video-vendor",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("generate_video")
+	if _, code, err := fn(context.Background(), map[string]string{
+		"prompt": "a cat on a skateboard",
+	}); err != nil || code != 0 {
+		t.Fatalf("code=%d err=%v", code, err)
+	}
+	if s.label != "video-vendor" {
+		t.Errorf("label = %q; the job cannot be priced when it completes", s.label)
 	}
 }

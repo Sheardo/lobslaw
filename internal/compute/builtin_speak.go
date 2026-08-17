@@ -42,6 +42,12 @@ type SpeakConfig struct {
 	// Model is carried for the cost record, so an audit says which
 	// model was billed rather than only which provider.
 	Model string
+
+	// BilledTo distinguishes a prepaid plan from a balance. A plan has
+	// no marginal cost per call, so pricing it as though it did would
+	// inflate every turn this provider served — the meaningful number
+	// there is the quantity drawn against the quota.
+	BilledTo Billing
 }
 
 // DefaultSpeakMaxChars is roughly a few minutes of speech — long
@@ -106,8 +112,8 @@ func newSpeakHandler(cfg SpeakConfig) BuiltinFunc {
 			// Billed per CHARACTER OF INPUT, which is what every TTS
 			// vendor meters — not per second of output, which is not
 			// known until the audio exists.
-			usage := Usage{Unit: types.UnitAudioCharacters, Quantity: float64(len(text))}
-			CollectCost(ctx, RecordCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
+			usage := MeteredUsage(UnitAudioCharacters, float64(len(text)), cfg.BilledTo)
+			CollectCost(ctx, RecordModalCost(cfg.Label, cfg.Model, usage, cfg.Pricing))
 		}
 		if err != nil {
 			// Returned unwrapped so the failover chain can read the
