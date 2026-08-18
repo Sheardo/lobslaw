@@ -43,11 +43,12 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R0** | [Leader-forwarding write path](#r0--leader-forwarding-write-path) | ✅ | 🔴 P0 | S | R1, R2, R3 |
 | **R1** | [Session layer](#r1--session-layer) | ✅ | 🔴 P0 | L | R2, R3, R4 |
 | **R2** | [Durable, cluster-wide confirmations](#r2--durable-cluster-wide-confirmations) | ✅ | 🔴 P0 | M | — |
+| **R2b** | [Telegram identity is a renameable handle](#r2b--telegram-identity-is-a-renameable-handle) | ✅ | 🔴 P0 | S | — |
 | **R3** | [Turn serialisation + inbound queue](#r3--turn-serialisation--inbound-queue) | ✅ | 🔴 P0 | M | — |
 | **R4** | [Policy engine fails closed](#r4--policy-engine-fails-closed) | ✅ | 🔴 P0 | XS | — |
 | **R5** | [One trust contract + ingest scanning](#r5--one-trust-contract--ingest-scanning) | ✅ | 🔴 P0 | M | — |
 | **R21** | [Embedding outbox](#r21--embedding-outbox) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔴 P0 | S | — |
-| **R20e** | [Minimum score floor](#20e--minimum-score-floor--open) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔴 P0 | XS | — |
+| **R20e** | [Minimum score floor](#r20e-minimum-score-floor) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔴 P0 | XS | — |
 | **R6a** | [Ranking that needs no index](#r6a--ranking-that-needs-no-index) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🟠 P1 | M | — |
 | **R6b** | [The lexical index in the FSM](#r6b--the-lexical-index-in-the-fsm) — *[Retrieval](#retrieval--r6-r20-r21)* | ⬜ | 🔵 P3 | L | — |
 | **R20** | [Vector scan cost](#r20--vector-scan-cost) — *[Retrieval](#retrieval--r6-r20-r21)* | 🟨 | 🔵 P3 | M | — |
@@ -77,6 +78,7 @@ Status is the tree as of 2026-08-18 (see [Status drift](#status-drift) for detai
 | **R32** | [MCP over SSE, off unless asked for](#r32--mcp-over-sse-off-unless-asked-for) | ⬜ | 🟡 P2 | M | — |
 | **R33** | [Delegation as a primitive](#r33--delegation-as-a-primitive) | ⬜ | 🟠 P1 | M | — |
 | **R34** | [Skill bundles and the bootstrap](#r34--skill-bundles-and-the-bootstrap) | ⬜ | 🟠 P1 | M | — |
+| **R35** | [What the sandbox actually enforces](#r35--what-the-sandbox-actually-enforces) | ⬜ | 🔴 P0 | M | — |
 
 ### Bookkeeping (reviewed 2026-08-17)
 
@@ -137,9 +139,14 @@ which is the direction that costs you work you have already done.
   landed; only the table did not know. `internal/compute/drivers/` confirms all three.
 - **R31 → ✅, from 🟨.** All six boxes are ticked, including the two that needed a human tapping
   Approve against a real bot.
-- **R32 had a section and no row**, so it was invisible to anyone reading the index — the third time
-  this exact thing has happened, after R25 and R26. Rows are now added when the section is, and
-  a section with no row should fail a test the way a documented command with no dispatcher does.
+- **R32 and R2b had sections and no rows**, so they were invisible to anyone reading the index —
+  the third and fourth time this has happened, after R25 and R26. Both now have rows. R6 is the
+  one deliberate exception and says so at its head, because it is shared context for R6a/R6b
+  rather than work.
+
+  **This should be a test, not a habit.** A section with no row is the same defect as R31's
+  documented command with no dispatcher and R27's documented config key with no struct field —
+  both of which are now enforced. This one is not, and it has recurred four times.
 
 **Three findings from the code that the document did not have.** Each is written up in the item it
 belongs to; they are listed together here because they share a shape — *the document describes an
@@ -159,8 +166,8 @@ record whose embedding failed is stored and never becomes searchable, and a quer
 injects its three least-bad results into the prompt as relevant context. Both were sitting at P1
 inside a group deferred for performance reasons that do not apply to either.
 
-**Everything else outstanding is new work, not unfinished work.** R6a/R6b, R7, R11, R23, R30, R32,
-R33 and R34 are the whole open set.
+**The whole open set**, after the corrections above: R6a, R6b, R7, R11, R20 (20d only), R20e,
+R21, R23, R30, R32, R33, R34, R35. Everything else in the index is done.
 
 ### Status drift
 
@@ -977,7 +984,7 @@ The group is therefore now four items, in priority order:
 | # | Item | Needs | Why here |
 |---|---|---|---|
 | [R21](#r21--embedding-outbox) | Embedding outbox | nothing | 🔴 A record whose embedding failed is stored and never becomes searchable. Silent. |
-| [R20e](#20e--minimum-score-floor--open) | Minimum score floor | nothing | 🔴 A query with no good match injects its three least-bad results as "relevant context". |
+| [R20e](#r20e-minimum-score-floor) | Minimum score floor | nothing | 🔴 A query with no good match injects its three least-bad results as "relevant context". |
 | [R6a](#r6a--ranking-that-needs-no-index) | Ranking + transcript fixes | nothing | 🟠 What a person actually notices. Fusion, decay, MMR, relevance ordering. |
 | [R6b](#r6b--the-lexical-index-in-the-fsm) | Lexical index in the FSM | a corpus that needs it | 🔵 Held on a measured trigger. See the section. |
 
@@ -1070,6 +1077,8 @@ The codebase already solved this exact problem once, for transcripts —
 conversation. The bbolt cursor seeks straight to the range."* Vector search needs the same move.
 
 ## R6 — Retrieval mechanics
+
+*Shared context for [R6a](#r6a--ranking-that-needs-no-index) and [R6b](#r6b--the-lexical-index-in-the-fsm). R6 itself is no longer a work item and has no row in the index — the two halves do.*
 
 ### What the first draft got wrong
 
@@ -1329,7 +1338,7 @@ BucketVectorBands = "vector_bands"  // key: "<hmac(band_i)>:<record_id>" -> nil
 - Recall must be **measured against exact scan**, with automatic fallback when it degrades. An ANN
   that silently loses recall is worse than a slow exact scan, because the failure is invisible.
 
-### 20e · Minimum score floor — ⬜ open
+### R20e minimum score floor
 
 **🔴 P0, and promoted out of a prose bullet on 2026-08-18** because it was described as "the most
 valuable thing left in this section that is not 20d" while having no number, no anchor and no row —
@@ -2577,7 +2586,7 @@ Precedes R15. Changes where skills live, not what they are.
 
 Recorded as aide decision **`lobslaw-skill-storage-model`** (2026-08-15), which supersedes the
 "skills live in storage as directories" clause of `lobslaw-skills` and `lobslaw-persistence-model`.
-The three [open questions](#open-questions) below are carried in that decision and are unresolved.
+The three [open questions](#open-questions--decided-2026-08-16) below are carried in that decision and are unresolved.
 
 ### The confusion to remove
 
@@ -4406,3 +4415,382 @@ descriptions — an injection path that starts in a channel and ends in the mode
       outside the configured allowlist.
 - [ ] `mcp_list` distinguishes stdio from SSE, so "what is this node talking to" is answerable
       without reading config.
+
+---
+
+## R33 — delegation as a primitive
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem — restated, because the review got this wrong first
+
+The feature comparison recorded "lobslaw has no delegation; both references parallelise work and it
+cannot." That is false, and reading the code says so.
+
+**`research:run` is a delegation engine.** `research_start` writes a commitment; the coordinator asks
+a planner LLM to decompose the question, then **runs one full agent turn per sub-question with
+`web_search`, `fetch_url` and memory tools**, then merges the outputs with a synthesiser call. It
+even gets the subtle part right: planner and synthesiser bypass the agent loop deliberately, because
+when the planner went through `RunToolCallLoop` memory recall fed it the *previous* run's report and
+it regurgitated that instead of decomposing.
+
+So the open question is not whether lobslaw should delegate. It is **why the fan-out it has is
+welded to one hardcoded workflow**, and why two defects inside it have gone unnoticed because
+nothing else exercises the shape.
+
+### The two defects, first
+
+**1 · The budget does not add up, and the tool description says it does.**
+
+`runWorkers` constructs each worker with `mustBudget(8)` — a *fresh* eight-tool-call budget.
+`Depth` is capped at 10. Nothing sums them, so a depth-10 run is authorised for up to 80 tool calls
+plus two provider calls, and **no single object anywhere knows that number.**
+
+The per-worker cap's own comment says it exists "so a single bad worker can't eat the whole spend
+cap", which is true and is not the same claim as bounding the run.
+
+Worse, `research_start`'s tool description tells the model that `depth` "controls sub-question count
++ **total tool budget**". There is no total tool budget. The model is being told a bound exists so
+that it can reason about cost, and it does not exist. A description that promises enforcement the
+code does not perform is the same defect class as R27's phantom config keys, pointed at the model
+instead of at the operator.
+
+**2 · The fan-out is sequential**, by admission: `// runWorkers fires one agent turn per
+sub-question, sequentially (parallel later)`. Depth 5 is five 90-second timeouts end to end.
+
+**3 · And a stale comment**, found on the way: `research.go`'s package doc says the commitment
+`HandlerRef` is `"compute:research"`. Every other reference — the constant, the wiring, the tool
+description — says `research:run`. Nothing reads the doc comment, which is the point: it is the same
+documentation-versus-thing seam R31 catalogued, in the file that defines the thing.
+
+### Proposal
+
+Three steps, each independently landable, in this order.
+
+#### 33a · Make the spend add up
+
+**XS, and it is a live defect — do it first, independent of everything else.**
+
+One reservation computed at fan-out, from which every worker draws. `TurnBudget` already tracks
+spend and tool calls; it needs to be *shared* rather than cloned per worker.
+
+The effect worth stating: **depth becomes a shape parameter rather than a spend multiplier.** "Ask
+ten sub-questions" should divide a budget, not multiply one — which is also the honest reading of
+what the operator asked for, and what the tool description already claims happens.
+
+#### 33b · Run the workers concurrently
+
+**S.** Bounded concurrency, starting at 3. Same per-worker timeout. Depth-5 wall clock drops from
+five sequential 90-second windows to two.
+
+- **Ordering is already safe.** `findings` is an indexed slice written at `findings[i]`, so
+  sub-question order survives concurrency unchanged. Test it rather than assume it.
+- **The episodic writes start racing.** They go through `memory.Service` and therefore
+  `ApplyOrForward`, so this should be fine — which is precisely the class of claim R31 says to
+  verify rather than believe.
+- **Land it after 33a.** Parallelising an unbounded budget makes it burn faster.
+
+#### 33c · Promote the coordinator to a general primitive
+
+**M.** Planner → workers → synthesiser is a *fan-out turn*. Research becomes one configured instance
+of it; a `delegate` builtin becomes another. Four constraints, and the first is the load-bearing one.
+
+- **A child does not get the delegate tool.** Not a depth counter in config — the tool is **absent
+  from the child's registry**. This is the same move as `ArtefactStore` being the review fork's
+  entire write surface (R16): make the claim structural so nobody has to keep enforcing it. One
+  level in v1, and a fork bomb is not expressible rather than merely disallowed.
+- **A child draws from the parent's reservation** (33a), so the bound holds however the tree is
+  shaped.
+- **A child cannot write the parent's session.** Workers already get their own `TurnID` and return
+  findings as tagged episodic records rather than mutating the conversation. Keep it, and assert it
+  — the R3 session lease invariant depends on exactly one writer per conversation.
+- **A child that trips `require_confirmation` fails closed**, with a message naming the tool and the
+  rule. It cannot ask: the person is in a conversation with the **parent**, and R2's prompt carries
+  `RaisedFor` precisely so the wrong person cannot answer one. Routing a child's prompt up to the
+  parent's channel is a real and desirable design — and R31's sharpest bug was in exactly that
+  machinery, where `RaisedFor` was added to the in-memory prompt store and to nothing else. Design
+  it as a follow-on; do not ship it inside this.
+
+### What this must not become
+
+**A fourth implementation of "run an agent turn".** `runTaskAsAgentTurn`,
+`runCommitmentAsAgentTurn` and the research worker path are already three *callers*. R31's finding
+was *three times in one session, the same shape: two implementations of one concept, tests covering
+one* — and it named the fix as belonging in the writing, not the post-mortem. This is the writing.
+One turn-runner, N callers.
+
+**A worker role.** R25 retired the node functions that select nothing; delegation runs on the
+compute nodes that already exist.
+
+### Deferred: cluster-distributed workers
+
+Workers as claimable raft records that any compute node runs is the thing neither reference could
+do, and the commitment CAS-claim already provides most of the mechanism. Held anyway: the win is
+throughput on a fan-out that is *currently sequential on one node*, so 33b captures most of it
+without a distributed failure mode.
+
+**Trigger to revisit:** a fan-out whose wall clock is bounded by one node's provider concurrency
+limit rather than by the provider's.
+
+### Acceptance
+
+- [ ] A depth-10 fan-out cannot exceed the aggregate reservation — asserted by a test that counts,
+      not one that inspects configuration.
+- [ ] `research_start`'s description describes a bound that exists.
+- [ ] Workers run concurrently and findings order still matches sub-question order.
+- [ ] A child's tool registry contains no `delegate` — asserted structurally, not by reading config.
+- [ ] A child that needs confirmation fails with a message naming the tool and the rule.
+- [ ] A worker turn appears as a child span under the parent's trace, carrying the node id that ran it.
+- [ ] A fourth implementation of "run an agent turn" fails a test.
+- [ ] `research.go`'s package doc names the handler ref the code actually registers.
+
+---
+
+## R34 — skill bundles and the bootstrap
+
+⬜ **Not started.** 🟠 P1.
+
+### Problem
+
+The skill plumbing is complete and the corpus is empty.
+
+ClawHub client with digest verification, ed25519 detached signatures pinning `handler_sha256`,
+trusted publishers with prefix globs, cluster-replicated storage with rollback, four tiers,
+progressive disclosure levels 0–2, a capability floor for agent-authored skills — all of it built,
+and **all of it tested against examples.** A fresh `lobslaw init` produces an assistant that can do
+nothing it was not compiled with.
+
+That is the gap against both references, and it is not a plumbing gap. hermes ships ~60 curated
+skills across 15 categories; nullclaw ships SkillForge to go and find more.
+
+### Proposal
+
+#### A bundle is a signed manifest naming skills by version and digest
+
+Not a new storage type — it resolves to skills the existing importer already handles. Signed by the
+same ed25519 path and checked against the same `trusted_publishers.toml` prefixes, **because a thing
+that installs code is exactly as dangerous as the code it installs.**
+
+**Pinning version *and* digest per skill is the load-bearing part.** "Install the mail bundle" must
+be reproducible and must not mean "trust whatever the catalog serves today". This is where lobslaw
+should differ deliberately: hermes ships its corpus in-repo and unsigned, and nullclaw's SkillForge
+auto-integrates anything scoring above a threshold — trust by heuristic. R19 exists so that a
+signature covers executable content; a bundle that named skills without pinning them would hand that
+back.
+
+#### Selection asks what the operator wants done
+
+`lobslaw init` is **already** an interactive wizard collecting provider, endpoint, model, key and
+SOUL name, with a `--non-interactive` path driven by `LOBSLAW_INIT_*`. This needs one more question,
+not a new command:
+
+```
+What should it help with?  (space-separated, or none)
+
+  mail       read and triage mail, draft replies
+  calendar   agenda, scheduling, conflict checks
+  notes      capture and search notes
+  code       repo watching, review, issue triage
+  home       home automation
+```
+
+Categories are how a catalog is organised; they are not how a person decides.
+
+#### The metadata that makes this honest already exists
+
+Manifests declare `requires_capability`, `requires_binary`, `platforms`, `credentials`, `network`
+and `storage`. So init can state the cost up front — *"mail needs an IMAP credential and the
+`himalaya` binary; install anyway?"* — and run the preflight the installer's `binaries.SatisfyOpts`
+already performs.
+
+**A skill that cannot run here is reported as deferred with a reason, never installed.** That
+specific behaviour is required rather than nice: R13's level-0 index filters to what this node can
+run, so an installed-but-unrunnable skill is *invisible* rather than erroring — the worst of the
+available outcomes, because the operator has no symptom to search for.
+
+#### Bundle install is a cluster write
+
+`skills import` already targets the SkillService rather than local disk, so onboarding on one node
+populates every node. Neither reference can do that, and it is a good first impression of what the
+cluster is for.
+
+### Where the corpus comes from
+
+1. **Convert hermes's library.** MIT, agentskills.io-compatible, ~60 skills across 15 categories,
+   and R18 already shipped the importer. Sign under `lobslaw/*`, which is already the example prefix
+   sitting in `examples/trusted_publishers.toml`.
+
+   **Read every one.** This is re-publication under review, not vendoring. Installing a skill is
+   arbitrary code execution, and R19's entire point is that the signature covers executable content
+   — signing something unread makes the signature a lie about what was checked. That reading is the
+   real cost of this item, and it is also the thing that makes signing them honest.
+2. **Write the handful that cannot be borrowed** because they are lobslaw-native: cluster health,
+   memory hygiene, enrolment help, and the agenda skill PLAN.md §7.4 promised and which never landed.
+3. **Then ClawHub as the ongoing channel**, with bundles as its front door rather than a bare slug.
+
+### Non-goal, stated so it stops being proposed
+
+**SkillForge-style auto-discovery** — scout GitHub and HuggingFace, score candidates, auto-integrate
+above a threshold — is directly contrary to R19 and to the existing `DEFERRED.md` entry on
+agent-driven MCP install: *letting an LLM install arbitrary code is a remote-code-execution surface
+dressed up as a feature.* Bundles stay operator-initiated.
+
+This is written down for the same reason R30's refusal is: a capability nobody built looks like an
+oversight unless the refusal is recorded with its reason.
+
+### The second-order benefit is the real one
+
+A non-empty corpus is the fastest available way to find bugs in a subsystem whose plumbing is
+excellent and whose seams have never been crossed by real content. The importer, the signature
+verifier, tier precedence, the level-0 index, the agent capability floor and the invoker have each
+been tested individually. **The path through all six has never been walked by a single real skill.**
+
+That is the R31 shape stated in advance rather than discovered, and this is the cheapest way to go
+looking for it on purpose.
+
+### Acceptance
+
+- [ ] `lobslaw init` offers bundles by what they do; declining installs nothing.
+- [ ] A bundle pins version and digest per skill; installing twice yields byte-identical content.
+- [ ] An unsigned bundle is refused under `require_signed`, with the same message a skill gets.
+- [ ] A skill whose `requires_binary` cannot be satisfied is reported deferred-with-reason, not
+      installed and silently absent from the level-0 index.
+- [ ] A bundle installed on one node is listed by `skills list` on another.
+- [ ] `LOBSLAW_INIT_BUNDLES` works non-interactively, so `make smoke` and container images take the
+      same path a person does.
+- [ ] At least one converted skill exercises every stage end to end: import, sign, store, tier
+      precedence, level-0 index, invoke.
+
+---
+
+## R35 — what the sandbox actually enforces
+
+⬜ **Not started.** 🔴 P0 on the reporting half.
+
+### Why this item exists now
+
+Landlock, seccomp, namespaces, nftables and the egress proxy each landed in a different phase, and
+each is individually well built. Nothing states **which mechanism covers which concern**, or —
+more sharply — **what happens when one of them silently is not there.** With five mechanisms
+interacting, "the tool is sandboxed" has stopped being a single claim.
+
+### What is enforced today, by mechanism
+
+The reexec helper (`internal/sandbox/install_linux.go`) applies these in a fixed order, and the
+order is load-bearing and already reasoned about in comments:
+
+| # | Concern | Mechanism | Note |
+|---|---|---|---|
+| 1 | Privilege escalation across `execve` | `PR_SET_NO_NEW_PRIVS` | Prerequisite for Landlock, not merely defence in depth |
+| 2 | Which paths are readable / writable | Landlock `RestrictPaths`, per-mount bits | `mountModeAccessFS` maps r/w/x to an `AccessFSSet` so `rx` cannot leak write |
+| 3 | Which paths are **executable** | Landlock `AccessFSExecute` | Path-granular. See the limit below |
+| 4 | Egress, isolated skills | netns unshare + nftables drop-all-but-loopback | Smokescreen reached over a bind-mounted unix socket |
+| 5 | Egress, everything else | `HTTP(S)_PROXY` env vars → smokescreen | Application layer |
+| 6 | Which hosts | smokescreen ACL, role `skill/<name>` or `mcp/<name>` | Hostname-level, needs the proxy to be honoured |
+| 7 | Syscalls | seccomp BPF deny-list, `-EPERM` not `SIGSYS` | Last, so a tightened deny-list cannot block `landlock_*` or nft's netlink |
+
+Landlock before nftables so the policy covers the `nft` binary; nftables before seccomp so nft's
+`netlink`/`setsockopt` calls still work; seccomp last. That sequencing should be stated in
+`docs/dev/SANDBOX.md`, not only in three separate code comments.
+
+### The four gaps
+
+**1 · Landlock enforces no network at all here, and the version constant hides it.**
+
+The call is `landlock.V5.BestEffort().RestrictPaths(rules...)`. `V5` names an ABI; `RestrictPaths`
+uses only its filesystem half. Landlock ABI 4 added TCP bind/connect restriction and ABI 6 added
+scoping of abstract unix sockets and signals; `go-landlock v0.8.1` supports them and lobslaw calls
+neither. Reading the constant, a reviewer would reasonably conclude the network is covered.
+
+**2 · `.BestEffort()` degrades silently, and nothing records how far.**
+
+On a kernel without Landlock this is a **no-op** and the tool runs with the whole filesystem.
+`Probe()` reports `LandlockABIVersion` at boot; **no per-invocation record says what actually
+applied to this tool call.** The audit log records the decision the policy made. It does not record
+what the kernel did with it.
+
+That is the R31 seam exactly — two representations of one concept, *the policy as written* and *the
+policy as enforced*, with tests on the first. A kernel downgrade, a container without the LSM, or a
+`.BestEffort()` falling back two ABI levels all produce weaker confinement with no signal anywhere.
+
+**3 · The per-host network allowlist is advisory unless `network_isolation = true`.**
+
+`buildPolicy` sets `NetworkFilter` **only inside** `if skill.Manifest.NetworkIsolation`. Without it,
+the entire enforcement is `HTTP(S)_PROXY` env vars — and `internal/sandbox/netfilter/doc.go` says the
+consequence plainly: *"honest skills honour it, malicious or buggy ones can ignore it and connect
+direct."*
+
+So a manifest declaring `network = ["api.example.com"]` and not declaring isolation has written down
+a restriction that nothing enforces. **A manifest field that looks like enforcement and is not is
+worse than no field**, because it is what a reviewer checks and it is what an operator trusts.
+
+**4 · Exec restriction is path-granular and interpreter-blind.**
+
+`AccessFSExecute` controls which paths may be `execve`'d. A python or bash skill has read+exec on
+its handler directory by construction, so `exec(open(path).read())` — or any interpreter evaluating
+content from anywhere it can read — is entirely outside the model. This is not a Landlock defect; it
+is the boundary of what a filesystem LSM covers. It belongs in the threat model, because "the skill
+is sandboxed" reads as though it covers this.
+
+*Also found:* `netfilter/doc.go` says wiring the post-clone-pre-exec hook "is a follow-up
+integration step". It is wired — `installNetfilter` runs between Landlock and seccomp. Same stale
+comment class as R33's.
+
+### Proposal
+
+#### 35a · Record what was actually enforced — 🔴 P0
+
+An `EnforcementReport` per invocation: Landlock ABI actually applied (or `none`), whether the netns
+and nftables rules applied, seccomp filter size, `NoNewPrivs`. Attach it to the audit record and to
+the R24 trace span, so `lobslaw trace` can answer *"what confined this tool call"* on the node that
+ran it.
+
+Then a fail-closed switch, off by default:
+
+```toml
+[sandbox]
+require = "landlock"   # refuse to run a tool whose policy assumes a mechanism this host lacks
+```
+
+Best-effort stays the default because it is right for a personal single-node install. The point is
+that **degrading to unconfined becomes a choice with a record**, rather than the silent outcome of
+booting on a different kernel.
+
+#### 35b · Close the advisory-allowlist gap — M
+
+Two halves, and both are needed:
+
+- **Add Landlock `RestrictNet` (ABI 4) for TCP connect**, which needs no netns and no veth wiring.
+  It cannot replace smokescreen — Landlock net is IP:port, not hostname, so it cannot express
+  `api.example.com` — but it bounds what a process *bypassing the proxy* can reach. That is exactly
+  the belt to the proxy's braces, and it is available to every skill rather than only the isolated
+  ones.
+- **Make the unenforceable combination fail at parse.** `network = [...]` with
+  `network_isolation = false` on a host where Landlock net is unavailable must be an error or a loud
+  warning naming the gap. A declared restriction that does nothing must not load quietly.
+
+**State the honest limit in the same breath:** Landlock net is **TCP only**. UDP — including DNS —
+and raw sockets are untouched. It narrows the bypass; it does not close it. netns plus nftables
+remains the only complete answer, and 35b does not change that.
+
+#### 35c · Say what is not covered — XS
+
+`docs/dev/SANDBOX.md` already has a *"What the sandbox doesn't cover"* section, and it covers exactly
+one thing (prompt-injection / tool-call legitimacy). Add: interpreter-level execution within readable
+paths; UDP and raw sockets under any Landlock-net work; best-effort degradation and what it degrades
+to; and cgroup limits validated but not applied (`DEFERRED.md`). Add the mechanism table and the
+ordering rationale above while there.
+
+### Acceptance
+
+- [ ] Every sandboxed invocation records which mechanisms actually applied, not which were requested.
+- [ ] `lobslaw trace` can answer "what confined this tool call" for a given turn on a given node.
+- [ ] A host with no Landlock produces a visible degraded-enforcement signal, not silence.
+- [ ] `[sandbox] require` refuses rather than degrades, and a test proves it refuses.
+- [ ] A skill declaring `network` hosts without `network_isolation` either has that enforced below
+      the application layer, or fails to load with a message naming the gap.
+- [ ] A skill that ignores `HTTP_PROXY` and opens a socket directly cannot reach a host outside its
+      declared set — asserted with a skill that actually does it.
+- [ ] `SANDBOX.md` states which mechanism covers which concern, the install ordering and why, and
+      what none of them cover.
+- [ ] `netfilter/doc.go` no longer describes its own wiring as a follow-up step.
