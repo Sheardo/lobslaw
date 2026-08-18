@@ -4695,12 +4695,28 @@ Landlock before nftables so the policy covers the `nft` binary; nftables before 
 
 ### The four gaps
 
-**1 · Landlock enforces no network at all here, and the version constant hides it.**
+**1 · Landlock enforces no network here — and `RestrictNet` would not help much if it did.**
 
 The call is `landlock.V5.BestEffort().RestrictPaths(rules...)`. `V5` names an ABI; `RestrictPaths`
 uses only its filesystem half. Landlock ABI 4 added TCP bind/connect restriction and ABI 6 added
-scoping of abstract unix sockets and signals; `go-landlock v0.8.1` supports them and lobslaw calls
-neither. Reading the constant, a reviewer would reasonably conclude the network is covered.
+scoping of abstract unix sockets and signals; `go-landlock v0.8.1` supports both and lobslaw calls
+neither. Reading the constant alone, a reviewer would reasonably conclude the network is covered.
+
+> **Corrected 2026-08-18.** The first draft of this item proposed adding `RestrictNet` as
+> belt-and-braces to the egress proxy. That was written without reading `internal/egress`, and it is
+> wrong twice over.
+>
+> **It is redundant where the proxy is a UDS.** A `network_isolation` skill reaches smokescreen over
+> `unix:///<path>?role=<role>` and lives in a netns with no route out. There is no TCP to restrict.
+>
+> **It is nearly toothless where the proxy is TCP.** A non-isolated skill gets
+> `HTTPS_PROXY=http://<role>:_@127.0.0.1:<port>`, so any Landlock net rule would have to permit
+> `ConnectTCP(port)` — and **Landlock net rules are per-port, not per-address.** Allowing the
+> proxy's ephemeral loopback port allows connecting to that port number on *any* host. The one case
+> that needs help is the one where the mechanism has almost nothing to say.
+>
+> So: state in the docs that Landlock covers filesystem only, and do not reach for `RestrictNet`.
+> The real fix for the gap it was meant to close is in 35b, and it is a different shape.
 
 **2 · `.BestEffort()` degrades silently, and nothing records how far.**
 
@@ -4713,16 +4729,28 @@ That is the R31 seam exactly — two representations of one concept, *the policy
 policy as enforced*, with tests on the first. A kernel downgrade, a container without the LSM, or a
 `.BestEffort()` falling back two ABI levels all produce weaker confinement with no signal anywhere.
 
-**3 · The per-host network allowlist is advisory unless `network_isolation = true`.**
+**3 · The per-host allowlist is advisory for exactly one case: a skill subprocess that did not ask
+for isolation.**
 
-`buildPolicy` sets `NetworkFilter` **only inside** `if skill.Manifest.NetworkIsolation`. Without it,
-the entire enforcement is `HTTP(S)_PROXY` env vars — and `internal/sandbox/netfilter/doc.go` says the
-consequence plainly: *"honest skills honour it, malicious or buggy ones can ignore it and connect
-direct."*
+This needs stating precisely, because the first draft of this item overstated it. There are three
+egress paths and only the third is weak:
 
-So a manifest declaring `network = ["api.example.com"]` and not declaring isolation has written down
-a restriction that nothing enforces. **A manifest field that looks like enforcement and is not is
-worse than no field**, because it is what a reviewer checks and it is what an operator trusts.
+| Caller | Reaches the proxy via | Can it bypass? |
+|---|---|---|
+| In-process lobslaw (`llm`, `fetch_url`, `gateway/*`, `mcp/*`, `clawhub`, `oauth/*`) | `egress.For(role)` — the proxy **is** the `Transport` | **No.** A `forbidigo` rule forbids `http.Client{}`, `http.Get`, `http.DefaultClient` and friends outside `internal/egress`, so there is one chokepoint and the linter keeps it that way |
+| Skill with `network_isolation = true` | `unix:///<path>?role=<role>`, inside a netns, nftables dropping non-loopback | **No.** Three independent mechanisms |
+| Skill with `network_isolation = false` | `HTTPS_PROXY` env var | **Yes.** It is a separate program and can ignore the variable |
+
+For the third row `internal/sandbox/netfilter/doc.go` says the consequence plainly: *"honest skills
+honour it, malicious or buggy ones can ignore it and connect direct."*
+
+So a manifest declaring `network = ["api.example.com"]` **and not declaring isolation** has written
+down a restriction that nothing below the application layer enforces. **A manifest field that looks
+like enforcement and is not is worse than no field**, because it is what a reviewer checks and what
+an operator trusts.
+
+The in-process half is *not* a gap and should not be described as one — the lint-enforced single
+chokepoint is one of the better-built things in the tree.
 
 **4 · Exec restriction is path-granular and interpreter-blind.**
 
@@ -4758,20 +4786,34 @@ booting on a different kernel.
 
 #### 35b · Close the advisory-allowlist gap — M
 
-Two halves, and both are needed:
+Scope: **non-isolated skill subprocesses only** (gap 3, third row). Nothing else needs this.
 
-- **Add Landlock `RestrictNet` (ABI 4) for TCP connect**, which needs no netns and no veth wiring.
-  It cannot replace smokescreen — Landlock net is IP:port, not hostname, so it cannot express
-  `api.example.com` — but it bounds what a process *bypassing the proxy* can reach. That is exactly
-  the belt to the proxy's braces, and it is available to every skill rather than only the isolated
-  ones.
-- **Make the unenforceable combination fail at parse.** `network = [...]` with
-  `network_isolation = false` on a host where Landlock net is unavailable must be an error or a loud
-  warning naming the gap. A declared restriction that does nothing must not load quietly.
+The tempting fix is Landlock `RestrictNet`, and it does not work here — see gap 1 for why. The
+options that do:
 
-**State the honest limit in the same breath:** Landlock net is **TCP only**. UDP — including DNS —
-and raw sockets are untouched. It narrows the bypass; it does not close it. netns plus nftables
-remains the only complete answer, and 35b does not change that.
+**(a) Make the UDS proxy the default for every skill subprocess, then deny AF_INET outright.**
+The strongest answer, and it removes the isolated/non-isolated split entirely: if the only route to
+the network is a unix socket, `network_isolation` stops being the thing that decides whether the
+allowlist is real.
+
+The blocker is already written down in `wire_egress.go`: *"HTTP libraries that don't support
+`unix://` URLs in `HTTPS_PROXY` (most non-Go ones) need a per-runtime adapter."* Most skills are
+python or bash, so this is a real ergonomic cost, not a footnote — it is the reason the split exists.
+Costing that adapter, per runtime, is the actual work of this item.
+
+**(b) Deny `socket(AF_INET, …)` in seccomp for skills whose egress is UDS.** Complements (a) rather
+than replacing it: it makes bypass unavailable rather than merely unrouted. The existing filter is a
+syscall-*name* deny-list, so this needs argument-value filtering (seccomp-bpf can compare scalar
+args; the current builder does not). Smaller than (a) and useless without it.
+
+**(c) Refuse the combination at parse.** `network = [...]` with `network_isolation = false` becomes
+an error, or at minimum a warning naming the gap. Cheap, and it converts a silent weakness into a
+decision the operator makes. **Do this one first regardless of (a)** — it is the difference between
+a documented restriction and a fictional one, and it costs a validation branch.
+
+**(d) Do nothing, and say so in the manifest reference.** Legitimate if (a) is judged too expensive:
+an advisory allowlist is fine as long as nothing claims otherwise. What is not fine is the current
+state, where the field reads as enforcement.
 
 #### 35c · Say what is not covered — XS
 
@@ -4788,7 +4830,9 @@ ordering rationale above while there.
 - [ ] A host with no Landlock produces a visible degraded-enforcement signal, not silence.
 - [ ] `[sandbox] require` refuses rather than degrades, and a test proves it refuses.
 - [ ] A skill declaring `network` hosts without `network_isolation` either has that enforced below
-      the application layer, or fails to load with a message naming the gap.
+      the application layer, or fails to load with a message naming the gap. (35c)
+- [ ] The docs do not claim, and no item proposes, that Landlock restricts egress here — its rules
+      are per-port and the proxy is either a UDS or an ephemeral loopback port.
 - [ ] A skill that ignores `HTTP_PROXY` and opens a socket directly cannot reach a host outside its
       declared set — asserted with a skill that actually does it.
 - [ ] `SANDBOX.md` states which mechanism covers which concern, the install ordering and why, and
