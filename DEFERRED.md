@@ -192,3 +192,41 @@ Required checks + PR workflow. Solo-work today; direct-to-main is fine.
 ### `get-key` alias
 
 The user's OpenRouter API key is accessed via the zsh alias `get-key OPENROUTER_API_KEY_LOBSLAW`. Local-dev convenience, not a lobslaw concern — lobslaw reads `env:OPENROUTER_API_KEY_LOBSLAW` at runtime. Workflow: `OPENROUTER_API_KEY_LOBSLAW=$(get-key OPENROUTER_API_KEY_LOBSLAW) ./lobslaw ...`.
+
+---
+
+## Built-in embedder (`internal/embedder`)
+
+A pure-Go BERT / XLM-RoBERTa encoder so a node embeds its own memories in-process — no API key, no endpoint, and nothing leaving the machine at query time. Complete and in use; see `docs/docs/features/memory.md` for models, configuration and measurements.
+
+Three things are deliberately not done.
+
+### Attention still uses the dot kernel
+
+Only the six weight matmuls per layer go through the packed GEMM. Attention's operands are computed per call, so packing them costs more than it saves at short lengths — but its share grows with sequence length, and at 256 tokens it is already 16% of an encode.
+
+Packing is worth it at length: at 256 tokens, packing K costs ~16K writes against 4.2M multiply-accumulates. It needs its own scratch buffer and has not been written.
+
+**Trigger to revisit:** long-document embedding, or `bge-m3`'s 8k context in anger.
+
+---
+
+### The portable kernel is ~2x behind the vector one
+
+arm64, and amd64 without `GOEXPERIMENT=simd`, take this path. Everything available in plain Go has been tried and measured: 8 accumulators (kept, ~7%), blocked tiles from 4x4 to 4x32 (all slower — Go spills tile accumulators without vector types), row blocking for L1 residency (no change), and parallel-over-heads (kept).
+
+What remains is a Go assembly microkernel — NEON for arm64, AVX2 for amd64 without the experiment — with the portable loop as its fallback. That is real work and needs the fallback regardless, so the gap is a floor rather than an oversight.
+
+**Trigger to revisit:** an arm64 deployment where embedding latency actually matters.
+
+---
+
+### Model size, and mirroring the multilingual models
+
+int8 quantisation of the embedding table would take a multilingual model from 471 MB to roughly 180 MB — 82% of it is one row per token for a 250k vocabulary. Not done, because shrinking the *download* means producing and hosting a quantised artefact: a build pipeline and a hosting commitment, not a code change.
+
+Mirroring is likewise not done. `multilingual-e5-large` (2.2 GB) and `bge-m3` (2.3 GB) exceed a GitHub release asset's 2 GB per-file limit and would need splitting with reassembly; `multilingual-e5-small` (471 MB) would fit. All are MIT, so it is permitted — it is the hosting nobody has signed up for.
+
+The part that actually blocked people is fixed instead: every supported model has a verified `download_url` in the user documentation, and the `all-MiniLM-L6-v2` release documents the mirror layout for anyone hosting their own.
+
+**Trigger to revisit:** a deployment that must be multilingual AND cannot reach HuggingFace.

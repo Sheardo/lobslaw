@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jmylchreest/lobslaw/internal/memory"
-
 	"github.com/jmylchreest/lobslaw/internal/binaries"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
@@ -165,6 +163,18 @@ func (n *Node) wireStdlibTools() (*compute.Builtins, error) {
 // search, and the episodic ingester writes a paired vector record per
 // turn.
 func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
+	// Switched on explicitly rather than defaulted, so a typo is a
+	// start-up error instead of a silent fall-through to the remote
+	// path — which for type = "biultin" would then complain about a
+	// missing endpoint and send the operator looking in the wrong
+	// place entirely.
+	switch t := n.cfg.Compute.Embeddings.Type; t {
+	case "", "remote":
+	case "builtin":
+		return n.wireBuiltinEmbedder()
+	default:
+		return nil, fmt.Errorf("[compute.embeddings] type = %q is not a known type (want \"remote\" or \"builtin\")", t)
+	}
 	if n.cfg.Compute.Embeddings.Endpoint == "" {
 		// Said out loud, because the consequence is invisible
 		// otherwise: recall still works, but it matches words rather
@@ -197,18 +207,11 @@ func (n *Node) wireEmbedder() (compute.EmbeddingProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("embedding client: %w", err)
 	}
-	// Checked at BOOT, for the same reason the driver factory is: a
-	// store whose vectors were written by another model is not a
-	// first-recall problem, it is a wrong-answers-forever problem, and
-	// the only moment anybody is watching is start-up.
-	if err := memory.CheckEmbeddingModel(n.store, n.cfg.Compute.Embeddings.Model); err != nil {
-		return nil, err
-	}
-	n.embedder = ec
 	n.log.Debug("compute: embedding client wired",
 		"model", n.cfg.Compute.Embeddings.Model,
 		"dims", n.cfg.Compute.Embeddings.Dims)
-	return ec, nil
+	return ec.WithPrefixes(n.cfg.Compute.Embeddings.QueryPrefix,
+		n.cfg.Compute.Embeddings.PassagePrefix), nil
 }
 
 // wireMemoryTools registers memory_search / memory_write and friends,

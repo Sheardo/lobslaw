@@ -194,3 +194,81 @@ func TestAPrivateCatalogMirrorGetsTheAllowance(t *testing.T) {
 		t.Errorf("modelsdev hosts = %v, want the mirror", got)
 	}
 }
+
+// A builtin embedding model is DOWNLOADED, and a download that the
+// policy has no rule for is denied.
+//
+// The "embedding" role already existed and is the wrong one: it carries
+// the LLM provider hosts, because it is the allowance for CALLING an
+// embedding API. A model comes from a mirror. Reusing it would have
+// granted the wrong hosts and denied the right one.
+//
+// This is the same failure the modelsdev role was added to fix — wired
+// end to end except for the line that lets it out of the box — and it
+// happened again here, so it gets a test.
+func TestABuiltinModelDownloadGetsItsOwnRole(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{EmbeddingModelURL: "https://models.example.org/e5/base"})
+	hosts, ok := rules.Roles["embedding-model"]
+	if !ok {
+		t.Fatal("no embedding-model role; the download would be denied under Enforce")
+	}
+	if len(hosts) != 1 || hosts[0] != "models.example.org" {
+		t.Errorf("embedding-model hosts = %v, want [models.example.org]", hosts)
+	}
+	// It must NOT be conflated with the API-calling role.
+	if _, clash := rules.Roles["embedding"]; clash && len(rules.Roles["embedding"]) > 0 {
+		for _, h := range rules.Roles["embedding"] {
+			if h == "models.example.org" {
+				t.Error("the download host leaked into the embedding API role")
+			}
+		}
+	}
+}
+
+// A node that ships its model on disk fetches nothing, so it must carry
+// no allowance for fetching one. An unconditional rule would widen
+// every air-gapped node's egress for a feature it does not use.
+func TestNoDownloadURLGrantsNoModelEgress(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{})
+	if hosts, ok := rules.Roles["embedding-model"]; ok {
+		t.Errorf("embedding-model role granted with no download_url: %v", hosts)
+	}
+}
+
+// GitHub serves release assets from a CDN on a different host, so the
+// obvious implementation — allow the configured host — grants nothing
+// usable and the fetch dies with "Request rejected by proxy" on a
+// policy that reads correctly.
+//
+// Found by pointing a node at our own release mirror and watching it
+// fail to boot.
+func TestAGitHubReleaseDownloadAllowsItsRedirectHosts(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{
+		EmbeddingModelURL: "https://github.com/jmylchreest/lobslaw/releases/download/models-all-MiniLM-L6-v2",
+	})
+	hosts := rules.Roles["embedding-model"]
+	for _, want := range []string{"github.com", "release-assets.githubusercontent.com"} {
+		found := false
+		for _, h := range hosts {
+			if h == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("embedding-model hosts %v are missing %q", hosts, want)
+		}
+	}
+}
+
+// A non-GitHub mirror gets ONLY its own host. The redirect allowance is
+// specific to a host known to redirect, not a general widening.
+func TestANonGitHubMirrorGetsOnlyItsOwnHost(t *testing.T) {
+	t.Parallel()
+	rules := Build(ACLInputs{EmbeddingModelURL: "https://models.example.org/e5"})
+	if got := rules.Roles["embedding-model"]; len(got) != 1 || got[0] != "models.example.org" {
+		t.Errorf("hosts = %v, want [models.example.org]", got)
+	}
+}

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"fmt"
+	"log/slog"
 
 	"google.golang.org/protobuf/proto"
 
@@ -21,7 +22,12 @@ import (
 // way to fix it.
 func StoredEmbeddingModel(store *Store) (string, error) {
 	var found string
-	err := store.ForEach(BucketVectorRecords, func(_ string, raw []byte) error {
+	// Tolerant: a record this node cannot read is UNKNOWN, not fatal.
+	// Aborting here turned one unreadable record — written under a
+	// rotated key, or a corrupt page — into a node that never starts
+	// again, reporting a decryption error where the operator expected
+	// a model check.
+	skipped, err := store.ForEachDecryptable(BucketVectorRecords, func(_ string, raw []byte) error {
 		if found != "" {
 			return nil
 		}
@@ -36,6 +42,10 @@ func StoredEmbeddingModel(store *Store) (string, error) {
 	})
 	if err != nil {
 		return "", fmt.Errorf("scan vector records: %w", err)
+	}
+	if skipped > 0 {
+		slog.Default().Warn("memory: vector records could not be decrypted and were skipped "+
+			"while looking for the embedding-model stamp", "skipped", skipped)
 	}
 	return found, nil
 }
@@ -62,8 +72,8 @@ func (e *ErrEmbeddingModelChanged) Error() string {
 	return fmt.Sprintf(
 		"embedding model changed: this store's vectors were written by %q but [compute.embeddings] model is %q. "+
 			"Vectors from different models are not comparable, so every search would return confidently wrong "+
-			"results. Either restore model = %q, or stop the node and re-embed with "+
-			"`go run ./cmd/backfill-embeddings --force`",
+			"results. Either restore model = %q, or start once with "+
+			"--allow-embedding-model-change and run `lobslaw memory reembed`",
 		e.Stored, e.Configured, e.Stored)
 }
 

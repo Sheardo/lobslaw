@@ -12,20 +12,42 @@
 // Idempotent: skips episodic records that already have a
 // VectorRecord pointing at them (via source_ids). Safe to re-run.
 //
-// WARNING: runs OUTSIDE the live cluster — reads state.db
-// directly with ReadOnly semantics. Stop the node first; bbolt
-// file-locks prevent concurrent writers.
+// WARNING: runs OUTSIDE the live cluster — writes state.db directly.
+// Stop the node first; bbolt file-locks prevent concurrent writers.
+//
+// PREFER `lobslaw memory reembed`, which does this through raft on a
+// RUNNING node and is durable. This tool remains for a cluster that
+// will not start at all — the one case where an offline path is the
+// only path.
+//
+// DELETIONS DO NOT SURVIVE A NODE RESTART. Writing straight to the
+// store bypasses raft, and the node rebuilds state from its log on
+// boot — so a PUT still in the log re-applies and resurrects any key
+// this tool deleted. New records survive (fresh ids, nothing in the
+// log contradicts them); removals come back.
+//
+// Measured on the e2e rig: two --force runs back to back converge to
+// zero orphans, and a node restart between them brings the same five
+// keys back every time.
+//
+// The consequence is narrow but real. Re-embedding works — every
+// record gets a current vector — but vectors stamped with the previous
+// model can reappear. They are unreachable by recall once their source
+// records are gone, so nothing returns them; they are simply litter
+// that a `memory forget` through raft, or a snapshot, would clear.
 package main
 
 import (
 	"context"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/embedder"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -66,20 +88,30 @@ func main() {
 	if err != nil {
 		die("load config: %v", err)
 	}
-	if cfg.Compute.Embeddings.Endpoint == "" {
-		die("compute.embeddings.endpoint is empty — nothing to backfill against")
+	if !cfg.Compute.Embeddings.Configured() {
+		die("[compute.embeddings] is not configured — nothing to backfill against")
 	}
 
 	keyRaw := os.Getenv("LOBSLAW_MEMORY_KEY")
 	if keyRaw == "" {
 		die("LOBSLAW_MEMORY_KEY env required")
 	}
-	keyBytes, err := base64.StdEncoding.DecodeString(keyRaw)
+	// crypto.ParseKey, NOT a bare base64 decode.
+	//
+	// ParseKey accepts hex OR base64, which is what the node uses. This
+	// decoded base64 only — and a 64-character hex key IS valid base64:
+	// it decodes to 48 bytes of nonsense, the first 32 become the
+	// "key", and the failure surfaces as
+	//
+	//	decrypt failed (bad key, nonce, or ciphertext)
+	//
+	// on the first record, with nothing pointing at the key parsing.
+	// Two implementations of one concept, and the wrong one failed
+	// silently.
+	key, err := crypto.ParseKey(strings.TrimSpace(keyRaw))
 	if err != nil {
-		die("decode memory key: %v", err)
+		die("parse memory key: %v", err)
 	}
-	var key crypto.Key
-	copy(key[:], keyBytes)
 
 	statePath := filepath.Join(cfg.Cluster.DataDir, "state.db")
 	store, err := memory.OpenStore(statePath, key)
@@ -90,20 +122,10 @@ func main() {
 	// this Close; it only releases the file lock and mmap at exit.
 	defer func() { _ = store.Close() }()
 
-	apiKey, err := config.ResolveSecret(cfg.Compute.Embeddings.APIKeyRef)
-	if err != nil {
-		die("resolve embedding api key: %v", err)
-	}
-	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
-		Endpoint:      cfg.Compute.Embeddings.Endpoint,
-		APIKey:        apiKey,
-		Model:         cfg.Compute.Embeddings.Model,
-		Dims:          cfg.Compute.Embeddings.Dims,
-		DriverFactory: backfillEmbeddingFactory(cfg.Compute.Embeddings.Format),
-	})
-	if err != nil {
-		die("embed client: %v", err)
-	}
+	// Resolved through one function so main does not branch on the
+	// embedder kind; see newEmbedder for why builtin had to be added.
+	ec, closeEmbedder := newEmbedder(cfg)
+	defer closeEmbedder()
 
 	indexed := loadVectorIndex(store)
 	var (
@@ -124,7 +146,11 @@ func main() {
 	// written, so an interrupted --force run leaves a record with an
 	// old vector rather than none at all.
 	var replacing []string
-	err = store.ForEach(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
+	// Tolerant walk: a record written under a rotated key must not
+	// block re-embedding the entire corpus. Counted, not ignored — see
+	// the report below, which distinguishes "the key is wrong" from
+	// "a few old records".
+	unreadable, err := store.ForEachDecryptable(memory.BucketEpisodicRecords, func(_ string, raw []byte) error {
 		total++
 		var rec lobslawv1.EpisodicRecord
 		if err := proto.Unmarshal(raw, &rec); err != nil {
@@ -151,6 +177,7 @@ func main() {
 	if err != nil {
 		die("scan episodic: %v", err)
 	}
+	reportUnreadable(unreadable, total)
 
 	if len(todo) == 0 {
 		fmt.Println("No records need backfilling.")
@@ -258,13 +285,22 @@ func main() {
 	if removed > 0 {
 		fmt.Printf("Replaced:    %d stale vector(s)\n", removed)
 	}
+	if force {
+		if n := removeOrphanVectors(store, cfg.Compute.Embeddings.Model); n > 0 {
+			fmt.Printf("Orphans:     %d vector(s) removed (stamped with the previous model)\n", n)
+		}
+	}
 	fmt.Printf("Backfilled:  %d\n", backfilled)
 	fmt.Printf("Failed:      %d\n", failed)
 }
 
 // embedBatchWithRetry is the batch analogue of embedWithRetry.
 // One HTTP round-trip per call; retry the whole batch on rate-limit.
-func embedBatchWithRetry(ec *compute.EmbeddingClient, texts []string) ([][]float32, error) {
+// Takes the INTERFACE, not the HTTP client, so a builtin model goes
+// through the same retry and batching path. The retries are inert for
+// an in-process embedder — there is nothing transient to survive — but
+// one code path is worth more than a saved branch.
+func embedBatchWithRetry(ec compute.EmbeddingProvider, texts []string) ([][]float32, error) {
 	var lastErr error
 	for attempt := 0; attempt < 5; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -354,4 +390,114 @@ func backfillEmbeddingFactory(name string) compute.EmbeddingDriverFactory {
 		return compute.MiniMaxEmbeddingFactory
 	}
 	return compute.OpenAIEmbeddingFactory
+}
+
+// openBuiltin resolves and loads the in-process model.
+//
+// Downloads it if download_url is set and it is absent, exactly as the
+// node does at boot — so re-embedding after a model change does not
+// require the operator to have fetched it by hand first.
+func openBuiltin(cfg *config.Config) (*embedder.Encoder, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	// Through egress like the node's own fetch, not http.DefaultClient
+	// — a lint rule enforces this, and rightly: a tool that reached the
+	// internet outside the policy would be a hole the policy cannot see.
+	dir, err := embedder.Ensure(ctx, egress.For("embedding-model").HTTPClient(), cfg.Cluster.DataDir,
+		cfg.Compute.Embeddings.Model, cfg.Compute.Embeddings.DownloadURL)
+	if err != nil {
+		return nil, err
+	}
+	return embedder.Open(dir)
+}
+
+// newEmbedder builds whichever embedder the config asks for.
+//
+// BUILTIN MODELS HAVE TO WORK HERE, and did not. This tool required an
+// endpoint, so with type = "builtin" it refused to start — while
+// memory.CheckEmbeddingModel's error tells the operator to run exactly
+// this command to recover from a model change. A node running a local
+// model could therefore never change it: refused at boot, and refused
+// by the only tool offered as the way out.
+func newEmbedder(cfg *config.Config) (compute.EmbeddingProvider, func()) {
+	if cfg.Compute.Embeddings.Builtin() {
+		enc, err := openBuiltin(cfg)
+		if err != nil {
+			die("builtin embeddings: %v", err)
+		}
+		return compute.NewBuiltinEmbedder(enc, cfg.Compute.Embeddings.Model),
+			func() { _ = enc.Close() }
+	}
+	apiKey, err := config.ResolveSecret(cfg.Compute.Embeddings.APIKeyRef)
+	if err != nil {
+		die("resolve embedding api key: %v", err)
+	}
+	ec, err := compute.NewEmbeddingClient(compute.EmbeddingClientConfig{
+		Endpoint:      cfg.Compute.Embeddings.Endpoint,
+		APIKey:        apiKey,
+		Model:         cfg.Compute.Embeddings.Model,
+		Dims:          cfg.Compute.Embeddings.Dims,
+		DriverFactory: backfillEmbeddingFactory(cfg.Compute.Embeddings.Format),
+	})
+	if err != nil {
+		die("embed client: %v", err)
+	}
+	return ec, func() {}
+}
+
+// removeOrphanVectors deletes vectors carrying a DIFFERENT model's
+// stamp, and returns how many.
+//
+// --force replaces the vector for every episodic record it re-embeds,
+// but a vector that no episodic record points at is never visited: a
+// consolidation whose sources were pruned, or a row left by an
+// interrupted run. Those keep the old model's stamp, and one is enough
+// to make the boot guard refuse — which is exactly what happened on
+// the e2e rig: 54 records re-embedded and the node still would not
+// start, because five orphans still said multilingual-e5-base.
+//
+// Only vectors whose stamp DISAGREES are removed. One carrying the
+// configured model is current, and an unstamped one predates the field
+// — destroying that on a guess would lose a vector nothing said was
+// wrong.
+func removeOrphanVectors(store *memory.Store, model string) int {
+	var stale []string
+	if _, err := store.ForEachDecryptable(memory.BucketVectorRecords, func(k string, raw []byte) error {
+		var v lobslawv1.VectorRecord
+		if err := proto.Unmarshal(raw, &v); err != nil {
+			return nil
+		}
+		if v.EmbeddingModel != "" && v.EmbeddingModel != model {
+			stale = append(stale, k)
+		}
+		return nil
+	}); err != nil {
+		die("scan vector records: %v", err)
+	}
+	var removed int
+	for _, k := range stale {
+		if err := store.Delete(memory.BucketVectorRecords, k); err == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// reportUnreadable turns a skipped-record count into the right message.
+//
+// Nothing decrypting at all is the KEY, not the data, and the raw
+// "decrypt failed (bad key, nonce, or ciphertext)" on one record never
+// said so. Some decrypting means more than one key generation is
+// present, which is worth reporting because those records will never
+// be recalled and nothing else will mention them.
+func reportUnreadable(unreadable, total int) {
+	if unreadable == 0 {
+		return
+	}
+	if total == 0 {
+		die("none of the %d episodic records could be decrypted — LOBSLAW_MEMORY_KEY\n"+
+			"  does not match the key this data was written with. It must resolve to the\n"+
+			"  same value as [memory.encryption] key_ref does for the node.", unreadable)
+	}
+	fmt.Printf("Unreadable:  %d record(s) skipped — written under a different key\n", unreadable)
 }

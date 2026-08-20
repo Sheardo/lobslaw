@@ -79,6 +79,51 @@ func (n *Node) wireCompute() error {
 	if err != nil {
 		return err
 	}
+	// Assigned HERE, once, rather than inside whichever branch built
+	// it. The remote path used to set n.embedder itself, so when the
+	// builtin path was added it returned a perfectly good provider and
+	// left n.embedder nil — memory_search got it (that reads the return
+	// value) while the episodic ingester and the context engine did not
+	// (they read the field). The node logged "builtin embedding model
+	// ready" and then wrote no vectors at all, which is a failure with
+	// no error in it anywhere.
+	n.embedder = embedder
+	// The memory service re-embeds through raft (see memory.Reembed),
+	// so it needs the same embedder the ingester uses. Attached here
+	// rather than at construction because the service is wired before
+	// the embedder exists.
+	if n.memorySvc != nil && embedder != nil {
+		n.memorySvc.SetEmbedder(embedder)
+	}
+
+	// Checked HERE, once, for exactly the reason the assignment above
+	// is: this lived inside wireEmbedder's REMOTE branch, so when the
+	// builtin branch was added it skipped the guard entirely — and the
+	// builtin path is the one where changing models is easy, being a
+	// line of config rather than a new API key.
+	//
+	// A store whose vectors were written by another model is not a
+	// first-recall problem, it is a wrong-answers-forever problem:
+	// cosine across two vector spaces still returns a number, the
+	// number still sorts, and nothing reports anything. Start-up is
+	// the only moment anybody is watching.
+	//
+	// The identity comes from the PROVIDER, not from config, because
+	// that is what actually gets stamped on the vectors it writes.
+	if embedder != nil {
+		if err := memory.CheckEmbeddingModel(n.store, embedder.Model()); err != nil {
+			if !n.cfg.AllowEmbeddingModelChange {
+				return err
+			}
+			// Loud, because recall is WRONG until the re-embed
+			// finishes: queries are scored against vectors from
+			// another model, which returns confident nonsense rather
+			// than nothing.
+			n.log.Warn("compute: starting with a corpus embedded by a different model — "+
+				"recall will be wrong until `lobslaw memory reembed` completes",
+				"err", err.Error())
+		}
+	}
 
 	// binariesProvider comes back out of tool registration so the Agent
 	// (constructed below) can advertise the operator's [[binary]]

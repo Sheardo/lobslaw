@@ -48,6 +48,11 @@ type ACLInputs struct {
 	// the allowance instead of the public host.
 	ModelsDevURL string
 
+	// EmbeddingModelURL is where a builtin embedding model is fetched
+	// from, when one is configured with a download_url. Empty means
+	// nothing is fetched and no allowance is granted.
+	EmbeddingModelURL string
+
 	// ClawhubBaseURL is the API endpoint for clawhub.ai. Empty when
 	// the operator hasn't enabled clawhub installation.
 	ClawhubBaseURL string
@@ -161,6 +166,21 @@ func Build(in ACLInputs) Rules {
 		rules.Roles["modelsdev"] = []string{hostOfOrSelf(in.ModelsDevURL)}
 	}
 
+	// A builtin embedding model is DOWNLOADED, which is egress, and a
+	// distinct kind from calling an embedding API: the existing
+	// "embedding" role carries the LLM provider hosts, which is the
+	// wrong allowance entirely — a model comes from a mirror, not from
+	// the vendor you send prompts to.
+	//
+	// Same shape as modelsdev above, and for the same reason it is
+	// commented there: the feature can be wired end to end and still
+	// fail on the one line that lets it out of the box. This one was.
+	// Granted only when a download_url is set, so a node that ships
+	// its model on disk carries no allowance for fetching one.
+	if in.EmbeddingModelURL != "" {
+		rules.Roles["embedding-model"] = modelDownloadHosts(in.EmbeddingModelURL)
+	}
+
 	// Clawhub installer — hardcoded host set (clawhub API + the
 	// operator-declared binary hosts).
 	if in.ClawhubBaseURL != "" {
@@ -266,4 +286,34 @@ func (u *uniqueHosts) add(host string) {
 	}
 	u.seen[host] = struct{}{}
 	u.list = append(u.list, host)
+}
+
+// modelDownloadHosts is the host a model is fetched from, plus the
+// hosts it REDIRECTS to.
+//
+// Allowing only the configured host is the obvious implementation and
+// it does not work: github.com/<o>/<r>/releases/download/... answers
+// 302 to a signed CDN URL on another host entirely, so the fetch dies
+// with "Request rejected by proxy" on a policy that looks correct.
+//
+// Found by pointing a node at our own release mirror and watching it
+// fail to boot. It is the third time this shape has bitten — see the
+// modelsdev role above, whose comment says the feature can be wired end
+// to end except for the one line that lets it out of the box.
+//
+// Listed rather than following redirects blindly: an allowance that
+// widened to wherever a server pointed would not be an allowance.
+func modelDownloadHosts(rawURL string) []string {
+	host := hostOfOrSelf(rawURL)
+	hosts := []string{host}
+	if host == "github.com" || strings.HasSuffix(host, ".github.com") {
+		hosts = append(hosts,
+			// Where release assets are actually served from. Both are
+			// live: the first is current, the second still answers for
+			// older assets.
+			"release-assets.githubusercontent.com",
+			"objects.githubusercontent.com",
+		)
+	}
+	return hosts
 }
