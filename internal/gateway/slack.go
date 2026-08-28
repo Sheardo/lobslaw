@@ -482,6 +482,20 @@ func (h *SlackHandler) principalFor(ctx context.Context, teamID, userID string) 
 	return principal.ID()
 }
 
+// slackChannelSubject is the policy-subject form of a Slack user's
+// channel-derived id, for the notice subject allowlist.
+//
+// The counterpart of Telegram's numericSubject: an operator writes down
+// the id they can see, which is the raw Slack handle, while a bound
+// user's principal is whatever the alias maps to. Offering both is what
+// stops a configured allowlist silently matching nobody.
+func slackChannelSubject(teamID, userID string) string {
+	if userID == "" {
+		return ""
+	}
+	return "user:" + slackUserIdentity(teamID, userID)
+}
+
 func (h *SlackHandler) rolesFor(userID string) []string {
 	if h.cfg.Roles == nil {
 		return nil

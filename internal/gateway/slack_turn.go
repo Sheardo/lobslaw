@@ -147,9 +147,26 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		h.sendText(ctx, ev.Channel, thread, "Confirmation required: "+resp.ConfirmationReason)
 	case resp.Reply == "":
 		h.sendText(ctx, ev.Channel, thread, "(empty reply)")
+	case shared:
+		// No notice in a room. The nudge says how many proposals the
+		// OPERATOR has waiting — their queue, not the channel's, and
+		// the subject allowlist only decides who may be told, never
+		// who is standing behind them. cmd/lobslaw's own comment warns
+		// that a channel allowlist alone "would tell a group chat what
+		// the operator has pending"; in Slack a group chat is the
+		// normal case rather than the exception.
+		h.sendText(ctx, ev.Channel, thread, resp.Reply)
 	default:
+		// Three subject spellings, because the operator's list could
+		// hold any of them and matching only one is how a nudge ends up
+		// configured, reported enabled, and unable to fire:
+		//   - the resolved principal, when they bound an alias;
+		//   - the channel-derived id, when they did not;
+		//   - the bare Slack id, which is what ownerSubjects defaults
+		//     to and the only one written in a config file by hand.
 		h.sendText(ctx, ev.Channel, thread, h.cfg.Notices.Append(ctx,
-			ChannelSlack, convID, "scope:"+scope+":"+claims.UserID, resp.Reply, ev.User))
+			ChannelSlack, convID, grantSubject(claims), resp.Reply,
+			slackChannelSubject(teamID, ev.User), "user:"+ev.User))
 	}
 }
 
