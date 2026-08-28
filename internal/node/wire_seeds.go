@@ -69,6 +69,15 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		"credentials_grant":     true,
 		"credentials_revoke":    true,
 		"clawhub_install":       true,
+		// Reading a workspace's Slack history is not in the same class
+		// as read_file. Builtins are seeded default-allow because they
+		// are lobslaw-curated with a well-understood blast radius; the
+		// blast radius here is however much of a company's conversation
+		// the bot has been invited to. The channel's allowed_channels
+		// bounds WHICH conversations, and this leaves WHETHER AT ALL
+		// entirely in the operator's [[policy.rules]].
+		"slack_read_channel": true,
+		"slack_search":       true,
 	}
 
 	// Seed default-allow rules ONLY for builtins (Path prefix

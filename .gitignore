@@ -1,5 +1,6 @@
 # Build output
 /lobslaw
+/bin/
 /dist/
 
 # Coverage and profiling

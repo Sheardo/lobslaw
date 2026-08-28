@@ -119,13 +119,21 @@ func Build(in ACLInputs) Rules {
 		rules.Roles["embedding"] = llmHosts.list
 	}
 
-	// Gateway channels — Telegram is the only outbound HTTP channel
-	// today (api.telegram.org). Webhook channels are INBOUND; they
-	// don't need an outbound rule. Future channels with their own
-	// upstream (Slack, Discord) extend this switch.
+	// Gateway channels with an outbound upstream. Webhook channels are
+	// INBOUND; they don't need an outbound rule. Future channels with
+	// their own upstream (Discord, Matrix) extend this switch.
 	for _, ch := range in.Channels {
-		if ch.Type == "telegram" {
+		switch ch.Type {
+		case "telegram":
 			rules.Roles["gateway/telegram"] = []string{"api.telegram.org"}
+		case "slack":
+			// Two hosts, both needed. slack.com carries the Web API;
+			// the Socket Mode WebSocket lands on a per-connection
+			// subdomain (wss-primary.slack.com and friends) chosen by
+			// apps.connections.open, so it cannot be pinned exactly
+			// the way api.telegram.org can. File downloads arrive on
+			// files.slack.com, also under the wildcard.
+			rules.Roles["gateway/slack"] = []string{"slack.com", "*.slack.com"}
 		}
 	}
 

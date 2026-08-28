@@ -23,9 +23,17 @@ func (n *Node) wireGateway() error {
 	}
 
 	var tg *gateway.TelegramHandler
+	var sl *gateway.SlackHandler
 	var webhooks []*gateway.WebhookHandler
 	for i, ch := range n.cfg.Gateway.Channels {
 		switch ch.Type {
+		case "slack":
+			h, err := n.buildSlackHandler(ch)
+			if err != nil {
+				return fmt.Errorf("gateway.channels[%d] (slack): %w", i, err)
+			}
+			sl = h
+			n.slackHandler = h
 		case "telegram":
 			h, err := n.buildTelegramHandler(ch)
 			if err != nil {
@@ -55,6 +63,26 @@ func (n *Node) wireGateway() error {
 	}
 	n.webhookHandlers = webhooks
 
+	// The slack_* read tools are registered HERE rather than alongside
+	// the other builtins in wireCompute, because they need the handler
+	// and the gateway is wired second. seedDefaultPolicyRules runs
+	// later still, in Start, so it sees them — and skips them, since
+	// they are in noSeedTools.
+	if sl != nil && n.builtinsRegistry != nil && n.toolRegistry != nil {
+		if err := compute.RegisterSlackBuiltins(n.builtinsRegistry, compute.SlackToolConfig{
+			Reader: sl,
+		}); err != nil {
+			n.log.Warn("slack: read tools not registered", "err", err)
+		} else {
+			for _, td := range compute.SlackToolDefs() {
+				if err := n.toolRegistry.Register(td); err != nil {
+					n.log.Warn("slack: tool def register failed", "name", td.Name, "err", err)
+				}
+			}
+			n.log.Debug("compute: slack read tools registered")
+		}
+	}
+
 	// Notification dispatch service: routes the channel-agnostic
 	// `notify` builtin through registered Sinks. Each gateway
 	// channel handler that supports outbound delivery registers
@@ -65,6 +93,11 @@ func (n *Node) wireGateway() error {
 		if tg != nil {
 			if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
 				n.log.Warn("notify: telegram sink register failed", "err", err)
+			}
+		}
+		if sl != nil {
+			if err := notifySvc.RegisterSink(&gateway.SlackSink{Handler: sl}); err != nil {
+				n.log.Warn("notify: slack sink register failed", "err", err)
 			}
 		}
 		if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
@@ -127,6 +160,7 @@ func (n *Node) wireGateway() error {
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
 		Telegram:         tg,
+		Slack:            sl,
 		Webhooks:         webhooks,
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
@@ -146,6 +180,69 @@ func (n *Node) wireGateway() error {
 		"require_auth", cfg.RequireAuth,
 	)
 	return nil
+}
+
+// buildSlackHandler resolves both Slack tokens and constructs the
+// handler. Two tokens with different jobs: the bot token signs Web API
+// calls, the app token opens Socket Mode. Either missing is fatal at
+// boot rather than at first message — a Slack channel that cannot
+// connect or cannot reply is not a degraded channel, it is a silent one.
+func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.SlackHandler, error) {
+	botToken, err := n.resolveChannelSecret(ch.BotTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("bot_token_ref %q: %w", ch.BotTokenRef, err)
+	}
+	if botToken == "" {
+		return nil, fmt.Errorf("bot_token_ref %q resolved to empty — required for Slack (the xoxb- token)", ch.BotTokenRef)
+	}
+	appToken, err := n.resolveChannelSecret(ch.AppTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("app_token_ref %q: %w", ch.AppTokenRef, err)
+	}
+	if appToken == "" {
+		return nil, fmt.Errorf("app_token_ref %q resolved to empty — required for Slack Socket Mode (the xapp- token, needs connections:write)", ch.AppTokenRef)
+	}
+
+	// Slack delivers each event to exactly ONE open Socket Mode
+	// connection. Two nodes both connected would split a conversation
+	// between them at random, so the loop is pinned to the leader
+	// wherever there is one to pin it to.
+	var gate singleton.Gate
+	if n.leaderGate != nil {
+		gate = n.leaderGate
+	}
+
+	return gateway.NewSlackHandler(gateway.SlackConfig{
+		BotToken:         botToken,
+		AppToken:         appToken,
+		AllowedChannels:  ch.AllowedChannels,
+		UserScopes:       ch.UserScopes,
+		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
+		Roles:            n.resolveUserRoles,
+		Identity:         n.identityResolver(),
+		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
+		Notices:          n.notices,
+		Prompts:          n.promptRegistry,
+		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
+		Approvals:        n.approvals,
+		ApprovalRules:    n.approvalRules,
+		Leaser:           n.newSessionLeaser(),
+		Sessions:         n.newSessionStore(),
+		Compactor:        n.newSessionCompactor(),
+		Conversation:     n.conversationConfig(),
+		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
+		RelatednessJudge: n.newRelatednessJudge(),
+		QueueBurstWindow: n.cfg.Gateway.QueueBurstWindow,
+		QueueBurstReset:  n.cfg.Gateway.QueueBurstReset,
+		TypingInterval:   n.cfg.Gateway.TypingInterval,
+		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
+		HardTimeout:      n.cfg.Gateway.HardTimeout,
+		Soul:              n.soulProvider,
+		CommandAuthorizer: n.commandAuthorizerOrNil(),
+		Gate:              gate,
+		Logger:            n.log,
+	}, n.agent)
 }
 
 // buildTelegramHandler resolves bot token + webhook secret from the

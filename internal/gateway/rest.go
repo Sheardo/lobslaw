@@ -105,6 +105,12 @@ type RESTConfig struct {
 	// so operators don't need a second listener.
 	Telegram *TelegramHandler
 
+	// Slack, when set, runs its Socket Mode loop for the lifetime of
+	// this server. Unlike Telegram it mounts no route: Socket Mode is
+	// an outbound WebSocket, which is the whole reason this channel
+	// needs no public ingress.
+	Slack *SlackHandler
+
 	// Webhooks are generic inbound-webhook channels (Zapier,
 	// IFTTT, n8n, GitHub Actions, etc.). Each is mounted at its
 	// PathPrefix on the same mux. Empty slice = no webhooks.
@@ -246,6 +252,18 @@ func (s *Server) Start(ctx context.Context) error {
 		go func() {
 			if err := s.cfg.Telegram.RunLongPoll(ctx); err != nil {
 				s.log.Warn("telegram long-poll exited", "err", err)
+			}
+		}()
+	}
+
+	// Slack's Socket Mode connection runs alongside for the same
+	// reason and with the same failure policy: it is outbound, so it
+	// needs no route on this server, and a Slack outage must not take
+	// the gateway down with it.
+	if s.cfg.Slack != nil {
+		go func() {
+			if err := s.cfg.Slack.RunSocketMode(ctx); err != nil {
+				s.log.Warn("slack socket mode exited", "err", err)
 			}
 		}()
 	}

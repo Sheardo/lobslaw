@@ -40,6 +40,7 @@ require (
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/armon/go-proxyproto v0.0.0-20170620220930-48572f11356f // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
+	github.com/coder/websocket v1.8.15 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
