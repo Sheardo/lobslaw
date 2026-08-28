@@ -26,7 +26,12 @@ const slackWorkingText = "_Working on it…_"
 type slackResponder struct {
 	h       *SlackHandler
 	channel string
-	thread  string
+	// thread is where replies go: a thread in a channel, empty in a DM.
+	thread string
+	// status is where the native status goes, which is a different
+	// question — a DM replies inline but still has an assistant thread,
+	// rooted at the user's message. Never empty.
+	status string
 
 	// mu guards ts. The interim timer fires on its own goroutine while
 	// the turn is running, so the placeholder can be written by one and
@@ -55,7 +60,7 @@ func (r *slackResponder) begin(ctx context.Context) {
 	// anything posted. It needs assistant:write and an assistant
 	// thread, so it fails in a plain channel, and that is expected
 	// rather than exceptional.
-	if err := r.h.api.setAssistantStatus(ctx, r.channel, r.thread, slackStatusText); err == nil {
+	if err := r.h.api.setAssistantStatus(ctx, r.channel, r.status, slackStatusText); err == nil {
 		r.mu.Lock()
 		r.native = true
 		r.mu.Unlock()
@@ -96,7 +101,7 @@ func (r *slackResponder) clearStatus(ctx context.Context) {
 	if !r.usingNative() {
 		return
 	}
-	if err := r.h.api.setAssistantStatus(ctx, r.channel, r.thread, ""); err != nil {
+	if err := r.h.api.setAssistantStatus(ctx, r.channel, r.status, ""); err != nil {
 		r.h.log.Debug("slack: could not clear the assistant status", "err", err)
 	}
 }
@@ -138,7 +143,7 @@ func (r *slackResponder) Typing(context.Context) error { return nil }
 // rewrites the placeholder, which is the same idea done with a message.
 func (r *slackResponder) Interim(ctx context.Context, text string) error {
 	if r.usingNative() {
-		if err := r.h.api.setAssistantStatus(ctx, r.channel, r.thread, text); err == nil {
+		if err := r.h.api.setAssistantStatus(ctx, r.channel, r.status, text); err == nil {
 			return nil
 		}
 		// The status worked once and has stopped; say it as a message
@@ -160,8 +165,13 @@ func (r *slackResponder) Final(ctx context.Context, text string) error {
 // The hard timeout matters more here than on Telegram: Slack has
 // already been acked, so a turn that never finishes leaves the user
 // with silence and no error, and nothing upstream will time it out.
-func (h *SlackHandler) startResponsivenessGuards(ctx context.Context, channel, thread string) (context.Context, *slackResponder, func()) {
-	r := &slackResponder{h: h, channel: channel, thread: thread}
+func (h *SlackHandler) startResponsivenessGuards(ctx context.Context, channel, thread, status string) (context.Context, *slackResponder, func()) {
+	// status falls back to thread for callers that have only one — the
+	// approval resume, which is answering into a thread it was handed.
+	if status == "" {
+		status = thread
+	}
+	r := &slackResponder{h: h, channel: channel, thread: thread, status: status}
 	r.begin(ctx)
 	turnCtx, cleanup := startResponsiveness(ctx, r, ResponsivenessConfig{
 		// No typing timer: there is nothing to refresh. The interim

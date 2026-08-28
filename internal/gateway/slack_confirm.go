@@ -372,7 +372,7 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	// the first one, so it gets its own placeholder. Without it the
 	// user taps Approve and is back to silence — worse than the first
 	// wait, because they have just been told something is happening.
-	turnCtx, r, cleanup := h.startResponsivenessGuards(ctx, channel, thread)
+	turnCtx, r, cleanup := h.startResponsivenessGuards(ctx, channel, thread, thread)
 	defer cleanup()
 
 	cont.Request.Budget.Relax()

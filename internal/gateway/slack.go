@@ -571,3 +571,19 @@ func replyThread(ev slackEvent) string {
 	}
 	return ev.TS
 }
+
+// statusThread addresses the assistant thread the native status
+// decorates, which is NOT the same question as where a reply goes.
+//
+// A DM replies inline — there is no room to keep tidy — so its reply
+// thread is empty. The assistant thread is not: it is rooted at the
+// user's own message. Reading the reply thread for both meant the
+// status was skipped for want of a thread in the single surface where
+// assistant threads actually exist, and every DM fell back to posting
+// a placeholder. Never empty, so a caller cannot repeat that.
+func statusThread(ev slackEvent) string {
+	if ev.ThreadTS != "" {
+		return ev.ThreadTS
+	}
+	return ev.TS
+}

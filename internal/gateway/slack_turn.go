@@ -124,7 +124,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 
 	// The placeholder goes up here, before the agent runs, and every
 	// branch below rewrites it rather than posting again.
-	turnCtx, responder, cleanup := h.startResponsivenessGuards(ctx, ev.Channel, thread)
+	turnCtx, responder, cleanup := h.startResponsivenessGuards(ctx, ev.Channel, thread, statusThread(ev))
 	defer cleanup()
 
 	resp, err := h.agent.RunToolCallLoop(turnCtx, agentReq)
