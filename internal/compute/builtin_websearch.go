@@ -54,7 +54,7 @@ func RegisterWebSearchBuiltin(b *Builtins, cfgs ...WebSearchConfig) error {
 		handlers = append(handlers, failoverHandler{
 			label: cfg.Label,
 			tier:  cfg.TrustTier,
-			fn:    newWebSearchHandler(cfg.Driver),
+			fn:    newWebSearchHandler(cfg.Driver, cfg.Label),
 		})
 	}
 	return b.Register("web_search", failoverBuiltin("web_search", nil, b.Health(), b.TrustFloor(), handlers...))
@@ -67,7 +67,7 @@ func WebSearchToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "web_search",
 		Path:        BuiltinScheme + "web_search",
-		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right). When summarising results for the user, CITE sources with markdown link syntax like [title](url) so the user can click through.",
+		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right). When summarising results for the user, CITE sources with markdown link syntax like [title](url) so the user can click through. The response also carries \"provider\" (which configured search backend answered) and, per result, \"engine\" where the backend reports it — use those if asked which search backend was used rather than inspecting the system.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {
@@ -94,10 +94,11 @@ const searchSnippetCap = 600
 
 // newWebSearchHandler is the backend-agnostic half: argument parsing,
 // clamping, snippet trimming, and the response envelope. Every driver
-// produces the same JSON, so nothing downstream — the prompt's tool
-// guidance, the research workers, existing transcripts — can tell
-// which backend answered.
-func newWebSearchHandler(driver SearchDriver) BuiltinFunc {
+// produces the same SHAPE, so nothing downstream — the prompt's tool
+// guidance, the research workers, existing transcripts — has to change
+// when the backend does. The provider label rides along inside it so
+// the agent can still say which one answered.
+func newWebSearchHandler(driver SearchDriver, provider string) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		query := args["query"]
 		if query == "" {
@@ -126,8 +127,20 @@ func newWebSearchHandler(driver SearchDriver) BuiltinFunc {
 			results[i].Text = textutil.Truncate(results[i].Text, "…", searchSnippetCap)
 		}
 		out, err := json.Marshal(map[string]any{
-			"query":   query,
-			"results": results,
+			"query": query,
+			// Which backend answered. Additive, and it exists because
+			// the agent could not otherwise tell: asked whether a search
+			// had gone through the operator's self-hosted SearXNG, it
+			// shelled out to pgrep, got nothing (the sandbox has no
+			// /proc), and reported there was no SearXNG — while every
+			// result in its hands had come from one. A tool that cannot
+			// say who served it makes the agent guess, and the agent
+			// guessed wrong in the confident direction.
+			//
+			// Empty when the provider is unlabelled, so it costs an
+			// unconfigured deployment nothing.
+			"provider": provider,
+			"results":  results,
 		})
 		if err != nil {
 			return nil, 1, err

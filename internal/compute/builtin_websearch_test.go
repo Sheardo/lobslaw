@@ -133,6 +133,44 @@ func TestWebSearchTruncatesSnippetsOnRuneBoundaries(t *testing.T) {
 	}
 }
 
+// The agent was asked whether a search had gone through the operator's
+// self-hosted SearXNG. Nothing in the tool result said, so it shelled
+// out to pgrep, got nothing back through a sandbox with no /proc, and
+// answered that there was no SearXNG — while holding results that had
+// come from one. The envelope names the backend so that question has an
+// answer that does not require guessing.
+func TestWebSearchEnvelopeNamesTheProvider(t *testing.T) {
+	t.Parallel()
+	b := NewBuiltins()
+	if err := RegisterWebSearchBuiltin(b, WebSearchConfig{
+		Label:  "searxng",
+		Driver: &stubSearchDriver{results: []SearchResult{{Title: "T", URL: "https://x", Engine: "google cse"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("web_search")
+	stdout, _, err := fn(context.Background(), map[string]string{"query": "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Provider string         `json:"provider"`
+		Results  []SearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(stdout, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if payload.Provider != "searxng" {
+		t.Errorf("provider = %q; want the configured label", payload.Provider)
+	}
+	// The per-result engine rides along too: a metasearch front-end
+	// knows which upstream produced each hit, and that is a second,
+	// independent signal of which backend answered.
+	if payload.Results[0].Engine != "google cse" {
+		t.Errorf("engine = %q", payload.Results[0].Engine)
+	}
+}
+
 func TestWebSearchClampsNumResults(t *testing.T) {
 	t.Parallel()
 	driver := &stubSearchDriver{}
