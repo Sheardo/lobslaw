@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // stubSearchDriver answers from a fixed script, recording that it ran.
@@ -94,6 +95,41 @@ func TestWebSearchEnvelopeIsBackendAgnostic(t *testing.T) {
 	// no field the model has to reason about.
 	if strings.Contains(string(stdout), "engine") {
 		t.Errorf("empty engine should not appear in the envelope: %s", stdout)
+	}
+}
+
+// Snippets are cut in runes, not bytes: a byte cut lands inside a
+// character and hands the model — and the transcript, and Telegram —
+// invalid UTF-8.
+func TestWebSearchTruncatesSnippetsOnRuneBoundaries(t *testing.T) {
+	t.Parallel()
+	driver := &stubSearchDriver{results: []SearchResult{
+		{Title: "T", URL: "https://x", Text: strings.Repeat("日", 900)},
+	}}
+	b := NewBuiltins()
+	if err := RegisterWebSearchBuiltin(b, WebSearchConfig{Driver: driver}); err != nil {
+		t.Fatal(err)
+	}
+	fn, _ := b.Get("web_search")
+	stdout, _, err := fn(context.Background(), map[string]string{"query": "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Results []SearchResult `json:"results"`
+	}
+	if err := json.Unmarshal(stdout, &payload); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := payload.Results[0].Text
+	if !utf8.ValidString(got) {
+		t.Fatal("truncation produced invalid UTF-8")
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("want an ellipsis; got %q", got[len(got)-8:])
+	}
+	if n := utf8.RuneCountInString(strings.TrimSuffix(got, "…")); n != searchSnippetCap {
+		t.Errorf("kept %d runes; want %d — a byte cap would have kept a third of that", n, searchSnippetCap)
 	}
 }
 

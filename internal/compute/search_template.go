@@ -173,12 +173,17 @@ type templateSearchDriver struct {
 }
 
 func (d *templateSearchDriver) Search(ctx context.Context, req SearchRequest) ([]SearchResult, error) {
-	params := map[string]string{d.queryParam: req.Query}
+	// any rather than string, because the result count has to survive
+	// as a JSON number in a POST body. Tavily's max_results and its
+	// peers are typed integers and reject "3" — and a driver that
+	// silently sends the wrong type fails at the API, a layer where
+	// the operator has no way to see which field did it.
+	params := map[string]any{d.queryParam: req.Query}
 	for k, v := range d.extraParams {
 		params[k] = v
 	}
 	if d.countParam != "" && req.NumResults > 0 {
-		params[d.countParam] = strconv.Itoa(req.NumResults)
+		params[d.countParam] = req.NumResults
 	}
 	if d.depthParam != "" && req.Depth != "" {
 		params[d.depthParam] = req.Depth
@@ -234,7 +239,7 @@ func (d *templateSearchDriver) Search(ctx context.Context, req SearchRequest) ([
 	return out, nil
 }
 
-func (d *templateSearchDriver) buildRequest(ctx context.Context, params map[string]string) (*http.Request, error) {
+func (d *templateSearchDriver) buildRequest(ctx context.Context, params map[string]any) (*http.Request, error) {
 	if d.method == http.MethodPost {
 		body, err := json.Marshal(params)
 		if err != nil {
@@ -252,11 +257,24 @@ func (d *templateSearchDriver) buildRequest(ctx context.Context, params map[stri
 		return nil, err
 	}
 	q := u.Query()
+	// A query string has no types, so everything flattens back to text
+	// here — the distinction only ever mattered for the JSON body.
 	for k, v := range params {
-		q.Set(k, v)
+		q.Set(k, paramString(v))
 	}
 	u.RawQuery = q.Encode()
 	return http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+}
+
+func paramString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case int:
+		return strconv.Itoa(t)
+	default:
+		return fmt.Sprint(t)
+	}
 }
 
 // dotPath walks a decoded JSON value by a dotted path ("web.results").

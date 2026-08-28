@@ -63,6 +63,22 @@ func TestResolvedSearchProvidersReadsUnmatchedNameAsDriver(t *testing.T) {
 	}
 }
 
+// The half-finished migration: a SearXNG block added, the old Exa key
+// left behind. Preferring the key would keep sending queries to the
+// hosted API the operator was moving away from, and say nothing.
+func TestResolvedSearchProvidersPrefersDeclaredOverLegacyKey(t *testing.T) {
+	t.Parallel()
+	got := resolvedSearchProviders(config.ComputeConfig{
+		SearchProviders: []config.SearchProviderConfig{
+			{Label: "searxng", Driver: "searxng", Endpoint: "http://searxng:8080/search"},
+		},
+		WebSearch: config.WebSearchConfig{APIKeyRef: "env:EXA_API_KEY"},
+	})
+	if len(got) != 1 || got[0].Driver != "searxng" {
+		t.Fatalf("providers = %+v; a declared backend must beat the legacy key", got)
+	}
+}
+
 func TestResolvedSearchProvidersEmptyWhenNothingDeclared(t *testing.T) {
 	t.Parallel()
 	if got := resolvedSearchProviders(config.ComputeConfig{}); len(got) != 0 {

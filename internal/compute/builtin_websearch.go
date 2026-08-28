@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -84,6 +85,11 @@ func WebSearchToolDef() *types.ToolDef {
 // searchSnippetCap trims each result's text. LLMs don't need the full
 // page, just a citable snippet — and a ten-result search at full page
 // length would eat the turn's context budget on its own.
+//
+// Runes, not bytes. The byte slice this replaced was one of the class
+// textutil.Truncate exists to end: it gave a Japanese speaker a third
+// of the snippet an English one got, and cut the last character in
+// half on the way out.
 const searchSnippetCap = 600
 
 // newWebSearchHandler is the backend-agnostic half: argument parsing,
@@ -117,9 +123,7 @@ func newWebSearchHandler(driver SearchDriver) BuiltinFunc {
 			return nil, 1, err
 		}
 		for i := range results {
-			if len(results[i].Text) > searchSnippetCap {
-				results[i].Text = results[i].Text[:searchSnippetCap] + "…"
-			}
+			results[i].Text = textutil.Truncate(results[i].Text, "…", searchSnippetCap)
 		}
 		out, err := json.Marshal(map[string]any{
 			"query":   query,

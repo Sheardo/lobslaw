@@ -68,7 +68,7 @@ func TestTemplateDriverDescribesBraveWithoutCode(t *testing.T) {
 // results, and a numeric score. Same driver, different TOML.
 func TestTemplateDriverPostsJSONBody(t *testing.T) {
 	t.Parallel()
-	var body map[string]string
+	var body map[string]any
 	var auth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth = r.Header.Get("Authorization")
@@ -96,8 +96,13 @@ func TestTemplateDriverPostsJSONBody(t *testing.T) {
 	if auth != "Bearer tvly-key" {
 		t.Errorf("authorization = %q", auth)
 	}
-	if body["query"] != "q" || body["max_results"] != "3" || body["search_depth"] != "basic" {
+	if body["query"] != "q" || body["search_depth"] != "basic" {
 		t.Errorf("post body = %+v", body)
+	}
+	// A JSON number, not "3". Tavily's max_results and its peers are
+	// typed integers and reject the string form.
+	if n, ok := body["max_results"].(float64); !ok || n != 3 {
+		t.Errorf("max_results = %#v; want the JSON number 3", body["max_results"])
 	}
 	// The defaults cover this shape with no response mapping at all.
 	if len(results) != 1 || results[0].Text != "c" || results[0].Score != 0.75 {
@@ -239,5 +244,32 @@ func TestTemplateCoercesScalarFields(t *testing.T) {
 	}
 	if results[0].Score != 0.5 {
 		t.Errorf("string score = %v", results[0].Score)
+	}
+}
+
+// The result count is a number in a JSON body and text in a query
+// string, because a query string has no types. Both forms have to work
+// off the same params map.
+func TestTemplateCountIsTextInAQueryString(t *testing.T) {
+	t.Parallel()
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"results":[]}`))
+	}))
+	defer srv.Close()
+
+	d, err := TemplateSearchFactory(SearchDriverConfig{
+		Endpoint: srv.URL,
+		Options:  map[string]string{"auth_style": "none", "count_param": "count"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Search(context.Background(), SearchRequest{Query: "q", NumResults: 7}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotQuery, "count=7") {
+		t.Errorf("query = %q; want count=7", gotQuery)
 	}
 }

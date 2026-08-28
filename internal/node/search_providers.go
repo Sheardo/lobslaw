@@ -29,6 +29,18 @@ func resolvedSearchProviders(c config.ComputeConfig) []config.SearchProviderConf
 
 	if len(names) == 0 {
 		switch {
+		// A declared backend beats the legacy key, and the order here
+		// is the whole point. Half-finished migrations are the norm:
+		// somebody adds a [[compute.search_providers]] block for their
+		// SearXNG and leaves the old api_key_ref in place. Checking the
+		// key first would quietly keep sending their queries to Exa —
+		// the one outcome the person configuring SearXNG was trying to
+		// avoid, arrived at silently.
+		//
+		// One declared backend needs no selecting. Several do, and
+		// Config.Validate says so rather than this picking for them.
+		case len(c.SearchProviders) == 1:
+			return []config.SearchProviderConfig{c.SearchProviders[0]}
 		// The pre-driver shape: an api_key_ref and nothing else meant
 		// Exa, and still does.
 		case c.WebSearch.APIKeyRef != "":
@@ -38,10 +50,6 @@ func resolvedSearchProviders(c config.ComputeConfig) []config.SearchProviderConf
 				APIKeyRef: c.WebSearch.APIKeyRef,
 				Endpoint:  c.WebSearch.Endpoint,
 			}}
-		// One declared backend needs no selecting. Several do, and
-		// Config.Validate says so rather than this picking silently.
-		case len(c.SearchProviders) == 1:
-			return []config.SearchProviderConfig{c.SearchProviders[0]}
 		default:
 			return nil
 		}
