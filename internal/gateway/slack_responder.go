@@ -112,15 +112,15 @@ func (r *slackResponder) write(ctx context.Context, text string, blocks []any) {
 	// The answer supersedes the status, whichever form it took.
 	r.clearStatus(ctx)
 	if ts := r.placeholder(); ts != "" {
-		if err := r.h.api.updateMessage(ctx, r.channel, ts, text, blocks); err == nil {
+		err := r.h.api.updateMessage(ctx, r.channel, ts, text, blocks)
+		if err == nil {
 			return
-		} else {
-			// An update can fail on a message too old to edit, or one
-			// deleted underneath us. Falling through to a fresh post
-			// costs a tidy thread and saves the answer.
-			r.h.log.Debug("slack: placeholder update failed; posting instead",
-				"channel", r.channel, "err", err)
 		}
+		// An update can fail on a message too old to edit, or one
+		// deleted underneath us. Falling through to a fresh post costs
+		// a tidy thread and saves the answer.
+		r.h.log.Debug("slack: placeholder update failed; posting instead",
+			"channel", r.channel, "err", err)
 	}
 	if blocks != nil {
 		if err := r.h.api.postBlocks(ctx, r.channel, r.thread, text, blocks); err != nil {

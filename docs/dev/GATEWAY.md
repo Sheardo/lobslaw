@@ -112,6 +112,92 @@ sequenceDiagram
   end
 ```
 
+## Request flow — Slack
+
+Socket Mode, so the connection is **outbound**: no route is mounted, no
+ingress is opened, and there is no request signature to verify. The
+handler runs alongside the HTTP server for its lifetime and is pinned to
+the leader — Slack delivers each event to exactly one open connection,
+so two connected nodes would split a conversation between them at
+random.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Slack
+  participant Sock as slackSocket (WSS)
+  participant Handler as gateway.SlackHandler
+  participant Agent as compute.Agent
+
+  Handler->>Slack: apps.connections.open (app token)
+  Slack-->>Handler: single-use wss:// url
+  Handler->>Sock: dial
+  Slack->>Sock: envelope {type, envelope_id, payload}
+  Sock->>Slack: ack {envelope_id} — WITHIN 3s, BEFORE the turn
+  Note over Handler: the ack cannot wait for the answer:<br/>Slack allows 3s, a turn takes 30-90s
+  Sock->>Handler: dispatchEnvelope (own goroutine)
+  alt events_api
+    Handler->>Handler: wantsEvent — subtype, bot_id, own user
+    Handler->>Handler: firstSeen(team:channel:ts) — dedup
+    Handler->>Handler: isAllowedChannel / resolveScope
+    Note over Handler: both refuse SILENTLY — a refusal<br/>announced in a room is speech in that room
+    Handler->>Slack: assistant.threads.setStatus (or a placeholder message)
+    Handler->>Agent: RunToolCallLoop
+    Agent-->>Handler: resp
+    Handler->>Slack: chat.update — the status becomes the answer
+  else interactive
+    Handler->>Handler: mayResolve — only the person asked may answer
+    Handler->>Agent: ResumeFromConfirmation
+  else slash_commands
+    Handler->>Handler: CommandSet.Dispatch (policy-gated)
+    Handler->>Slack: chat.postEphemeral
+  end
+```
+
+### Three threads, three questions
+
+Slack's threading model asks "which thread?" three times and the answers
+differ. Conflating any two has produced a bug:
+
+| | Where it points | A DM |
+|---|---|---|
+| `replyThread` | where the answer is posted | **empty** — a DM answers inline |
+| `statusThread` | the assistant thread the status decorates | the user's own message |
+| `conversationID` | the session the transcript is stored under | the channel |
+
+`conversationID` is derived *from* `replyThread` rather than alongside
+it. Read independently they disagreed on the first message of every
+channel thread — the turn stored under `C1`, the follow-up under
+`C1/<ts>` — and the bot could not remember the message that started the
+thread it was standing in.
+
+### Progress signal
+
+`assistant.threads.setStatus` where it works: not a message, no trace,
+cleared when the reply lands. It needs `assistant:write` **and** an
+assistant thread, so it fails in a plain channel — expected rather than
+exceptional, and every call treats failure as "fall back".
+
+The fallback is one placeholder message rewritten in place, so a turn
+leaves the thread with an answer rather than a trail of scaffolding.
+
+### Reading Slack as a source
+
+`slack_read_channel` / `slack_search` page `conversations.history`;
+`search.messages` needs `search:read`, a user-token scope a bot cannot
+hold. They are the only builtins with **no default-allow policy seed**
+(`noSeedTools` in `wire_seeds.go`) — reading a workspace's conversations
+is an operator decision, not something granted by running the binary.
+
+`allowed_channels` is enforced at the **tool** boundary as well as the
+event boundary. Enforcing only the latter would govern what the agent
+hears while leaving what it can go and fetch wide open.
+
+Bot messages are read, unlike on the event path. The loop risk lives in
+`wantsEvent`, which still refuses to *answer* a bot; an alerts channel is
+nothing but other bots, and content usually lives in an attachment
+rather than in `text`.
+
 ### Callback query resolution
 
 When the user taps a button:

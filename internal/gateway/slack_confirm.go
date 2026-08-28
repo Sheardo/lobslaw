@@ -138,7 +138,7 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 		h.log.Warn("slack: interaction arrived but no prompt registry configured")
 		return
 	}
-	teamID := in.Team.ID
+	teamID := h.teamOr(in.Team.ID)
 	if teamID == "" {
 		teamID = in.User.TeamID
 	}

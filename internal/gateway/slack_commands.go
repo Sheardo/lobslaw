@@ -53,7 +53,7 @@ func (h *SlackHandler) handleSlashCommand(ctx context.Context, sc slackSlashComm
 	name, args := splitSlashCommand(sc.Command, sc.Text, h.slashPrefix())
 
 	claims := &types.Claims{
-		UserID: h.principalFor(ctx, sc.TeamID, sc.UserID),
+		UserID: h.principalFor(ctx, h.teamOr(sc.TeamID), sc.UserID),
 		Scope:  scope,
 	}
 	claims.Roles = h.rolesFor(claims.UserID)
@@ -87,12 +87,12 @@ func (h *SlackHandler) replyToCommand(ctx context.Context, sc slackSlashCommand,
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	if err := h.api.postEphemeral(ctx, sc.ChannelID, sc.UserID, "", text); err == nil {
+	err := h.api.postEphemeral(ctx, sc.ChannelID, sc.UserID, "", text)
+	if err == nil {
 		return
-	} else {
-		h.log.Debug("slack: ephemeral command reply failed; posting to the conversation",
-			"channel", sc.ChannelID, "err", err)
 	}
+	h.log.Debug("slack: ephemeral command reply failed; posting to the conversation",
+		"channel", sc.ChannelID, "err", err)
 	h.sendText(ctx, sc.ChannelID, "", text)
 }
 

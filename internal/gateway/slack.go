@@ -140,7 +140,14 @@ type SlackHandler struct {
 	// auth.test. Without it the bot answers its own messages, which in
 	// a channel is an unbounded loop rather than a cosmetic bug.
 	botUserID string
-	teamID    string
+	// teamID is the workspace this bot is installed in, from auth.test.
+	// Used only as a fallback: an event carries its own team id, and
+	// preferring that keeps a shared-channel event attributed to the
+	// workspace it came from. Without the fallback an event that
+	// omitted one would produce an UNSCOPED principal, quietly merging
+	// two workspaces' identities — which slackUserIdentity exists to
+	// prevent.
+	teamID string
 
 	// gate serialises turns per conversation, as Telegram's does.
 	gate *TurnGate
@@ -361,7 +368,7 @@ func (h *SlackHandler) handleEvent(ctx context.Context, p slackEventsPayload) {
 		h.log.Debug("slack: duplicate event ignored", "ts", ev.TS, "channel", ev.Channel)
 		return
 	}
-	h.handleMessage(ctx, p.TeamID, ev)
+	h.handleMessage(ctx, h.teamOr(p.TeamID), ev)
 }
 
 // wantsEvent filters the firehose down to messages a human addressed
@@ -499,6 +506,16 @@ func slackChannelSubject(teamID, userID string) string {
 		return ""
 	}
 	return "user:" + slackUserIdentity(teamID, userID)
+}
+
+// teamOr resolves the workspace for an event, preferring the one the
+// event carried. Written once at connect, before any event goroutine
+// exists, so no lock is needed to read it.
+func (h *SlackHandler) teamOr(eventTeam string) string {
+	if eventTeam != "" {
+		return eventTeam
+	}
+	return h.teamID
 }
 
 func (h *SlackHandler) rolesFor(userID string) []string {

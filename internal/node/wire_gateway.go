@@ -63,60 +63,8 @@ func (n *Node) wireGateway() error {
 	}
 	n.webhookHandlers = webhooks
 
-	// The slack_* read tools are registered HERE rather than alongside
-	// the other builtins in wireCompute, because they need the handler
-	// and the gateway is wired second. seedDefaultPolicyRules runs
-	// later still, in Start, so it sees them — and skips them, since
-	// they are in noSeedTools.
-	if sl != nil && n.builtinsRegistry != nil && n.toolRegistry != nil {
-		if err := compute.RegisterSlackBuiltins(n.builtinsRegistry, compute.SlackToolConfig{
-			Reader: sl,
-		}); err != nil {
-			n.log.Warn("slack: read tools not registered", "err", err)
-		} else {
-			for _, td := range compute.SlackToolDefs() {
-				if err := n.toolRegistry.Register(td); err != nil {
-					n.log.Warn("slack: tool def register failed", "name", td.Name, "err", err)
-				}
-			}
-			n.log.Debug("compute: slack read tools registered")
-		}
-	}
-
-	// Notification dispatch service: routes the channel-agnostic
-	// `notify` builtin through registered Sinks. Each gateway
-	// channel handler that supports outbound delivery registers
-	// its own Sink. Per-user channel addresses live in
-	// BucketUserPrefs (seeded from [[user]] config at boot).
-	if n.builtinsRegistry != nil && n.toolRegistry != nil && n.userPrefsSvc != nil {
-		notifySvc := notify.NewService(n.userPrefsSvc, n.log)
-		if tg != nil {
-			if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
-				n.log.Warn("notify: telegram sink register failed", "err", err)
-			}
-		}
-		if sl != nil {
-			if err := notifySvc.RegisterSink(&gateway.SlackSink{Handler: sl}); err != nil {
-				n.log.Warn("notify: slack sink register failed", "err", err)
-			}
-		}
-		if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
-			n.log.Warn("notify: rest sink register failed", "err", err)
-		}
-		n.notifySvc = notifySvc
-		if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
-			Service: notifySvc,
-		}); err != nil {
-			n.log.Warn("notify: builtin register failed", "err", err)
-		} else {
-			for _, td := range compute.NotifyToolDefs() {
-				if err := n.toolRegistry.Register(td); err != nil {
-					n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
-				}
-			}
-			n.log.Debug("compute: notify registered")
-		}
-	}
+	n.registerSlackTools(sl)
+	n.wireNotifySinks(tg, sl)
 
 	// HTTPPort=0 means "let the OS pick an ephemeral port" (test
 	// + dev setup that doesn't care about a fixed bind). Shipped
@@ -180,6 +128,67 @@ func (n *Node) wireGateway() error {
 		"require_auth", cfg.RequireAuth,
 	)
 	return nil
+}
+
+// registerSlackTools exposes slack_read_channel / slack_search.
+//
+// Registered here rather than alongside the other builtins in
+// wireCompute, because they need the handler and the gateway is wired
+// second. seedDefaultPolicyRules runs later still, in Start, so it sees
+// them — and skips them, since they are in noSeedTools.
+func (n *Node) registerSlackTools(sl *gateway.SlackHandler) {
+	if sl == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
+		return
+	}
+	if err := compute.RegisterSlackBuiltins(n.builtinsRegistry, compute.SlackToolConfig{
+		Reader: sl,
+	}); err != nil {
+		n.log.Warn("slack: read tools not registered", "err", err)
+		return
+	}
+	for _, td := range compute.SlackToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			n.log.Warn("slack: tool def register failed", "name", td.Name, "err", err)
+		}
+	}
+	n.log.Debug("compute: slack read tools registered")
+}
+
+// wireNotifySinks routes the channel-agnostic `notify` builtin through
+// each channel that can deliver outbound. Per-user channel addresses
+// live in BucketUserPrefs, seeded from [[user]] config at boot.
+func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHandler) {
+	if n.builtinsRegistry == nil || n.toolRegistry == nil || n.userPrefsSvc == nil {
+		return
+	}
+	notifySvc := notify.NewService(n.userPrefsSvc, n.log)
+	if tg != nil {
+		if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
+			n.log.Warn("notify: telegram sink register failed", "err", err)
+		}
+	}
+	if sl != nil {
+		if err := notifySvc.RegisterSink(&gateway.SlackSink{Handler: sl}); err != nil {
+			n.log.Warn("notify: slack sink register failed", "err", err)
+		}
+	}
+	if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
+		n.log.Warn("notify: rest sink register failed", "err", err)
+	}
+	n.notifySvc = notifySvc
+
+	if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
+		Service: notifySvc,
+	}); err != nil {
+		n.log.Warn("notify: builtin register failed", "err", err)
+		return
+	}
+	for _, td := range compute.NotifyToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
+		}
+	}
+	n.log.Debug("compute: notify registered")
 }
 
 // buildSlackHandler resolves both Slack tokens and constructs the
