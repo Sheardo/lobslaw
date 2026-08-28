@@ -807,6 +807,13 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		return
 	}
 
+	// Whatever the verb, this prompt is finished after this tap, so its
+	// remembered operation goes. The grant helpers take it first when
+	// they need it; this drains the rest — a plain "approve", a "deny",
+	// or a grant that could not be recorded. Without it the map only
+	// ever grew, keyed by prompts nobody will tap again.
+	defer h.takePendingScope(promptID)
+
 	var decision PromptDecision
 	var scope PromptScope
 	var reply string
@@ -1596,6 +1603,17 @@ func turnText(msg *tgMessage) string {
 }
 
 // scopedOperation is the (action, resource) a pending prompt is about.
+// takePendingScope removes and returns the operation a prompt was
+// raised about. Idempotent: a second call for the same prompt reports
+// absence rather than replaying the grant.
+func (h *TelegramHandler) takePendingScope(promptID string) (scopedOperation, bool) {
+	h.pendingScopeMu.Lock()
+	defer h.pendingScopeMu.Unlock()
+	op, ok := h.pendingScope[promptID]
+	delete(h.pendingScope, promptID)
+	return op, ok
+}
+
 type scopedOperation struct {
 	action   string
 	resource string
@@ -1613,14 +1631,11 @@ type scopedOperation struct {
 // protected paths and destructive commands, and that refusal must
 // reach the user rather than being logged and forgotten.
 func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
-	if h.cfg.ApprovalRules == nil || q.Message == nil {
-		return false
-	}
-	h.pendingScopeMu.Lock()
-	op, ok := h.pendingScope[promptID]
-	delete(h.pendingScope, promptID)
-	h.pendingScopeMu.Unlock()
-	if !ok || op.subject == "" {
+	// Taken before the store is checked so the entry is consumed even
+	// when there is nowhere to record the grant. Returning early with
+	// it still in the map is how the map only ever grew.
+	op, ok := h.takePendingScope(promptID)
+	if !ok || op.subject == "" || h.cfg.ApprovalRules == nil || q.Message == nil {
 		return false
 	}
 
@@ -1647,14 +1662,9 @@ func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *t
 // not happen — no approvals store wired, or a prompt whose operation
 // we no longer know.
 func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
-	if h.cfg.Approvals == nil || q.Message == nil {
-		return false
-	}
-	h.pendingScopeMu.Lock()
-	op, ok := h.pendingScope[promptID]
-	delete(h.pendingScope, promptID)
-	h.pendingScopeMu.Unlock()
-	if !ok {
+	// Taken first, for the same reason as grantAlways.
+	op, ok := h.takePendingScope(promptID)
+	if !ok || h.cfg.Approvals == nil || q.Message == nil {
 		return false
 	}
 
