@@ -168,6 +168,9 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 			ChannelSlack, convID, grantSubject(claims), resp.Reply,
 			slackChannelSubject(teamID, ev.User), "user:"+ev.User))
 	}
+	// After the text: a file the turn produced is context for the
+	// reply, not a replacement for it.
+	h.SendAttachments(ctx, ev.Channel, thread, resp.Attachments, h.cfg.ArtifactOpener)
 }
 
 // stripBotMention removes the leading "<@U…>" an app_mention carries.

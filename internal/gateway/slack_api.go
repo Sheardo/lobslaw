@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,6 +195,97 @@ func (a *slackAPI) postBlocks(ctx context.Context, channel, threadTS, text strin
 		body["thread_ts"] = threadTS
 	}
 	_, err := a.call(ctx, "chat.postMessage", a.botToken, body)
+	return err
+}
+
+// getUploadURL reserves an upload slot and returns where to PUT the
+// bytes plus the id to complete with.
+//
+// Form-encoded, not JSON. Most of the Web API takes either;
+// files.getUploadURLExternal takes only form params and answers a JSON
+// body with invalid_arguments if handed one, which reads like a bad
+// filename rather than a wrong content type.
+//
+// length must be the exact byte count, which is why the caller buffers
+// the artifact before starting: Slack rejects a mismatch at the
+// complete step, after the bytes have already been sent.
+func (a *slackAPI) getUploadURL(ctx context.Context, filename string, length int) (uploadURL, fileID string, err error) {
+	form := url.Values{}
+	form.Set("filename", filename)
+	form.Set("length", strconv.Itoa(length))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		a.base+"/files.getUploadURLExternal", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+a.botToken)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("slack: files.getUploadURLExternal: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var out struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error,omitempty"`
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, slackReadLimit)).Decode(&out); err != nil {
+		return "", "", fmt.Errorf("slack: decode files.getUploadURLExternal: %w", err)
+	}
+	if !out.OK {
+		return "", "", fmt.Errorf("slack: files.getUploadURLExternal: %s", errOrUnknown(out.Error))
+	}
+	return out.UploadURL, out.FileID, nil
+}
+
+// uploadBytes PUTs the artifact to the reserved url.
+//
+// This one is NOT a Web API method: it goes to whatever host
+// getUploadURL named, carries no bearer, and answers with plain text
+// rather than the ok/error envelope. Sending the token here would be
+// leaking it to an address the API chose.
+func (a *slackAPI) uploadBytes(ctx context.Context, uploadURL string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("slack: upload: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("slack: upload: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	return nil
+}
+
+// completeUpload publishes an uploaded file into a conversation.
+//
+// Until this runs the file exists but belongs to nowhere — invisible
+// to the user and counting against the workspace's storage. A failure
+// between upload and complete therefore leaks a file rather than
+// merely losing one, which is why the caller logs it distinctly.
+func (a *slackAPI) completeUpload(ctx context.Context, fileID, title, channel, threadTS string) error {
+	file := map[string]string{"id": fileID}
+	if title != "" {
+		file["title"] = title
+	}
+	body := map[string]any{
+		"files":      []map[string]string{file},
+		"channel_id": channel,
+	}
+	if threadTS != "" {
+		body["thread_ts"] = threadTS
+	}
+	_, err := a.call(ctx, "files.completeUploadExternal", a.botToken, body)
 	return err
 }
 

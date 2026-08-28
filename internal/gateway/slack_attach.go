@@ -121,6 +121,93 @@ func (h *SlackHandler) downloadAttachments(ctx context.Context, turnID string, i
 	return nil
 }
 
+// slackMaxUploadBytes caps an artifact this handler will send.
+//
+// A ceiling exists because the upload has to be buffered: Slack wants
+// the exact byte count before it will hand out an upload url, and an
+// ArtifactOpener is a reader with no length. 64MiB is far above a
+// generated image or a TTS clip and far below anything that should
+// arrive in a chat message.
+const slackMaxUploadBytes = 64 << 20
+
+// SendAttachments delivers the files a turn produced.
+//
+// Best-effort per attachment, matching Telegram: the reply text has
+// already gone by this point, so a failure here costs the user the
+// file rather than the whole answer.
+func (h *SlackHandler) SendAttachments(ctx context.Context, channel, thread string, atts []types.Attachment, open ArtifactOpener) {
+	if len(atts) == 0 {
+		return
+	}
+	if open == nil {
+		// Said out loud: a turn that generated audio and delivered
+		// nothing is indistinguishable from one that did not generate
+		// anything, and the model will have described a file the user
+		// never received.
+		h.log.Warn("slack: turn produced attachments but no artifact opener is wired; "+
+			"the user will not receive them", "count", len(atts))
+		return
+	}
+	for _, a := range atts {
+		if err := h.sendAttachment(ctx, channel, thread, a, open); err != nil {
+			h.log.Error("slack: attachment not delivered",
+				"reference", a.Reference, "kind", a.Kind, "err", err)
+		}
+	}
+}
+
+// sendAttachment runs Slack's three-step external upload.
+//
+// Reserve a url, POST the bytes, then publish into the conversation.
+// The file does not exist for the user until the third step: between
+// two and three it is uploaded but unattached, so a failure there
+// leaves a file nobody can see and the workspace still stores.
+func (h *SlackHandler) sendAttachment(ctx context.Context, channel, thread string, a types.Attachment, open ArtifactOpener) error {
+	rc, err := open(a.Reference)
+	if err != nil {
+		return fmt.Errorf("open %q: %w", a.Reference, err)
+	}
+	defer func() { _ = rc.Close() }()
+
+	// Buffered because step one needs the exact length. The limit is
+	// one byte over the cap so a file AT the cap still reads whole and
+	// only a genuinely oversized one trips it.
+	body, err := io.ReadAll(io.LimitReader(rc, slackMaxUploadBytes+1))
+	if err != nil {
+		return fmt.Errorf("read artifact %q: %w", a.Reference, err)
+	}
+	if len(body) > slackMaxUploadBytes {
+		return fmt.Errorf("artifact %q exceeds the %d MiB upload cap", a.Reference, slackMaxUploadBytes>>20)
+	}
+	if len(body) == 0 {
+		// Slack rejects a zero-length upload with an error naming the
+		// filename, which sends the reader looking in the wrong place.
+		return fmt.Errorf("artifact %q is empty", a.Reference)
+	}
+
+	name := a.Filename
+	if name == "" {
+		name = filepath.Base(a.Reference)
+	}
+
+	uploadURL, fileID, err := h.api.getUploadURL(ctx, name, len(body))
+	if err != nil {
+		return err
+	}
+	if err := h.api.uploadBytes(ctx, uploadURL, body); err != nil {
+		return err
+	}
+	if err := h.api.completeUpload(ctx, fileID, name, channel, thread); err != nil {
+		// Distinct from the two above: the bytes are in the workspace
+		// and only the sharing failed, so this leaks a file rather than
+		// losing one.
+		return fmt.Errorf("uploaded but not shared (file %s): %w", fileID, err)
+	}
+	h.log.Debug("slack: attachment delivered",
+		"reference", a.Reference, "kind", a.Kind, "bytes", len(body), "thread", thread)
+	return nil
+}
+
 func (h *SlackHandler) downloadOne(ctx context.Context, turnDir string, a *types.Attachment) (string, error) {
 	getCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()

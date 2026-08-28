@@ -386,4 +386,8 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	default:
 		h.sendText(ctx, channel, thread, resp.Reply)
 	}
+	// The resumed leg is where a confirmed generation actually
+	// produces its file, so this is the delivery point that matters
+	// for anything gated behind an approval.
+	h.SendAttachments(ctx, channel, thread, resp.Attachments, h.cfg.ArtifactOpener)
 }

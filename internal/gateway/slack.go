@@ -96,6 +96,11 @@ type SlackConfig struct {
 	// incomplete deployment, not a permissive one.
 	CommandAuthorizer CommandAuthorizer
 
+	// ArtifactOpener resolves a produced file's reference to its bytes.
+	// Nil means files a turn generates cannot be delivered — the
+	// handler says so rather than dropping them silently.
+	ArtifactOpener ArtifactOpener
+
 	// IncomingDir is where inbound files are written. Empty →
 	// DefaultIncomingDownloadDir, which is the same directory the
 	// vision/audio/pdf builtins read from, so a file cannot land
