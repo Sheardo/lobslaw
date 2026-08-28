@@ -1,62 +1,62 @@
 package compute
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"strconv"
-	"time"
 
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// defaultExaEndpoint is Exa's search API. Overridable via
-// EXA_API_URL — lets operators point at their own search proxy
-// or a staging environment.
-const defaultExaEndpoint = "https://api.exa.ai/search"
-
-// WebSearchConfig wires the Exa-backed web_search builtin. Zero
-// values disable the builtin (so tests without an EXA_API_KEY
-// don't accidentally leak network traffic).
+// WebSearchConfig wires one search backend into the web_search
+// builtin. The vendor specifics used to live in this file; they now
+// live behind Driver, resolved from the DriverSet at boot the same way
+// vision and audio resolve theirs.
 type WebSearchConfig struct {
-	// APIKey is the Exa API key. When empty, the builtin refuses
-	// to register — operators who haven't configured a key get a
-	// clear "not configured" error instead of silent no-op.
-	APIKey string
+	// Driver is the resolved backend. Required — the wiring layer
+	// builds it, so an unknown driver name is a start-up error rather
+	// than a surprise at the first search.
+	Driver SearchDriver
 
-	// Endpoint overrides the Exa URL. Zero → defaultExaEndpoint.
-	Endpoint string
+	// Label is the provider's config label, used as the health key so
+	// a demotion is shared with anything else reaching the same
+	// endpoint. Empty opts out of health tracking.
+	Label string
 
-	// HTTPClient lets callers inject a test double. Zero → a new
-	// http.Client with a 15s timeout.
-	HTTPClient *http.Client
+	// TrustTier is the provider's declared tier, checked against the
+	// soul's min_trust_tier before this backend is used.
+	//
+	// web_search never had this check, which was the wrong builtin to
+	// omit it from: it is the one that hands the user's own words to a
+	// third party. A self-hosted SearXNG can honestly declare `local`;
+	// a hosted API cannot.
+	TrustTier types.TrustTier
 }
 
-// RegisterWebSearchBuiltin installs the web_search builtin when an
-// API key is configured. Callers that don't want the builtin
-// simply don't call this; the tool won't show up in the LLM's
-// function list.
-func RegisterWebSearchBuiltin(b *Builtins, cfg WebSearchConfig) error {
-	if cfg.APIKey == "" {
-		return fmt.Errorf("web_search: APIKey required to register builtin")
+// RegisterWebSearchBuiltin installs the web_search builtin.
+//
+// Variadic: one config is a single backend, several are a failover
+// chain tried in the order given — which is what makes "self-hosted
+// SearXNG, falling back to a hosted API when it is down" a config
+// decision rather than a code one.
+func RegisterWebSearchBuiltin(b *Builtins, cfgs ...WebSearchConfig) error {
+	if len(cfgs) == 0 {
+		return errors.New("web_search: at least one provider config required")
 	}
-	endpoint := cfg.Endpoint
-	if endpoint == "" {
-		endpoint = defaultExaEndpoint
+	handlers := make([]failoverHandler, 0, len(cfgs))
+	for _, cfg := range cfgs {
+		if cfg.Driver == nil {
+			return errors.New("web_search: Driver required (resolve it from the DriverSet)")
+		}
+		handlers = append(handlers, failoverHandler{
+			label: cfg.Label,
+			tier:  cfg.TrustTier,
+			fn:    newWebSearchHandler(cfg.Driver),
+		})
 	}
-	if v := os.Getenv("EXA_API_URL"); v != "" {
-		endpoint = v
-	}
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
-	}
-	fn := newExaWebSearchHandler(endpoint, cfg.APIKey, client)
-	return b.Register("web_search", fn)
+	return b.Register("web_search", failoverBuiltin("web_search", nil, b.Health(), b.TrustFloor(), handlers...))
 }
 
 // WebSearchToolDef is the ToolDef to register alongside the
@@ -81,41 +81,25 @@ func WebSearchToolDef() *types.ToolDef {
 	}
 }
 
-type exaSearchRequest struct {
-	Query      string          `json:"query"`
-	NumResults int             `json:"numResults,omitempty"`
-	Type       string          `json:"type,omitempty"`
-	Contents   *exaContentsOpt `json:"contents,omitempty"`
-}
+// searchSnippetCap trims each result's text. LLMs don't need the full
+// page, just a citable snippet — and a ten-result search at full page
+// length would eat the turn's context budget on its own.
+const searchSnippetCap = 600
 
-type exaContentsOpt struct {
-	Text bool `json:"text"`
-}
-
-type exaSearchResponse struct {
-	Results []exaResult `json:"results"`
-}
-
-type exaResult struct {
-	Title         string  `json:"title"`
-	URL           string  `json:"url"`
-	PublishedDate string  `json:"publishedDate,omitempty"`
-	Text          string  `json:"text,omitempty"`
-	Score         float64 `json:"score,omitempty"`
-}
-
-// newExaWebSearchHandler returns the BuiltinFunc that dispatches a
-// web_search tool-call to Exa. Returns compact JSON the model can
-// cite back to the user.
-func newExaWebSearchHandler(endpoint, apiKey string, client *http.Client) BuiltinFunc {
+// newWebSearchHandler is the backend-agnostic half: argument parsing,
+// clamping, snippet trimming, and the response envelope. Every driver
+// produces the same JSON, so nothing downstream — the prompt's tool
+// guidance, the research workers, existing transcripts — can tell
+// which backend answered.
+func newWebSearchHandler(driver SearchDriver) BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
 		query := args["query"]
 		if query == "" {
 			return nil, 2, fmt.Errorf("web_search: query is required")
 		}
-		numResults := 5
+		numResults := DefaultSearchResults
 		if raw, ok := args["num_results"]; ok && raw != "" {
-			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= 10 {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 && n <= MaxSearchResults {
 				numResults = n
 			}
 		}
@@ -124,57 +108,26 @@ func newExaWebSearchHandler(endpoint, apiKey string, client *http.Client) Builti
 			searchType = "auto"
 		}
 
-		reqBody, _ := json.Marshal(exaSearchRequest{
+		results, err := driver.Search(ctx, SearchRequest{
 			Query:      query,
 			NumResults: numResults,
-			Type:       searchType,
-			Contents:   &exaContentsOpt{Text: true},
+			Depth:      searchType,
 		})
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, 1, err
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Accept", "application/json")
-		httpReq.Header.Set("x-api-key", apiKey)
-
-		resp, err := client.Do(httpReq)
-		if err != nil {
-			return nil, 1, fmt.Errorf("web_search: http: %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-		raw, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusOK {
-			return nil, 1, fmt.Errorf("web_search: HTTP %d: %s", resp.StatusCode, truncateBodyFor(raw, 512))
-		}
-		var decoded exaSearchResponse
-		if err := json.Unmarshal(raw, &decoded); err != nil {
-			return nil, 1, fmt.Errorf("web_search: decode: %w", err)
-		}
-		// Trim each result's Text to keep the tool output compact —
-		// LLMs don't need the full page, just a citable snippet.
-		const snippetCap = 600
-		for i := range decoded.Results {
-			if len(decoded.Results[i].Text) > snippetCap {
-				decoded.Results[i].Text = decoded.Results[i].Text[:snippetCap] + "…"
+		for i := range results {
+			if len(results[i].Text) > searchSnippetCap {
+				results[i].Text = results[i].Text[:searchSnippetCap] + "…"
 			}
 		}
 		out, err := json.Marshal(map[string]any{
 			"query":   query,
-			"results": decoded.Results,
+			"results": results,
 		})
 		if err != nil {
 			return nil, 1, err
 		}
 		return out, 0, nil
 	}
-}
-
-// truncateBodyFor is a local helper that doesn't conflict with the
-// one in llmclient.go (they serve different truncation caps).
-func truncateBodyFor(body []byte, max int) string {
-	if len(body) <= max {
-		return string(body)
-	}
-	return string(body[:max]) + "…[truncated]"
 }

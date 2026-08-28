@@ -117,6 +117,9 @@ func (c *Config) Validate() error {
 	if err := validateContextConfig(c.Compute.Context); err != nil {
 		return err
 	}
+	if err := validateSearchProviders(c.Compute); err != nil {
+		return err
+	}
 	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
 		return err
 	}
@@ -149,6 +152,49 @@ func validateTrustTiers(providers []ProviderConfig) error {
 					"or a name (public, private, local), where higher is more trusted",
 				types.ErrInvalidConfig, p.Label, int(p.TrustTier), int(types.MaxTrustTier))
 		}
+	}
+	return nil
+}
+
+// validateSearchProviders rejects the search config that would
+// otherwise go wrong quietly.
+//
+// Which driver names exist is deliberately NOT checked here: the
+// registry lives in internal/compute, above this package, and it
+// already produces a better error than a duplicated list could
+// ("unknown search driver %q; available: ..."). This checks only what
+// config alone can know.
+func validateSearchProviders(c ComputeConfig) error {
+	seen := make(map[string]struct{}, len(c.SearchProviders))
+	for _, p := range c.SearchProviders {
+		if p.Label == "" {
+			return fmt.Errorf("%w: every compute.search_providers entry needs a label", types.ErrInvalidConfig)
+		}
+		if _, dup := seen[p.Label]; dup {
+			return fmt.Errorf("%w: duplicate compute.search_providers label %q", types.ErrInvalidConfig, p.Label)
+		}
+		seen[p.Label] = struct{}{}
+		if p.TrustTier != types.TrustUnset && !p.TrustTier.IsValid() {
+			return fmt.Errorf(
+				"%w: search provider %q has trust_tier %d, which is out of range; use 1..%d "+
+					"or a name (public, private, local), where higher is more trusted",
+				types.ErrInvalidConfig, p.Label, int(p.TrustTier), int(types.MaxTrustTier))
+		}
+	}
+
+	// Several backends declared and none chosen is ambiguous, and the
+	// two ways of guessing — first declared, or all of them as a chain
+	// — are both defensible, which is the tell that the operator
+	// should say. A single declared backend needs no such statement.
+	if len(c.SearchProviders) > 1 && len(c.WebSearch.Providers) == 0 && c.WebSearch.Provider == "" {
+		return fmt.Errorf(
+			"%w: %d search providers declared but compute.web_search selects none; "+
+				"set providers = [\"label\", ...] in preference order (a chain fails over in the order given)",
+			types.ErrInvalidConfig, len(c.SearchProviders))
+	}
+	if len(c.WebSearch.Providers) > 0 && c.WebSearch.Provider != "" {
+		return fmt.Errorf("%w: compute.web_search sets both provider and providers; providers alone expresses either case",
+			types.ErrInvalidConfig)
 	}
 	return nil
 }

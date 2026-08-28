@@ -223,8 +223,33 @@ format      = "openai"
 main = "openrouter"
 
 [compute.web_search]
-provider = "tavily"
-api_key_ref = "env:TAVILY_API_KEY"
+# Ordered failover chain, naming [[compute.search_providers]] labels.
+# `provider = "searxng"` is sugar for a one-element list.
+providers = ["searxng", "exa"]
+
+[[compute.search_providers]]
+label      = "searxng"
+driver     = "searxng"
+endpoint   = "http://searxng:8080/search"
+trust_tier = "local"
+options    = { engines = "google,duckduckgo", language = "en", safesearch = "1" }
+
+[[compute.search_providers]]
+label       = "exa"
+driver      = "exa"
+api_key_ref = "env:EXA_API_KEY"
+trust_tier  = "public"
+
+# driver = "template" describes an engine entirely in TOML — no Go, no
+# rebuild. See [Web search](/features/web-search) for worked examples.
+[[compute.search_providers]]
+label        = "brave"
+driver       = "template"
+endpoint     = "https://api.search.brave.com/res/v1/web/search"
+api_key_ref  = "env:BRAVE_API_KEY"
+trust_tier   = "public"
+options      = { query_param = "q", count_param = "count", auth_style = "header", auth_name = "X-Subscription-Token" }
+response     = { results = "web.results", snippet = "description", published_at = "page_age" }
 
 [compute.limits]
 max_tool_calls_per_turn = 25

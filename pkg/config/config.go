@@ -449,13 +449,20 @@ type ComputeConfig struct {
 	Budgets      BudgetsConfig    `koanf:"budgets"` // deprecated; use Limits
 	Limits       LimitsConfig     `koanf:"limits,omitempty"`
 	WebSearch    WebSearchConfig  `koanf:"web_search,omitempty"`
-	Vision       VisionConfig     `koanf:"vision,omitempty"`
-	Audio        AudioConfig      `koanf:"audio,omitempty"`
-	PDF          PDFConfig        `koanf:"pdf,omitempty"`
-	Embeddings   EmbeddingsConfig `koanf:"embeddings,omitempty"`
-	Speak        SpeakConfig      `koanf:"speak,omitempty"`
-	Image        ImageGenConfig   `koanf:"image,omitempty"`
-	Video        VideoGenConfig   `koanf:"video,omitempty"`
+	// SearchProviders are the declared web-search backends,
+	// [[compute.search_providers]]. Separate from Providers because a
+	// search engine is not an LLM endpoint: it has no model, no token
+	// pricing, and no capability discovery, so folding it into
+	// ProviderConfig would mean a struct where two thirds of the fields
+	// never apply.
+	SearchProviders []SearchProviderConfig `koanf:"search_providers,omitempty"`
+	Vision          VisionConfig           `koanf:"vision,omitempty"`
+	Audio           AudioConfig            `koanf:"audio,omitempty"`
+	PDF             PDFConfig              `koanf:"pdf,omitempty"`
+	Embeddings      EmbeddingsConfig       `koanf:"embeddings,omitempty"`
+	Speak           SpeakConfig            `koanf:"speak,omitempty"`
+	Image           ImageGenConfig         `koanf:"image,omitempty"`
+	Video           VideoGenConfig         `koanf:"video,omitempty"`
 
 	// ArtifactMount names the storage mount that receives generated
 	// files (speech, images, video). Empty falls back to the first
@@ -582,14 +589,70 @@ type RolesConfig struct {
 	Summariser string `koanf:"summariser,omitempty"`
 }
 
-// WebSearchConfig enables the Exa-backed web_search builtin. When
-// APIKeyRef is empty, the builtin is not registered and the model
-// sees no web_search tool. MCP-sourced web_search registrations
-// (future) override the builtin by virtue of later-registration
-// wins in the tool registry.
+// WebSearchConfig selects which declared search backends the
+// web_search builtin uses. When it resolves to nothing, the builtin is
+// not registered and the model sees no web_search tool — a deployment
+// that wants no web access sets nothing rather than redacting
+// anything. MCP-sourced web_search registrations (future) override the
+// builtin by virtue of later-registration wins in the tool registry.
 type WebSearchConfig struct {
+	// Providers names [[compute.search_providers]] labels in
+	// preference order. More than one is a failover chain: the second
+	// is tried when the first fails transiently, which is what makes
+	// "self-hosted first, hosted API as a safety net" configuration
+	// rather than code.
+	Providers []string `koanf:"providers,omitempty"`
+
+	// Provider is sugar for a one-element Providers. It exists because
+	// the single-backend case is the common one and because the config
+	// reference documented this key long before it worked.
+	Provider string `koanf:"provider,omitempty"`
+
+	// APIKeyRef and Endpoint are the pre-driver shape, kept working.
+	// A config carrying only these means Exa at the given endpoint,
+	// which is exactly what it meant before search backends were
+	// pluggable — nobody's config breaks on upgrade.
 	APIKeyRef string `koanf:"api_key_ref,omitempty"`
 	Endpoint  string `koanf:"endpoint,omitempty"`
+}
+
+// SearchProviderConfig is one declared web-search backend.
+//
+// The three maps are what keep adding a backend cheap. Search APIs
+// differ almost entirely in parameter names and response paths, so
+// typing each vendor's knobs into this struct would make every new
+// engine a struct change and a rebuild. With `driver = "template"`,
+// Options/ExtraParams/Response describe the whole API and no Go is
+// written at all; a compiled driver reads Options for its own knobs
+// and ignores the rest. Each driver validates its own keys at boot, so
+// a typo fails on start-up naming the offending key.
+type SearchProviderConfig struct {
+	Label string `koanf:"label"`
+
+	// Driver names the backend implementation: "exa" (the default,
+	// and what every pre-driver config meant), "searxng", or
+	// "template" for a provider described entirely by the fields
+	// below.
+	Driver string `koanf:"driver,omitempty"`
+
+	Endpoint  string `koanf:"endpoint,omitempty"`
+	APIKeyRef string `koanf:"api_key_ref,omitempty"`
+
+	// TrustTier is checked against the soul's min_trust_tier before
+	// this backend runs. It matters more here than it looks: a search
+	// hands the user's own words to whoever answers, so a self-hosted
+	// SearXNG declaring "local" and a hosted API declaring "public"
+	// are describing a real difference.
+	TrustTier types.TrustTier `koanf:"trust_tier,omitempty"`
+
+	// Timeout bounds one query. Zero takes the driver default (15s) —
+	// a search is interactive, so it is far tighter than the minute a
+	// model round-trip is allowed.
+	Timeout time.Duration `koanf:"timeout,omitempty"`
+
+	Options     map[string]string `koanf:"options,omitempty"`
+	ExtraParams map[string]string `koanf:"extra_params,omitempty"`
+	Response    map[string]string `koanf:"response,omitempty"`
 }
 
 // ModalityOverride pins a modality builtin to one specific provider

@@ -1,7 +1,11 @@
 package node
 
 import (
+	"net"
+	"strings"
+
 	"github.com/jmylchreest/lobslaw/internal/binaries"
+	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/modelsdev"
 )
@@ -150,7 +154,63 @@ func buildEgressInputs(n *Node) egress.ACLInputs {
 		in.EmbeddingModelURL = n.cfg.Compute.Embeddings.DownloadURL
 	}
 
+	in.WebSearchHosts = webSearchEgressHosts(n)
+
 	in.MCPServerNetworks = map[string][]string{}
 	in.SkillNetworks = map[string][]string{}
 	return in
+}
+
+// webSearchEgressHosts derives the web_search role's allowlist from
+// the search backends config actually selected, and warns about the
+// one deployment shape where a correct allowlist still fails.
+//
+// That shape is a self-hosted SearXNG, which is the whole point of the
+// feature and lands on a private address every time. Smokescreen's IP
+// filter denies RFC1918 no matter what the hostname ACL says, so
+// without security.egress_allow_ranges the operator gets a proxy
+// rejection that names neither the range nor the setting that fixes
+// it. One line at boot costs nothing and saves that afternoon.
+func webSearchEgressHosts(n *Node) []string {
+	providers := resolvedSearchProviders(n.cfg.Compute)
+	if len(providers) == 0 {
+		return nil
+	}
+	privateOK := n.cfg.Security.EgressAllowPrivateRanges || len(n.cfg.Security.EgressAllowRanges) > 0
+	hosts := make([]string, 0, len(providers))
+	for _, p := range providers {
+		endpoint := p.Endpoint
+		if compute.DriverExa == strings.ToLower(strings.TrimSpace(p.Driver)) || p.Driver == "" {
+			endpoint = compute.ExaEffectiveEndpoint(endpoint)
+		}
+		host := egress.HostOf(endpoint)
+		if host == "" {
+			continue
+		}
+		hosts = append(hosts, host)
+		if !privateOK && isPrivateHost(host) {
+			n.log.Warn("egress: web_search provider is on a private address that smokescreen will refuse; "+
+				"set security.egress_allow_ranges to the network it is on",
+				"provider", p.Label, "host", host)
+		}
+	}
+	return hosts
+}
+
+// isPrivateHost reports whether host is a literal private, loopback or
+// link-local address. Names are not resolved: DNS at boot would be a
+// new failure mode for a warning, and the container-name case
+// ("searxng") is caught by its own check below.
+func isPrivateHost(host string) bool {
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	}
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	// A bare label with no dots is a container or compose service
+	// name, which resolves onto the bridge network — private by
+	// construction. A dotted name might be anything, so it is left
+	// alone rather than guessed at.
+	return !strings.Contains(host, ".")
 }

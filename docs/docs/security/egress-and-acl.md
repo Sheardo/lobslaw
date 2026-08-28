@@ -26,7 +26,7 @@ A **role** is a labelled allowlist. Built-in roles:
 | `embedding` | embedding endpoint host | embedder |
 | `gateway/telegram` | `api.telegram.org` | telegram channel |
 | `fetch_url` | configurable; default permissive minus RFC1918 | `fetch_url` builtin |
-| `web_search` | search provider hosts | `web_search` builtin |
+| `web_search` | endpoint hosts of the selected `[[compute.search_providers]]` | `web_search` builtin |
 | `clawhub` | `clawhub_base_url` host + binary hosts | `clawhub_install` builtin |
 | `oauth/<provider>` | per-provider device + token endpoints | OAuth flow |
 | `skill/<name>` | hosts declared in skill manifest `network` | skill subprocess |
@@ -64,6 +64,19 @@ clawhub_binary_hosts         = ["github.com", "objects.githubusercontent.com"]
 ```
 
 `egress_allow_private_ranges = true` is a footgun and only acceptable in single-machine dev setups where the LLM endpoint is also on loopback.
+
+### Reaching a service on your own network
+
+The hostname allowance is necessary but not sufficient. Smokescreen refuses private IP ranges regardless of the ACL, so a backend on the local network is denied even though its host is in the role.
+
+The common case is a self-hosted SearXNG in the same compose file. `endpoint = "http://searxng:8080/search"` puts the `web_search` role's host in the ACL, but the name resolves onto the bridge network and the IP filter rejects it. Open the one network it is on rather than all of RFC1918:
+
+```toml
+[security]
+egress_allow_ranges = ["172.16.0.0/12"]   # the compose bridge, not 10/8 as well
+```
+
+lobslaw warns at boot when a selected search provider is on a private or bare-label address and neither `egress_allow_ranges` nor `egress_allow_private_ranges` is set, because the alternative is a proxy denial that names neither the range nor the setting that fixes it.
 
 ## ACL hot-reload
 

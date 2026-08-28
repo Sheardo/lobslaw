@@ -29,7 +29,7 @@ All filesystem builtins respect Landlock — they can only see paths the agent's
 | Tool | Risk | Description |
 |---|---|---|
 | `fetch_url` | read | HTTP GET via smokescreen (`fetch_url` egress role) |
-| `web_search` | read | Provider-backed search; configured via `[compute.web_search]` |
+| `web_search` | read | Pluggable search backend (SearXNG, Exa, or any engine described in TOML) via the `web_search` egress role; configured via `[compute.web_search]` + `[[compute.search_providers]]`. See [Web search](/features/web-search) |
 
 ## Modality
 

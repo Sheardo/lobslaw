@@ -713,6 +713,47 @@ extension point proves nothing until somebody extends it. Build the
 template driver when a vendor appears that config cannot reach; build
 the skill path when one appears that a mapping cannot describe.
 
+**Update — the template driver exists, for search.** Web search was the
+place it stopped being theoretical. `web_search` had been Exa inlined
+in a builtin while every other pluggable backend resolved through
+`DriverSet`, and config documented a `provider` key that did not exist.
+Search is also the shallowest thing lobslaw talks to: a query out, a
+list of `{title, url, snippet}` back. Brave, Tavily, Serper, Google CSE
+and every corporate search proxy differ only in which parameter holds
+the query and which JSON path holds the results — a field mapping, not
+a driver, and a field mapping should not need a Go file and a release.
+
+So `SearchDriver` joins the waist with two tiers rather than one:
+
+| Tier | Cost of a new backend | For |
+|---|---|---|
+| Compiled (`exa`, `searxng`) | one file + one `RegisterSearch` line | engines with real behaviour — Exa's typed search, SearXNG's engine and category knobs |
+| `driver = "template"` | a TOML block, no Go, no rebuild | the long tail |
+
+`SearchDriverConfig` carries three `map[string]string` — `Options`,
+`ExtraParams`, `Response` — rather than a typed field per vendor knob,
+which is what keeps a new backend from being a config-struct change.
+Each factory validates its own keys at boot, so a typo is a start-up
+error naming the offending key rather than a surprise at the first
+search. Auth needs no new code: `auth_style` selects between the
+`StaticCredential` and `QueryCredential` that already exist.
+
+The line the template driver does not cross is one request and one
+response. A backend needing a second call, a signature, or a
+pagination loop is real behaviour and gets a real driver — growing the
+interpreter into a scripting language would recreate the problem it
+exists to avoid, and the skill path above is where that ends up.
+
+Two other things landed with it, both of which had been true of every
+modality except this one: `web_search` now routes through
+`egress.For("web_search")` — the role the security documentation had
+described for months without the builder ever creating it — and it
+registers through `failoverBuiltin`, so a chain fails over and the
+soul's trust floor is checked. That check mattered most on the builtin
+that had been missing it: a search hands the user's own words to
+whoever answers, and a self-hosted SearXNG declaring `local` against a
+hosted API declaring `public` is a real difference.
+
 ---
 
 ## Mocks

@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -662,32 +663,98 @@ func (n *Node) wireShellTools(builtins *compute.Builtins) error {
 	return nil
 }
 
-// wireWebSearchTools registers web_search, only when an Exa API key is
-// configured. Skipped silently when absent so deployments that don't
-// want web access don't need to redact anything — they just don't set
-// the key.
+// wireWebSearchTools registers web_search over the search backends
+// config selects, in failover order. Skipped silently when none
+// resolve, so a deployment that doesn't want web access doesn't need
+// to redact anything — it just declares no search provider.
+//
+// Drivers are built at BOOT, like vision's. An unknown driver name or
+// a template mapping missing its required fields is a configuration
+// error the operator should see on start-up, not the first time
+// somebody asks what the news is.
 func (n *Node) wireWebSearchTools(builtins *compute.Builtins) error {
-	if n.cfg.Compute.WebSearch.APIKeyRef == "" {
+	providers := resolvedSearchProviders(n.cfg.Compute)
+	if len(providers) == 0 {
 		return nil
 	}
-	exaKey, err := n.resolveAPIKey(n.cfg.Compute.WebSearch.APIKeyRef)
-	if err != nil {
-		return fmt.Errorf("web_search api key: %w", err)
+	cfgs := make([]compute.WebSearchConfig, 0, len(providers))
+	for _, p := range providers {
+		apiKey, err := n.resolveAPIKey(p.APIKeyRef)
+		if err != nil {
+			return fmt.Errorf("web_search provider %q api key: %w", p.Label, err)
+		}
+		// A declared key that resolves to nothing is a redaction, not
+		// a configuration to boot with: the operator asked for this
+		// backend and the secret is missing.
+		if p.APIKeyRef != "" && apiKey == "" {
+			return fmt.Errorf("web_search provider %q: api_key_ref %q resolved empty", p.Label, p.APIKeyRef)
+		}
+		driver, err := n.drivers().Search(p.Driver, compute.SearchDriverConfig{
+			Endpoint:    p.Endpoint,
+			Credential:  searchCredential(p.Driver, apiKey),
+			HTTPClient:  searchEgressClient(p.Timeout),
+			Logger:      n.log,
+			Options:     p.Options,
+			ExtraParams: p.ExtraParams,
+			Response:    p.Response,
+		})
+		if err != nil {
+			return fmt.Errorf("web_search: provider %q: %w", p.Label, err)
+		}
+		cfgs = append(cfgs, compute.WebSearchConfig{
+			Driver:    driver,
+			Label:     p.Label,
+			TrustTier: p.TrustTier,
+		})
 	}
-	if exaKey == "" {
-		return nil
-	}
-	if err := compute.RegisterWebSearchBuiltin(builtins, compute.WebSearchConfig{
-		APIKey:   exaKey,
-		Endpoint: n.cfg.Compute.WebSearch.Endpoint,
-	}); err != nil {
+	if err := compute.RegisterWebSearchBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register web_search: %w", err)
 	}
 	if err := n.toolRegistry.Register(compute.WebSearchToolDef()); err != nil {
 		return fmt.Errorf("register web_search tool def: %w", err)
 	}
-	n.log.Debug("compute: web_search (Exa) registered")
+	n.log.Debug("compute: web_search registered",
+		"provider", providers[0].Label, "driver", providers[0].Driver,
+		"chain_len", len(providers))
 	return nil
+}
+
+// searchCredential builds the credential shape a search driver
+// expects. Exa wants a bare x-api-key; everything else is handed a
+// bearer credential and re-wraps it if its API disagrees — which is
+// what the template driver's auth_style is for.
+//
+// Nil for no key at all, because that is the normal case for a private
+// SearXNG and the reason web_search no longer gates registration on
+// having a secret.
+func searchCredential(driver, apiKey string) compute.Credential {
+	if apiKey == "" {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(driver), compute.DriverExa) || driver == "" {
+		return compute.ExaCredential(apiKey)
+	}
+	return compute.NewBearerCredential(apiKey)
+}
+
+// searchEgressClient returns the egress-routed client for web_search.
+//
+// Copied rather than used directly: egress.Client hands back one
+// shared instance, and setting a per-provider timeout on it would
+// change the deadline for every other caller of the same role. Same
+// move builtin_fetch.go makes to wrap its SSRF guard.
+//
+// The timeout is set unconditionally because the search default is
+// tighter than the egress default, and passing a non-nil client means
+// the driver's own default never gets a say.
+func searchEgressClient(timeout time.Duration) *http.Client {
+	base := egress.For("web_search").HTTPClient()
+	client := *base
+	if timeout <= 0 {
+		timeout = compute.DefaultSearchTimeout
+	}
+	client.Timeout = timeout
+	return &client
 }
 
 // wireVisionTools registers the read_image builtin. Resolution order:

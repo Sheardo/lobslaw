@@ -29,6 +29,7 @@ type DriverSet struct {
 	vision    map[string]VisionDriverFactory
 	audio     map[string]AudioDriverFactory
 	embedding map[string]EmbeddingDriverFactory
+	search    map[string]SearchDriverFactory
 }
 
 // ChatDriverConfig is what every chat driver is built from. Fields a
