@@ -91,8 +91,27 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 	}
 	body = stripBotMention(body, h.botUserID)
 
+	// Materialise any shared files so the vision/audio/pdf builtins can
+	// open them by path. Best-effort: a download failure costs that
+	// attachment, not the turn.
+	im := IncomingMessage{
+		Channel:     ChannelSlack,
+		UserID:      claims.UserID,
+		ChatID:      convID,
+		Attachments: slackFilesToAttachments(ev.Files),
+	}
+	if err := h.downloadAttachments(ctx, turnID, &im); err != nil {
+		h.log.Warn("slack: attachment download dir prep failed", "err", err, "turn_id", turnID)
+	}
+	if body == "" && im.HasMedia() {
+		// A file with no comment still needs something for the model to
+		// anchor on, or the turn is an empty user message.
+		body = "(no comment — please inspect the attached file and respond)"
+	}
+
 	agentReq := compute.ProcessMessageRequest{
 		Message:             body,
+		Attachments:         im.Attachments,
 		Claims:              claims,
 		TurnID:              turnID,
 		Budget:              budget,

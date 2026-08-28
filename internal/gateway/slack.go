@@ -96,6 +96,12 @@ type SlackConfig struct {
 	// incomplete deployment, not a permissive one.
 	CommandAuthorizer CommandAuthorizer
 
+	// IncomingDir is where inbound files are written. Empty →
+	// DefaultIncomingDownloadDir, which is the same directory the
+	// vision/audio/pdf builtins read from, so a file cannot land
+	// somewhere the agent is not allowed to look.
+	IncomingDir string
+
 	// SlashPrefix is the umbrella command registered in Slack's app UI.
 	// Empty → "lobslaw", so "/lobslaw new" works out of the box and a
 	// directly-registered "/new" still dispatches as itself.
@@ -365,7 +371,11 @@ func (h *SlackHandler) wantsEvent(ev slackEvent) bool {
 	// A subtype means an edit, a join, a deletion, a bot post — an
 	// event ABOUT a message rather than a new one. Answering
 	// message_changed would re-run a turn nobody resent.
-	if ev.Subtype != "" {
+	//
+	// "file_share" is the exception, and it is not a rare one: it is
+	// how EVERY file upload arrives. Rejecting it wholesale would mean
+	// the bot silently ignores every screenshot anybody sends it.
+	if ev.Subtype != "" && ev.Subtype != "file_share" {
 		return false
 	}
 	// Our own messages, and any other bot's. Without this the bot
@@ -373,7 +383,9 @@ func (h *SlackHandler) wantsEvent(ev slackEvent) bool {
 	if ev.BotID != "" || ev.User == "" || ev.User == h.botUserID {
 		return false
 	}
-	if strings.TrimSpace(ev.Text) == "" {
+	// Text OR files. A file shared with no comment is a real message —
+	// "look at this" is implied by the act of sharing it.
+	if strings.TrimSpace(ev.Text) == "" && len(ev.Files) == 0 {
 		return false
 	}
 	return true

@@ -394,6 +394,9 @@ type slackEvent struct {
 	TS          string `json:"ts,omitempty"`
 	ThreadTS    string `json:"thread_ts,omitempty"`
 	EventTS     string `json:"event_ts,omitempty"`
+	// Files are attachments shared with the message. A file upload
+	// arrives as subtype "file_share", frequently with no text at all.
+	Files []slackFile `json:"files,omitempty"`
 }
 
 // slackMessage is a stored message as the conversations.* read methods

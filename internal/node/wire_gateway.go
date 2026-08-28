@@ -239,6 +239,7 @@ func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.Slack
 		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
 		HardTimeout:      n.cfg.Gateway.HardTimeout,
 		Soul:              n.soulProvider,
+		IncomingDir:       n.incomingDir(),
 		CommandAuthorizer: n.commandAuthorizerOrNil(),
 		Gate:              gate,
 		Logger:            n.log,
