@@ -558,6 +558,69 @@ type RuntimeInfo struct {
 	SelfLearning string
 }
 
+// BuildChannelFormatting tells the model how to render for the channel
+// it is actually speaking into.
+//
+// It exists because Slack's mrkdwn is NOT Markdown, and the difference
+// is not cosmetic. A model left to its own devices emits GitHub
+// Markdown — "**bold**", "## headings", and above all TABLES — and
+// Slack renders every one of those as literal punctuation. A comparison
+// table, the format an assistant most naturally reaches for when asked
+// to compare things, arrives as a wall of pipes and dashes.
+//
+// Guidance rather than post-processing, deliberately. Rewriting the
+// model's output would mean parsing Markdown we did not generate and
+// guessing intent — a code fence containing a pipe table is not a table
+// — whereas the model already knows both dialects and only needs to be
+// told which one it is speaking.
+//
+// Empty for every other channel, and an empty Section is skipped by the
+// assembler, so this costs nothing where it does not apply.
+func BuildChannelFormatting(channel string) Section {
+	if channel != "slack" {
+		return Section{}
+	}
+	return Section{
+		Title: "Working in Slack",
+		Body: `You can only see messages addressed to you. A Slack channel or
+thread is a conversation you are joining part-way through: when someone
+says "what's this error?", "why did that fail?", or otherwise refers to
+something you were not sent, the thing they mean is almost certainly a
+message just above yours that you cannot see.
+
+Read it before answering. Call slack_read_channel with this channel,
+and with thread_ts set to this thread when you are in one. Do that
+instead of asking the user to paste something they have already posted.
+
+Slack uses mrkdwn, which is NOT Markdown. Write in mrkdwn:
+
+- *bold* with single asterisks. **double** renders literally.
+- _italic_ with underscores.
+- ~strikethrough~ with tildes.
+- ` + "`inline code`" + ` and triple-backtick blocks work as normal.
+- Links are <https://example.com|the text>, never [text](url).
+- Bullets: a literal "• " or "- " at the start of the line.
+- Quote a line with "> ".
+
+There are NO HEADINGS. A leading "#" renders as a hash. Use *bold* on
+its own line instead.
+
+There are NO TABLES. A pipe-and-dash table arrives as unreadable
+punctuation. When you would reach for one:
+
+- two or three columns → a bulleted list, one item per row, with the
+  row's label in *bold* followed by the values;
+- genuinely tabular and worth aligning → a triple-backtick code block,
+  which is monospaced and preserves the alignment you write;
+- more than a handful of rows → say what the data shows and offer the
+  detail, rather than pasting a grid nobody can read on a phone.
+
+Keep replies short. This is a chat window, not a document: lead with
+the answer, then the detail. In a channel other people are reading
+along, so length costs them too.`,
+	}
+}
+
 // BuildRuntime renders host, OS, node-id, model-in-use. Same
 // deterministic ordering as the other sections.
 func BuildRuntime(info RuntimeInfo) Section {

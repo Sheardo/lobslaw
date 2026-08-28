@@ -20,7 +20,8 @@ import (
 // action_id carries "prompt:<verb>:<id>", which is how the tap is
 // routed back without a side table. Slack caps action_id at 255 bytes;
 // a verb plus a ULID is nowhere near it.
-func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, channel, thread string, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
+func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackResponder, req compute.ProcessMessageRequest, resp *compute.ProcessMessageResponse, session SessionRef) {
+	channel := r.channel
 	ttl := h.cfg.ConfirmationTTL
 	if ttl <= 0 {
 		ttl = 5 * time.Minute
@@ -44,7 +45,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, channel, thre
 	})
 	if err != nil {
 		h.log.Error("slack: prompt registration failed", "err", err)
-		h.sendText(ctx, channel, thread, "Confirmation required: "+resp.ConfirmationReason)
+		r.write(ctx, "Confirmation required: "+resp.ConfirmationReason, nil)
 		return
 	}
 
@@ -85,11 +86,12 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, channel, thre
 	// The plain text is the notification body and the fallback for any
 	// client that cannot render blocks. Without it the prompt arrives
 	// on a phone as an empty message.
+	//
+	// Written into the placeholder: the question replaces "working on
+	// it" rather than appearing under it, so the user is not left
+	// deciding whether the bot is still thinking as well as asking.
 	fallback := "Confirmation required: " + resp.ConfirmationReason
-	if err := h.api.postBlocks(ctx, channel, thread, fallback, blocks); err != nil {
-		h.log.Error("slack: confirmation post failed", "err", err)
-		h.sendText(ctx, channel, thread, fallback)
-	}
+	r.write(ctx, fallback, blocks)
 }
 
 func button(label, actionID, style string) map[string]any {
@@ -366,11 +368,18 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	cont.Request.Channel = ChannelSlack
 	cont.Request.ChannelID = p.SessionID
 
+	// The resumed leg runs the agent again and takes just as long as
+	// the first one, so it gets its own placeholder. Without it the
+	// user taps Approve and is back to silence — worse than the first
+	// wait, because they have just been told something is happening.
+	turnCtx, r, cleanup := h.startResponsivenessGuards(ctx, channel, thread)
+	defer cleanup()
+
 	cont.Request.Budget.Relax()
-	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.Request, cont.Messages)
+	resp, err := h.agent.ResumeFromConfirmation(turnCtx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("slack: resume failed", "turn_id", cont.Request.TurnID, "err", err)
-		h.sendText(ctx, channel, thread, classifyAgentError(err))
+		r.write(ctx, classifyAgentError(err), nil)
 		return
 	}
 
@@ -380,11 +389,11 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 
 	switch {
 	case resp.NeedsConfirmation:
-		h.sendConfirmationBlocks(ctx, channel, thread, cont.Request, resp, session)
+		h.sendConfirmationBlocks(ctx, r, cont.Request, resp, session)
 	case resp.Reply == "":
-		h.sendText(ctx, channel, thread, "(empty reply)")
+		r.write(ctx, "(empty reply)", nil)
 	default:
-		h.sendText(ctx, channel, thread, resp.Reply)
+		r.write(ctx, resp.Reply, nil)
 	}
 	// The resumed leg is where a confirmed generation actually
 	// produces its file, so this is the delivery point that matters

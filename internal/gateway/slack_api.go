@@ -185,6 +185,65 @@ func (a *slackAPI) postMessage(ctx context.Context, channel, threadTS, text stri
 	return err
 }
 
+// setAssistantStatus sets the greyed "…is working" line Slack renders
+// under an assistant thread.
+//
+// The nicest available signal by some distance: it is not a message, so
+// it leaves no trace, and Slack clears it when the reply lands. It is
+// also the narrowest — it needs assistant:write AND an assistant
+// thread, which means a DM with an app that has the Agents & AI Apps
+// feature on. In a normal channel it fails, which is why every caller
+// treats failure as "fall back", never as an error.
+//
+// An empty status clears it.
+func (a *slackAPI) setAssistantStatus(ctx context.Context, channel, threadTS, status string) error {
+	if threadTS == "" {
+		// Not a thread, so there is no assistant thread to decorate.
+		// Reported as an error so the caller falls back without paying
+		// for a round trip that cannot succeed.
+		return fmt.Errorf("slack: assistant status needs a thread")
+	}
+	_, err := a.call(ctx, "assistant.threads.setStatus", a.botToken, map[string]any{
+		"channel_id": channel,
+		"thread_ts":  threadTS,
+		"status":     status,
+	})
+	return err
+}
+
+// updateMessage rewrites a message already posted, optionally
+// replacing its blocks.
+//
+// This is how a Slack turn reports progress. There is no typing
+// indicator available to a bot — that is a real-time-messaging
+// affordance for humans — and the app has no reactions:write to stand
+// one in for it. Posting a fresh "still working" message each time
+// would leave a trail of scaffolding around every answer, so instead
+// one message is posted at the start and rewritten in place until it
+// becomes the reply.
+func (a *slackAPI) updateMessage(ctx context.Context, channel, ts, text string, blocks []any) error {
+	body := map[string]any{"channel": channel, "ts": ts, "text": text}
+	if blocks != nil {
+		body["blocks"] = blocks
+	}
+	_, err := a.call(ctx, "chat.update", a.botToken, body)
+	return err
+}
+
+// postMessageTS posts and returns the new message's ts, so it can be
+// updated later.
+func (a *slackAPI) postMessageTS(ctx context.Context, channel, threadTS, text string) (string, error) {
+	body := map[string]any{"channel": channel, "text": text}
+	if threadTS != "" {
+		body["thread_ts"] = threadTS
+	}
+	out, err := a.call(ctx, "chat.postMessage", a.botToken, body)
+	if err != nil {
+		return "", err
+	}
+	return out.TS, nil
+}
+
 // postBlocks sends a Block Kit message. text is still supplied and is
 // not optional: it is what Slack shows in notifications and in any
 // client that cannot render the blocks, so a blocks-only message

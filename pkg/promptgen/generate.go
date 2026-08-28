@@ -104,6 +104,9 @@ func Generate(in GenerateInput) string {
 		BuildAgentNotes(in.Pinned.Notes),
 		BuildCurrentTime(now, in.Timezone),
 		BuildRuntime(in.Runtime),
+		// After Runtime, which is where the channel is named, so the
+		// rules sit next to the fact that produced them.
+		BuildChannelFormatting(in.Runtime.Channel),
 		BuildWorkspace(in.Workspace),
 		BuildEnvironment(discoverSpecialtyCommands()),
 	}
