@@ -232,7 +232,7 @@ label      = "searxng"
 driver     = "searxng"
 endpoint   = "http://searxng:8080/search"
 trust_tier = "local"
-options    = { engines = "google,duckduckgo", language = "en", safesearch = "1" }
+options    = { language = "en", safesearch = "1" }
 
 [[compute.search_providers]]
 label       = "exa"

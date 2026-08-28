@@ -168,3 +168,71 @@ func TestSearxngClassifiesUpstreamFailure(t *testing.T) {
 		t.Errorf("502 class = %v; want transient so the chain advances", got)
 	}
 }
+
+// The first live test of this driver hit exactly this: SearXNG
+// reachable, HTTP 200, and {"results":[]} because every upstream had
+// CAPTCHA'd it. The agent got an empty list with exit 0 and concluded
+// the backend was "misbehaving or unconfigured" — the diagnosis was in
+// the response body the whole time.
+func TestSearxngEmptyWithDeadEnginesIsAFailure(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[],"unresponsive_engines":[["duckduckgo","CAPTCHA"],["google","Suspended: CAPTCHA"]]}`))
+	}))
+	defer srv.Close()
+
+	d := searxngDriverFor(t, srv.URL, nil)
+	_, err := d.Search(context.Background(), SearchRequest{Query: "q"})
+	if err == nil {
+		t.Fatal("every engine failing is a backend failure, not an empty answer")
+	}
+	for _, want := range []string{"duckduckgo (CAPTCHA)", "google (Suspended: CAPTCHA)", "engines"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should name %q", err, want)
+		}
+	}
+	// Transient so a chain fails over to another backend; CAPTCHAs and
+	// rate limits pass, so it is also worth retrying later.
+	if got := ClassifyFailure(err); got != FailureTransient {
+		t.Errorf("class = %v; want transient", got)
+	}
+}
+
+// A genuinely obscure query returns nothing and that is the answer.
+// Erroring here would turn "no hits" into "backend broken".
+func TestSearxngEmptyWithHealthyEnginesIsAnAnswer(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[],"unresponsive_engines":[]}`))
+	}))
+	defer srv.Close()
+
+	d := searxngDriverFor(t, srv.URL, nil)
+	results, err := d.Search(context.Background(), SearchRequest{Query: "q"})
+	if err != nil {
+		t.Fatalf("no hits is not an error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("results = %+v", results)
+	}
+}
+
+// Metasearch degrading to fewer engines is the normal case. Results
+// present means success even when some upstreams are down.
+func TestSearxngPartialEngineFailureStillSucceeds(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"title":"T","url":"https://x","content":"c","engine":"google"}],
+			"unresponsive_engines":[["duckduckgo","CAPTCHA"]]}`))
+	}))
+	defer srv.Close()
+
+	d := searxngDriverFor(t, srv.URL, nil)
+	results, err := d.Search(context.Background(), SearchRequest{Query: "q"})
+	if err != nil {
+		t.Fatalf("a partial result set is still a result set: %v", err)
+	}
+	if len(results) != 1 {
+		t.Errorf("results = %+v", results)
+	}
+}

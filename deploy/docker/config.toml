@@ -456,7 +456,9 @@ api_key_ref = "env:LOBSLAW_EXA_API_KEY"
 # driver     = "searxng"
 # endpoint   = "http://searxng:8080/search"
 # trust_tier = "local"
-# options    = { engines = "google,duckduckgo", language = "en" }
+# options    = { language = "en" }
+# Leave `engines` unset unless you have a reason. Pinning narrows the
+# pool, and a metasearch front-end earns its keep by having spares.
 
 # Vision: read_image builtin so the agent can actually inspect
 # attached images even when the main model is text-only. Uses an

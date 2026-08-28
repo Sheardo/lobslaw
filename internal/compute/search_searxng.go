@@ -136,6 +136,30 @@ func (d *searxngDriver) Search(ctx context.Context, req SearchRequest) ([]Search
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return nil, Permanent(fmt.Errorf("searxng search: decode: %w", err))
 	}
+	// An empty result set with every engine down is a BACKEND FAILURE,
+	// not an answer. SearXNG returns HTTP 200 and {"results":[]} when
+	// its upstreams CAPTCHA or rate-limit it, and reports exactly which
+	// ones in unresponsive_engines — so the diagnosis is sitting in the
+	// response and throwing it away turns it into silence.
+	//
+	// Observed in the first live test of this driver: every engine
+	// blocked, the tool returned an empty list twice with exit 0, and
+	// the agent reasonably concluded the search backend was "misbehaving
+	// or unconfigured" with nothing to go on. Classified transient
+	// because CAPTCHAs and rate limits pass, so a chain fails over to
+	// another backend instead of reporting no hits.
+	//
+	// Results present means success even if some engines failed:
+	// metasearch degrading to fewer engines is the normal case and not
+	// worth an error.
+	if len(decoded.Results) == 0 && len(decoded.UnresponsiveEngines) > 0 {
+		return nil, Transient(fmt.Errorf(
+			"searxng search: no results because every engine queried failed (%s); "+
+				"the instance is reachable but its upstreams are blocking it — "+
+				"widen the `engines` option, or wait for the suspensions to lift",
+			decoded.unresponsiveSummary()))
+	}
+
 	// SearXNG paginates rather than taking a count, so the cap is
 	// applied here.
 	results := decoded.Results
@@ -166,6 +190,32 @@ func looksLikeJSON(body []byte) bool {
 
 type searxngResponse struct {
 	Results []searxngResult `json:"results"`
+
+	// UnresponsiveEngines is SearXNG's own account of which upstreams
+	// failed and why: [["duckduckgo","CAPTCHA"],["google","Suspended:
+	// CAPTCHA"]]. Typed as []any per entry because the arity varies by
+	// SearXNG version — some emit a third element — and a stricter type
+	// would drop the whole diagnosis on a version bump.
+	UnresponsiveEngines [][]any `json:"unresponsive_engines"`
+}
+
+// unresponsiveSummary renders the failures as "engine (reason)", which
+// is the form an operator can act on: the engine name says what to drop
+// from `engines`, the reason says whether waiting would help.
+func (r searxngResponse) unresponsiveSummary() string {
+	parts := make([]string, 0, len(r.UnresponsiveEngines))
+	for _, entry := range r.UnresponsiveEngines {
+		if len(entry) == 0 {
+			continue
+		}
+		name := fmt.Sprint(entry[0])
+		if len(entry) > 1 {
+			parts = append(parts, fmt.Sprintf("%s (%v)", name, entry[1]))
+			continue
+		}
+		parts = append(parts, name)
+	}
+	return strings.Join(parts, ", ")
 }
 
 type searxngResult struct {

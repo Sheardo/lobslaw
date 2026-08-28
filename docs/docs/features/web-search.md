@@ -22,12 +22,14 @@ label      = "searxng"
 driver     = "searxng"
 endpoint   = "http://searxng:8080/search"
 trust_tier = "local"
-options    = { engines = "google,duckduckgo", language = "en", safesearch = "1" }
+options    = { language = "en", safesearch = "1" }
 ```
 
 `endpoint` accepts the base URL or the full search path — `http://searxng:8080` and `http://searxng:8080/search` mean the same thing. A reverse proxy mounting SearXNG under a prefix should give the full path.
 
 Supported `options`, all optional and passed straight through: `engines`, `categories`, `language`, `time_range`, `safesearch`, `pageno`. A blank value means "no preference" and is not sent.
+
+**Think twice before pinning `engines`.** Search engines block metasearch front-ends aggressively — CAPTCHAs and rate limits are routine, not exceptional. Pinning to a short list makes your search only as available as those engines, and a two-engine pin where one is blocked leaves you resting on one. In testing, `engines = "google,duckduckgo"` went to zero results once Google rate-limited, while the default set returned twenty in the same conditions with three of its engines down. Having spares is what a metasearch front-end is *for*.
 
 ### Two things to get right
 
@@ -41,6 +43,8 @@ search:
 ```
 
 lobslaw detects this case specifically and returns the snippet above rather than a decode error, but it is quicker to set it first.
+
+**Every engine blocked** is a separate case, and lobslaw treats it as a backend failure rather than an answer. SearXNG returns HTTP 200 with `{"results":[]}` when its upstreams all refuse it, and names them in `unresponsive_engines`; the driver surfaces that as a transient error listing each engine and its reason, so a failover chain moves on and you get a diagnosis instead of a silently empty list. A genuinely obscure query that finds nothing still returns an empty result set, not an error.
 
 **2 — Open the network to egress.** `web_search` routes through the smokescreen proxy, which refuses private IP ranges regardless of the hostname ACL. A SearXNG in the same compose file is on a private address by construction:
 
