@@ -135,12 +135,47 @@ func TestSlackSessionGrantIsScopedToTheThread(t *testing.T) {
 	}
 	// With no approvals store the grant must report failure rather
 	// than claiming success — the reply promises what happened.
-	if h.grantForSession(context.Background(), "p1", "C1", "1.1") {
+	if h.grantForSession(context.Background(), "p1", "C1/1.1") {
 		t.Fatal("a grant was reported without an approvals store")
 	}
 	// And the pending scope is consumed either way, so a second tap
 	// cannot replay it.
 	if _, still := h.takePendingScope("p1"); still {
 		t.Fatal("the pending scope survived a failed grant")
+	}
+}
+
+// A grant must be scoped to the conversation the TURN ran in, which is
+// the one recorded on the prompt — not one rebuilt from the button.
+//
+// The two differ exactly where it matters. A top-level channel message
+// carries no thread_ts, so the turn is scoped to "C1"; the confirmation
+// is posted INTO a thread, so the tap comes back carrying one. Rebuilt
+// from the tap the grant lands under "C1/<ts>", a conversation the turn
+// was never in — and "approve here" silently asks again next time.
+func TestSlackSessionGrantUsesThePromptsConversation(t *testing.T) {
+	t.Parallel()
+
+	// What the turn recorded for a top-level channel message.
+	const turnConversation = "C1"
+	// What a tap on the threaded confirmation would rebuild.
+	rebuiltFromTap := slackConversationID("C1", "1700000000.000100")
+
+	if rebuiltFromTap == turnConversation {
+		t.Fatal("the two spellings collapsed; this test no longer proves anything")
+	}
+	if rebuiltFromTap != "C1/1700000000.000100" {
+		t.Fatalf("rebuilt = %q", rebuiltFromTap)
+	}
+
+	// A grant with no conversation narrows to once rather than being
+	// recorded against nothing.
+	h := &SlackHandler{
+		cfg:          SlackConfig{},
+		log:          discardLogger(),
+		pendingScope: map[string]scopedOperation{"p1": {action: "tool:exec", resource: "x"}},
+	}
+	if h.grantForSession(context.Background(), "p1", "") {
+		t.Fatal("a grant with no conversation was recorded")
 	}
 }

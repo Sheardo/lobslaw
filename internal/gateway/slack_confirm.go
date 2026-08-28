@@ -144,6 +144,28 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 		return
 	}
 
+	// Read before resolving: Resolve is a CAS that can lose to another
+	// node, and the loser must not consume the turn it did not win.
+	prompt, getErr := h.cfg.Prompts.Get(promptID)
+
+	// The conversation a grant is scoped to comes from the PROMPT, not
+	// from the tap.
+	//
+	// Reconstructing it from the button was wrong, and quietly: a
+	// top-level channel message has no thread_ts, so the turn is scoped
+	// to "C123" — but the confirmation is posted INTO a thread, so the
+	// tap comes back carrying one and rebuilt "C123/1.1". The grant
+	// landed under a conversation the turn was never in, and "approve
+	// here" silently asked again next time.
+	//
+	// It is also the same argument the subject already follows: a
+	// callback is attacker-shaped input, the turn that raised the
+	// question is not.
+	grantSession := ""
+	if getErr == nil && prompt != nil {
+		grantSession = prompt.SessionID
+	}
+
 	// Whatever the verb, this prompt is finished after this tap, so its
 	// remembered operation goes. The grant helpers below take it first
 	// when they need it; this drains the rest — a plain "approve", a
@@ -164,7 +186,7 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 		// Recorded before Resolve so the resumed turn already sees the
 		// grant; resolving first lets the resume race it and prompt a
 		// second time for the same operation.
-		if !h.grantForSession(ctx, promptID, channel, thread) {
+		if !h.grantForSession(ctx, promptID, grantSession) {
 			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
 		}
@@ -182,10 +204,6 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 		h.log.Debug("slack: unknown prompt verb", "verb", verb)
 		return
 	}
-
-	// Read before resolving: Resolve is a CAS that can lose to another
-	// node, and the loser must not consume the turn it did not win.
-	prompt, getErr := h.cfg.Prompts.Get(promptID)
 
 	if err := h.cfg.Prompts.Resolve(promptID, decision, scope); err != nil {
 		switch {
@@ -270,7 +288,7 @@ func (h *SlackHandler) isAudience(ctx context.Context, teamID, userID, raisedFor
 // grantForSession records "approved for the rest of this conversation".
 // Reports whether a grant was actually recorded, so the reply does not
 // promise something that did not happen.
-func (h *SlackHandler) grantForSession(ctx context.Context, promptID, channel, thread string) bool {
+func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) bool {
 	// Taken before the store is checked so the entry is consumed even
 	// when there is nowhere to record the grant. A pending scope that
 	// outlives its prompt is a slow leak and, worse, something a later
@@ -279,10 +297,15 @@ func (h *SlackHandler) grantForSession(ctx context.Context, promptID, channel, t
 	if !ok || h.cfg.Approvals == nil {
 		return false
 	}
-	// Scoped by the conversation the tap arrived in, built by the same
-	// helper the turn used — a thread's grant must not leak to the
-	// channel around it, and the two spellings must not drift.
-	convID := slackConversationID(channel, thread)
+	if convID == "" {
+		// No conversation to scope to. Refusing means the caller
+		// narrows to a one-shot approval, which is the safe direction:
+		// a grant scoped to nothing is either scoped to everything or
+		// findable by nobody, and both are wrong.
+		h.log.Warn("slack: session grant has no conversation; narrowing to once",
+			"prompt", promptID)
+		return false
+	}
 	grantCtx := compute.WithTurnIdentity(ctx, compute.TurnIdentity{
 		Channel:   ChannelSlack,
 		ChannelID: convID,

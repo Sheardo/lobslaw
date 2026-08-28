@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -25,6 +26,11 @@ import (
 // the memory package to recognise it.
 type sessionStoreAdapter struct {
 	inner *memory.SessionService
+	// grants lets Forget clear a conversation's approvals alongside its
+	// transcript. Nil on a node with no replicated grant store, where
+	// the process-local map dies with the process anyway.
+	grants *memory.SessionGrantStore
+	log    *slog.Logger
 }
 
 // newSessionStore returns a gateway.SessionStore backed by raft, or
@@ -38,6 +44,8 @@ func (n *Node) newSessionStore() gateway.SessionStore {
 		inner: memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
 			MaxMessages: n.cfg.Gateway.SessionMaxMessages,
 		}),
+		grants: n.sessionGrants,
+		log:    n.log,
 	}
 }
 
@@ -353,7 +361,31 @@ func (a *sessionStoreAdapter) Append(ctx context.Context, ref gateway.SessionRef
 	return translateSessionErr(err)
 }
 
+// Forget drops the transcript AND the conversation's approval grants.
+//
+// Both, because "forget this conversation" is a statement about what
+// the deployment still holds, and a cleared conversation that keeps
+// privileges the user believes they revoked is the worse half to get
+// wrong. GATEWAY.md has described this behaviour since session grants
+// landed; RevokeSession existed and was tested, and nothing called it.
+//
+// Grants go FIRST. If the transcript delete then fails the user is
+// told the forget failed, having lost no privileges they still expect
+// to hold — whereas deleting the transcript and failing to revoke
+// leaves a conversation the user believes is gone still able to act.
 func (a *sessionStoreAdapter) Forget(ctx context.Context, ref gateway.SessionRef) error {
+	if a.grants != nil {
+		// Same "<channel>:<channel_id>" key the transcript uses, which
+		// is what lets one conversation's grants be found from its ref.
+		n, err := a.grants.RevokeSession(ctx, ref.Channel+":"+ref.ChannelID)
+		if err != nil {
+			return translateSessionErr(err)
+		}
+		if n > 0 {
+			a.log.Info("session: revoked conversation approvals on forget",
+				"channel", ref.Channel, "channel_id", ref.ChannelID, "grants", n)
+		}
+	}
 	return translateSessionErr(a.inner.Forget(ctx, toMemoryRef(ref)))
 }
 
