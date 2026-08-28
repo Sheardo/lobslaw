@@ -555,13 +555,37 @@ type slackEvent struct {
 // return it. Shares fields with slackEvent but is a distinct shape:
 // history entries have no channel_type and carry their own subtypes.
 type slackMessage struct {
-	Type     string `json:"type"`
-	Subtype  string `json:"subtype,omitempty"`
-	User     string `json:"user,omitempty"`
-	BotID    string `json:"bot_id,omitempty"`
+	Type    string `json:"type"`
+	Subtype string `json:"subtype,omitempty"`
+	User    string `json:"user,omitempty"`
+	BotID   string `json:"bot_id,omitempty"`
+	// Username is the display name a bot posted under. Alert
+	// integrations set it and often set no `user` at all, so it is the
+	// only way to say WHO raised an alert.
+	Username string `json:"username,omitempty"`
 	Text     string `json:"text,omitempty"`
 	TS       string `json:"ts,omitempty"`
 	ThreadTS string `json:"thread_ts,omitempty"`
+	// Attachments carry the actual content of most bot alerts. A
+	// monitoring integration posts an empty `text` and puts the
+	// hostname, severity and message in here, so a reader that looks
+	// only at Text sees an alert channel as a column of blank lines.
+	Attachments []slackAttachment `json:"attachments,omitempty"`
+}
+
+// slackAttachment is the legacy attachment shape, which is still what
+// most alerting webhooks emit.
+type slackAttachment struct {
+	Fallback string             `json:"fallback,omitempty"`
+	Pretext  string             `json:"pretext,omitempty"`
+	Title    string             `json:"title,omitempty"`
+	Text     string             `json:"text,omitempty"`
+	Fields   []slackAttachField `json:"fields,omitempty"`
+}
+
+type slackAttachField struct {
+	Title string `json:"title,omitempty"`
+	Value string `json:"value,omitempty"`
 }
 
 // slackSocket wraps one Socket Mode connection.

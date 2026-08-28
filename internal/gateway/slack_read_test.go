@@ -103,23 +103,94 @@ func TestLooksLikeChannelID(t *testing.T) {
 	}
 }
 
-// History carries joins, edits and the bot's own posts. Feeding those
-// back would have the agent reading itself.
+// Reading history is not the event path. This filter used to drop every
+// message with a bot_id — right for our own replies, wrong for every
+// other bot, and an alerts channel is nothing BUT other bots. The one
+// kind of channel somebody most wants summarised read as empty.
 func TestIsReadableMessage(t *testing.T) {
 	t.Parallel()
 
-	if !isReadableMessage(slackMessage{Text: "hello"}) {
-		t.Error("a plain human message was filtered out")
+	readable := []slackMessage{
+		{Text: "hello"},
+		// The case that motivated the fix.
+		{BotID: "B1", Username: "Mozart Bot", Text: "CRITICAL: pve-01 disk 94%"},
+		// And the harder one: alerting webhooks post empty text and put
+		// everything in the attachment.
+		{BotID: "B1", Username: "Mozart Bot", Attachments: []slackAttachment{
+			{Title: "Proxmox alert", Text: "storage local-lvm above threshold"},
+		}},
+		{BotID: "B1", Attachments: []slackAttachment{
+			{Fields: []slackAttachField{{Title: "host", Value: "pve-01"}}},
+		}},
+		// Fallback only, which is what a terse integration sends.
+		{BotID: "B1", Attachments: []slackAttachment{{Fallback: "pve-01 unreachable"}}},
 	}
-	for _, m := range []slackMessage{
+	for _, m := range readable {
+		if !isReadableMessage(m) {
+			t.Errorf("%+v was filtered out", m)
+		}
+	}
+
+	unreadable := []slackMessage{
 		{Text: "joined", Subtype: "channel_join"},
-		{Text: "hi", BotID: "B1"},
+		{Text: "left", Subtype: "channel_leave"},
 		{Text: "   "},
 		{},
-	} {
+		// An attachment with no content anywhere is still nothing.
+		{BotID: "B1", Attachments: []slackAttachment{{}}},
+	}
+	for _, m := range unreadable {
 		if isReadableMessage(m) {
 			t.Errorf("%+v was treated as readable", m)
 		}
+	}
+}
+
+func TestMessageTextReadsAttachments(t *testing.T) {
+	t.Parallel()
+
+	// Plain text wins outright.
+	if got := messageText(slackMessage{Text: "hi", Attachments: []slackAttachment{{Text: "ignored"}}}); got != "hi" {
+		t.Errorf("got %q, want the top-level text", got)
+	}
+
+	got := messageText(slackMessage{Attachments: []slackAttachment{{
+		Pretext: "Alert",
+		Title:   "Proxmox",
+		Text:    "disk above 90%",
+		Fields:  []slackAttachField{{Title: "host", Value: "pve-01"}},
+	}}})
+	for _, want := range []string{"Alert", "Proxmox", "disk above 90%", "host: pve-01"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("extracted text %q is missing %q", got, want)
+		}
+	}
+	// Fallback is a flattened copy of the same content, so it must not
+	// be added on top of the structured parts.
+	withBoth := messageText(slackMessage{Attachments: []slackAttachment{{
+		Text: "the real text", Fallback: "the real text",
+	}}})
+	if strings.Count(withBoth, "the real text") != 1 {
+		t.Errorf("fallback duplicated the content: %q", withBoth)
+	}
+}
+
+// An alert usually has no user id, and "who raised this" is the first
+// thing somebody asks about one.
+func TestMessageAuthor(t *testing.T) {
+	t.Parallel()
+
+	if got := messageAuthor(slackMessage{User: "U1", Username: "ignored"}); got != "U1" {
+		t.Errorf("got %q, want the user id", got)
+	}
+	if got := messageAuthor(slackMessage{BotID: "B1", Username: "Mozart Bot"}); got != "Mozart Bot" {
+		t.Errorf("got %q, want the bot's display name", got)
+	}
+	if got := messageAuthor(slackMessage{BotID: "B1"}); got != "bot:B1" {
+		t.Errorf("got %q, want a bot id fallback", got)
+	}
+	if got := messageAuthor(slackMessage{}); got != "" {
+		t.Errorf("got %q, want empty", got)
 	}
 }
 

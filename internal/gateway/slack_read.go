@@ -96,7 +96,7 @@ func (h *SlackHandler) ReadConversation(ctx context.Context, ref string, limit i
 				continue
 			}
 			out = append(out, SlackTranscriptMessage{
-				Channel: id, User: m.User, Text: m.Text, TS: m.TS, ThreadTS: m.ThreadTS,
+				Channel: id, User: messageAuthor(m), Text: messageText(m), TS: m.TS, ThreadTS: m.ThreadTS,
 			})
 		}
 		if next == "" || len(msgs) == 0 {
@@ -127,7 +127,7 @@ func (h *SlackHandler) ReadThread(ctx context.Context, ref, ts string, limit int
 			continue
 		}
 		out = append(out, SlackTranscriptMessage{
-			Channel: id, User: m.User, Text: m.Text, TS: m.TS, ThreadTS: m.ThreadTS,
+			Channel: id, User: messageAuthor(m), Text: messageText(m), TS: m.TS, ThreadTS: m.ThreadTS,
 		})
 	}
 	return out, nil
@@ -172,11 +172,15 @@ func (h *SlackHandler) SearchConversations(ctx context.Context, query string, re
 				break
 			}
 			for _, m := range msgs {
-				if !isReadableMessage(m) || !strings.Contains(strings.ToLower(m.Text), needle) {
+				// Matched against the SAME text the reader returns, not
+				// m.Text — an alert's content lives in its attachment,
+				// so matching the raw field would find nothing in the
+				// channels this is most useful for.
+				if !isReadableMessage(m) || !strings.Contains(strings.ToLower(messageText(m)), needle) {
 					continue
 				}
 				hits = append(hits, SlackTranscriptMessage{
-					Channel: id, User: m.User, Text: m.Text, TS: m.TS, ThreadTS: m.ThreadTS,
+					Channel: id, User: messageAuthor(m), Text: messageText(m), TS: m.TS, ThreadTS: m.ThreadTS,
 				})
 				if len(hits) >= limit {
 					break
@@ -305,11 +309,88 @@ func (h *SlackHandler) channelIDForName(ctx context.Context, name string) (strin
 	return "", fmt.Errorf("slack: no conversation named %q that this bot can see", name)
 }
 
-// isReadableMessage filters history down to human content. Subtypes are
-// joins, edits and file comments; bot posts include our own replies,
-// and feeding those back would have the agent reading itself.
+// noiseSubtypes are events ABOUT a channel rather than content in it.
+// Everything else is kept, including subtypes carrying real text like
+// file_share and message shares.
+var noiseSubtypes = map[string]bool{
+	"channel_join": true, "channel_leave": true,
+	"group_join": true, "group_leave": true,
+	"channel_topic": true, "channel_purpose": true, "channel_name": true,
+	"channel_archive": true, "channel_unarchive": true,
+	"bot_add": true, "bot_remove": true,
+	"message_deleted": true,
+}
+
+// isReadableMessage filters history down to content worth reading.
+//
+// It used to drop every message with a bot_id, reasoning that bot posts
+// include our own replies and feeding those back would have the agent
+// reading itself. That is true of OUR bot and false of every other one
+// — and an alerts channel is nothing BUT other bots. The effect was
+// that the one kind of channel somebody most wants summarised read as
+// empty.
+//
+// Reading is not the event path. The loop risk lives in wantsEvent,
+// which still refuses to answer a bot; here, our own past replies are
+// simply part of the conversation.
 func isReadableMessage(m slackMessage) bool {
-	return m.Subtype == "" && m.BotID == "" && strings.TrimSpace(m.Text) != ""
+	if noiseSubtypes[m.Subtype] {
+		return false
+	}
+	return strings.TrimSpace(messageText(m)) != ""
+}
+
+// messageText is what a message actually says.
+//
+// Falls through to attachments because that is where alerting webhooks
+// put everything: an integration posts an empty `text` with the host,
+// severity and description in an attachment, so a reader that consults
+// only Text sees a column of blanks and reports the channel empty.
+func messageText(m slackMessage) string {
+	if t := strings.TrimSpace(m.Text); t != "" {
+		return t
+	}
+	var parts []string
+	for _, a := range m.Attachments {
+		for _, s := range []string{a.Pretext, a.Title, a.Text} {
+			if s = strings.TrimSpace(s); s != "" {
+				parts = append(parts, s)
+			}
+		}
+		for _, f := range a.Fields {
+			title, value := strings.TrimSpace(f.Title), strings.TrimSpace(f.Value)
+			switch {
+			case title != "" && value != "":
+				parts = append(parts, title+": "+value)
+			case value != "":
+				parts = append(parts, value)
+			}
+		}
+		// Only when the structured parts gave nothing: fallback is a
+		// flattened copy of the same content, so preferring it would
+		// duplicate every alert.
+		if len(parts) == 0 {
+			if fb := strings.TrimSpace(a.Fallback); fb != "" {
+				parts = append(parts, fb)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// messageAuthor names who posted, for a reader that has to attribute an
+// alert. A bot usually has no user id, only a display name.
+func messageAuthor(m slackMessage) string {
+	if m.User != "" {
+		return m.User
+	}
+	if m.Username != "" {
+		return m.Username
+	}
+	if m.BotID != "" {
+		return "bot:" + m.BotID
+	}
+	return ""
 }
 
 func reverse(s []SlackTranscriptMessage) {
