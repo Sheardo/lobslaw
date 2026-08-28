@@ -92,11 +92,60 @@ func TestSlackWantsEvent(t *testing.T) {
 func TestSlackConversationID(t *testing.T) {
 	t.Parallel()
 
-	if got := conversationID(slackEvent{Channel: "C123", TS: "1.1"}); got != "C123" {
-		t.Errorf("channel message = %q, want C123", got)
+	// A top-level CHANNEL message is answered in a thread rooted at
+	// itself, so that thread is the conversation from the first turn.
+	if got := conversationID(slackEvent{ChannelType: "channel", Channel: "C123", TS: "1.1"}); got != "C123/1.1" {
+		t.Errorf("channel message = %q, want C123/1.1", got)
 	}
-	if got := conversationID(slackEvent{Channel: "C123", TS: "2.2", ThreadTS: "1.1"}); got != "C123/1.1" {
+	if got := conversationID(slackEvent{ChannelType: "channel", Channel: "C123", TS: "2.2", ThreadTS: "1.1"}); got != "C123/1.1" {
 		t.Errorf("threaded message = %q, want C123/1.1", got)
+	}
+	// A DM is answered inline, so the conversation is the channel.
+	if got := conversationID(slackEvent{ChannelType: "im", Channel: "D123", TS: "1.1"}); got != "D123" {
+		t.Errorf("dm = %q, want D123", got)
+	}
+	// Except when the user explicitly threaded it, which is genuinely a
+	// separate conversation.
+	if got := conversationID(slackEvent{ChannelType: "im", Channel: "D123", TS: "2.2", ThreadTS: "1.1"}); got != "D123/1.1" {
+		t.Errorf("threaded dm = %q, want D123/1.1", got)
+	}
+}
+
+// The invariant behind the split-thread bug: the conversation a turn is
+// stored under has to be the conversation the answer lands in. Derived
+// separately they disagreed exactly once — on the first message of a
+// channel thread — and the bot forgot the message that started the
+// thread it was standing in.
+func TestSlackConversationFollowsTheReply(t *testing.T) {
+	t.Parallel()
+
+	// Walk a channel thread the way Slack delivers it: a top-level
+	// mention, then a reply inside the thread the bot created.
+	opening := slackEvent{ChannelType: "channel", Channel: "C1", TS: "100"}
+	followUp := slackEvent{ChannelType: "channel", Channel: "C1", TS: "200", ThreadTS: replyThread(opening)}
+
+	if conversationID(opening) != conversationID(followUp) {
+		t.Fatalf("thread split: opening %q, follow-up %q",
+			conversationID(opening), conversationID(followUp))
+	}
+	// And the conversation names the thread the reply went to.
+	if want := slackConversationID("C1", replyThread(opening)); conversationID(opening) != want {
+		t.Errorf("conversation %q does not match the reply thread %q",
+			conversationID(opening), want)
+	}
+
+	// A DM stays one conversation across turns, because replies stay
+	// inline and nothing acquires a thread_ts.
+	dm1 := slackEvent{ChannelType: "im", Channel: "D1", TS: "100"}
+	dm2 := slackEvent{ChannelType: "im", Channel: "D1", TS: "200"}
+	if conversationID(dm1) != conversationID(dm2) {
+		t.Fatalf("dm split across turns: %q vs %q", conversationID(dm1), conversationID(dm2))
+	}
+
+	// Two separate channel threads remain separate.
+	other := slackEvent{ChannelType: "channel", Channel: "C1", TS: "300"}
+	if conversationID(opening) == conversationID(other) {
+		t.Error("two distinct threads collapsed into one conversation")
 	}
 }
 

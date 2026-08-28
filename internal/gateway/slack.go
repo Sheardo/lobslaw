@@ -539,8 +539,26 @@ func slackConversationID(channel, threadTS string) string {
 	return channel
 }
 
+// The conversation is wherever the reply lands, which is why this is
+// derived FROM replyThread rather than alongside it.
+//
+// Reading ev.ThreadTS directly was wrong for a channel, and split every
+// thread in half. A top-level mention carries no thread_ts, so the turn
+// was keyed "C1" — but the answer went into a thread rooted at that
+// message, so the user's follow-up arrived carrying thread_ts and keyed
+// "C1/<ts>". First exchange in one session, the rest in another, and
+// the bot could not remember the message that started the thread it was
+// standing in.
+//
+// A DM answers inline, so its conversation is the channel and stays
+// that way. An explicitly threaded DM is genuinely its own
+// conversation, and replyThread returns empty there — hence the branch
+// rather than one expression.
 func conversationID(ev slackEvent) string {
-	return slackConversationID(ev.Channel, ev.ThreadTS)
+	if ev.ChannelType == "im" {
+		return slackConversationID(ev.Channel, ev.ThreadTS)
+	}
+	return slackConversationID(ev.Channel, replyThread(ev))
 }
 
 // isSharedSlackConversation reports whether more than one person can
