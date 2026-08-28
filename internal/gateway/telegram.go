@@ -202,6 +202,12 @@ type TelegramConfig struct {
 	// hides the button rather than showing one that does nothing —
 	// a node without raft has nowhere to record a lasting grant.
 	ApprovalRules *policy.ApprovalRules
+
+	// CommandAuthorizer gates slash commands through the policy engine.
+	// Nil refuses every command rather than allowing them: a command is
+	// a privileged operation, and an unwired authorizer is an
+	// incomplete deployment, not a permissive one.
+	CommandAuthorizer CommandAuthorizer
 }
 
 // grantSubject is the policy subject a permanent grant binds to.
@@ -275,6 +281,10 @@ type TelegramHandler struct {
 	// ProcessMessageRequest.ConversationHistory: durable when a
 	// session store is wired, in-memory otherwise.
 	conv *conversationLog
+
+	// commands is the shared runtime control surface, the same set
+	// Slack dispatches. Built here so it can close over conv.
+	commands *CommandSet
 }
 
 // Telegram Update / Message types — minimal subset we consume. The
@@ -398,7 +408,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TelegramHandler{
+	h := &TelegramHandler{
 		cfg:          cfg,
 		agent:        agent,
 		log:          logger,
@@ -408,7 +418,10 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		pendingScope: make(map[string]scopedOperation),
 		seenUpdate:   make(map[int64]time.Time),
 		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
-	}, nil
+	}
+	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
+	RegisterBuiltinCommands(h.commands, h.conv)
+	return h, nil
 }
 
 // ServeHTTP is the webhook receiver. Methods other than POST get
@@ -486,6 +499,18 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
 	}
+	// Before the gate: a command is not a turn. It must not take a
+	// lease, load a transcript, or reach the model — /new in particular
+	// would otherwise queue behind the very conversation it exists to
+	// discard.
+	if h.handleCommand(ctx, msg.Chat.ID, turnText(msg), CommandRequest{
+		Claims:  claims,
+		Session: sessionRef,
+		Shared:  isSharedChat(msg.Chat),
+	}) {
+		return
+	}
+
 	// Everything from here to the Append below is one turn, and two
 	// of them on the same chat must not overlap: both would Load the
 	// same prior history and both would Append it, interleaving the
@@ -598,6 +623,15 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.sendText(msg.Chat.ID, "Confirmation required: "+resp.ConfirmationReason)
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
+	case isSharedChat(msg.Chat):
+		// No notice in a group. The nudge says how many proposals the
+		// OPERATOR has waiting — their queue, not the group's — and the
+		// subject allowlist only decides who may be told, never who is
+		// standing behind them. cmd/lobslaw's own comment warns that a
+		// channel allowlist alone "would tell a group chat what the
+		// operator has pending"; the subject list narrows who triggers
+		// it, not who reads it.
+		h.sendText(msg.Chat.ID, resp.Reply)
 	default:
 		// Appended AFTER the transcript was persisted above, and to
 		// the outbound text only. A notice recorded as an assistant
