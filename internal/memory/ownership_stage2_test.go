@@ -131,10 +131,10 @@ func TestForgetAllowsOwnRecords(t *testing.T) {
 // or `lobslaw` tooling cannot clean up after anyone.
 func TestForgetAudienceEmptyRequesterIsUnrestricted(t *testing.T) {
 	t.Parallel()
-	if !forgetAudience("").allows("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE) {
+	if !forgetAudience("").allows("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE, "") {
 		t.Error("an empty requester should be the unrestricted operator path")
 	}
-	if forgetAudience("user:bob").allows("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE) {
+	if forgetAudience("user:bob").allows("user:alice", lobslawv1.Visibility_VISIBILITY_PRIVATE, "") {
 		t.Error("a named requester must not reach another principal's private record")
 	}
 }

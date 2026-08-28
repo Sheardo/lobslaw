@@ -2782,8 +2782,22 @@ type VectorRecord struct {
 	// actually happens. Empty means a record written before this field
 	// existed, which readers treat as "unknown", never as "matches".
 	EmbeddingModel string `protobuf:"bytes,12,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// session_ref addresses the conversation this vector came from, as
+	// "<channel>:<channel_id>" — the same value carried by the
+	// EpisodicRecord it embeds, stamped here because the recall scan
+	// reads vectors and never sees the episodic record until after it
+	// has already chosen its candidates.
+	//
+	// Exists for shared conversations. In a channel several people can
+	// read, "may this caller see this record" stops being answerable
+	// from ownership alone: a memory the speaker owns is fair game, and
+	// so is one this conversation produced, but one person's private
+	// memory surfacing because somebody else spoke is a disclosure.
+	// Empty means a record with no conversation origin — a scheduled
+	// task, a commitment fire — which no conversation scope matches.
+	SessionRef    string `protobuf:"bytes,13,opt,name=session_ref,json=sessionRef,proto3" json:"session_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *VectorRecord) Reset() {
@@ -2900,6 +2914,13 @@ func (x *VectorRecord) GetEmbeddingModel() string {
 	return ""
 }
 
+func (x *VectorRecord) GetSessionRef() string {
+	if x != nil {
+		return x.SessionRef
+	}
+	return ""
+}
+
 // VectorScanEntry is a narrow VIEW over VectorRecord's wire format: the
 // field numbers below are deliberately identical to VectorRecord's, so
 // VectorRecord bytes unmarshal directly into this message. Combined with
@@ -2924,6 +2945,7 @@ type VectorScanEntry struct {
 	Owner         string                 `protobuf:"bytes,9,opt,name=owner,proto3" json:"owner,omitempty"`
 	Visibility    Visibility             `protobuf:"varint,10,opt,name=visibility,proto3,enum=lobslaw.v1.Visibility" json:"visibility,omitempty"`
 	Norm          float32                `protobuf:"fixed32,11,opt,name=norm,proto3" json:"norm,omitempty"`
+	SessionRef    string                 `protobuf:"bytes,13,opt,name=session_ref,json=sessionRef,proto3" json:"session_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2998,6 +3020,13 @@ func (x *VectorScanEntry) GetNorm() float32 {
 		return x.Norm
 	}
 	return 0
+}
+
+func (x *VectorScanEntry) GetSessionRef() string {
+	if x != nil {
+		return x.SessionRef
+	}
+	return ""
 }
 
 type EpisodicRecord struct {
@@ -12083,7 +12112,7 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\x11GetRecordResponse\x120\n" +
 	"\x06vector\x18\x01 \x01(\v2\x18.lobslaw.v1.VectorRecordR\x06vector\x126\n" +
 	"\bepisodic\x18\x02 \x01(\v2\x1a.lobslaw.v1.EpisodicRecordR\bepisodic\x12#\n" +
-	"\rreferenced_by\x18\x03 \x03(\tR\freferencedBy\"\x81\x04\n" +
+	"\rreferenced_by\x18\x03 \x03(\tR\freferencedBy\"\xa2\x04\n" +
 	"\fVectorRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1c\n" +
 	"\tembedding\x18\x02 \x03(\x02R\tembedding\x12\x12\n" +
@@ -12101,10 +12130,12 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	" \x01(\x0e2\x16.lobslaw.v1.VisibilityR\n" +
 	"visibility\x12\x12\n" +
 	"\x04norm\x18\v \x01(\x02R\x04norm\x12'\n" +
-	"\x0fembedding_model\x18\f \x01(\tR\x0eembeddingModel\x1a;\n" +
+	"\x0fembedding_model\x18\f \x01(\tR\x0eembeddingModel\x12\x1f\n" +
+	"\vsession_ref\x18\r \x01(\tR\n" +
+	"sessionRef\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdc\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xfd\x01\n" +
 	"\x0fVectorScanEntry\x12\x1c\n" +
 	"\tembedding\x18\x02 \x03(\x02R\tembedding\x12\x14\n" +
 	"\x05scope\x18\x05 \x01(\tR\x05scope\x123\n" +
@@ -12114,7 +12145,9 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"visibility\x18\n" +
 	" \x01(\x0e2\x16.lobslaw.v1.VisibilityR\n" +
 	"visibility\x12\x12\n" +
-	"\x04norm\x18\v \x01(\x02R\x04norm\"\x81\x03\n" +
+	"\x04norm\x18\v \x01(\x02R\x04norm\x12\x1f\n" +
+	"\vsession_ref\x18\r \x01(\tR\n" +
+	"sessionRef\"\x81\x03\n" +
 	"\x0eEpisodicRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05event\x18\x02 \x01(\tR\x05event\x12\x18\n" +

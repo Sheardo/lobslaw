@@ -398,7 +398,12 @@ func retainForgettable(store *Store, matched map[string]struct{}, audience Audie
 		if err != nil {
 			return err
 		}
-		if found && !audience.allows(vis.owner, vis.visibility) {
+		// Deliberately no session_ref: a conversation-scoped audience
+		// widens what a caller may READ, not what they may destroy.
+		// Speaking in a channel is not a claim on the records it
+		// produced, and Forget is the one operation where being wrong
+		// is unrecoverable.
+		if found && !audience.allows(vis.owner, vis.visibility, "") {
 			delete(matched, id)
 		}
 	}

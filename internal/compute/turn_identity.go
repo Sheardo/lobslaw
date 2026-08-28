@@ -76,6 +76,20 @@ type TurnIdentity struct {
 	Channel   string
 	ChannelID string
 
+	// Shared marks a conversation MORE THAN ONE PERSON CAN READ — a
+	// Slack channel or group DM, a Telegram group. False for a 1:1 DM
+	// and for turns with no channel origin at all.
+	//
+	// The channel sets it, because only the channel knows: the same
+	// (Channel, ChannelID) shape addresses both a private Slack DM and
+	// a 200-person channel, and nothing downstream can tell them apart.
+	//
+	// It changes what passive recall may surface. In a DM, ownership
+	// answers the question on its own. In a shared conversation it does
+	// not, because the speaker changes between turns — see
+	// memory.ForConversation.
+	Shared bool
+
 	// Timezone is the caller's IANA zone, used to render times as the
 	// user would read them. Lower stakes than the rest, same problem:
 	// a model that picks its own zone moves when a schedule appears to

@@ -338,6 +338,19 @@ type tgChat struct {
 	Type string `json:"type"`
 }
 
+// isSharedChat reports whether a chat has an audience beyond the
+// person speaking. Telegram's own vocabulary: "private" is a 1:1 DM,
+// everything else ("group", "supergroup", "channel") has onlookers.
+//
+// Defaulting the UNKNOWN type to shared is deliberate. The two ways to
+// be wrong are not symmetric: treating a group as private leaks one
+// person's recalled memories to everyone in it, while treating a DM as
+// shared costs only some recall the speaker could have had. A type
+// Telegram adds after this was written should land on the cheap side.
+func isSharedChat(c tgChat) bool {
+	return c.Type != "" && c.Type != "private"
+}
+
 type tgCallbackQuery struct {
 	ID      string     `json:"id"`
 	From    *tgUser    `json:"from,omitempty"`
@@ -537,6 +550,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
 		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
+		SharedConversation:  isSharedChat(msg.Chat),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing
