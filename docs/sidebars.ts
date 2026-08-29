@@ -62,6 +62,7 @@ const sidebars: SidebarsConfig = {
         "features/commitments",
         "features/notifications",
         "features/research",
+        "features/web-search",
         "features/scheduler",
         "features/council",
         "features/memory",

@@ -114,6 +114,29 @@ func TestBuildFetchURLLockedDownWhenConfigured(t *testing.T) {
 	}
 }
 
+// The web_search role was documented long before it existed, so the
+// builtin talked to the internet outside the proxy entirely. Unlike
+// fetch_url there is no permissive fallback: the hosts it may reach
+// are exactly the backends config declared.
+func TestBuildWebSearchRole(t *testing.T) {
+	t.Parallel()
+	got := Build(ACLInputs{WebSearchHosts: []string{"searxng", "api.exa.ai"}})
+	if hosts := got.Roles["web_search"]; !equalSet(hosts, []string{"searxng", "api.exa.ai"}) {
+		t.Errorf("web_search hosts = %v", hosts)
+	}
+	if got.Permissive["web_search"] {
+		t.Error("web_search must not be permissive; its host set is fully derived")
+	}
+}
+
+func TestBuildWebSearchRoleAbsentWithoutProviders(t *testing.T) {
+	t.Parallel()
+	got := Build(ACLInputs{})
+	if _, set := got.Roles["web_search"]; set {
+		t.Error("a node with no search provider should get no web_search role — fail closed")
+	}
+}
+
 func TestHostOfHandlesBareHostnames(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{

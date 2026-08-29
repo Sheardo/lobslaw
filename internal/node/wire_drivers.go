@@ -87,6 +87,16 @@ func (n *Node) drivers() *compute.DriverSet {
 		s.RegisterEmbedding(compute.DriverOpenAI, compute.OpenAIEmbeddingFactory)
 		s.RegisterEmbedding(compute.DriverMiniMax, compute.MiniMaxEmbeddingFactory)
 		s.RegisterEmbedding(compute.DriverMock, compute.MockEmbeddingFactory)
+
+		// Search is the shallowest modality, so it gets two tiers.
+		// "exa" and "searxng" are compiled because they have real
+		// behaviour behind them; "template" is the declarative
+		// interpreter, and every other engine — Brave, Tavily, Serper,
+		// a private proxy — is a TOML block against it rather than a
+		// line here.
+		s.RegisterSearch(compute.DriverExa, compute.ExaSearchFactory)
+		s.RegisterSearch(compute.DriverSearxng, compute.SearxngSearchFactory)
+		s.RegisterSearch(compute.DriverTemplate, compute.TemplateSearchFactory)
 		driverSet = s
 	})
 	return driverSet

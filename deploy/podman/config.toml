@@ -174,7 +174,9 @@ type  = "builtin"
 model = "all-MiniLM-L6-v2"
 # embeddings-block-end
 
-# Exa-backed web_search builtin. No key -> the builtin isn't registered.
+# web_search builtin. No backend -> it isn't registered. This shape
+# means Exa; a self-hosted SearXNG and the declarative template driver
+# for any other engine are documented at /features/web-search.
 [compute.web_search]
 api_key_ref = "env:LOBSLAW_EXA_API_KEY"
 

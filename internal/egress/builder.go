@@ -67,6 +67,18 @@ type ACLInputs struct {
 	// blocks private IPs anyway). Non-empty = explicit allowlist.
 	FetchURLAllowHosts []string
 
+	// WebSearchHosts are the endpoint hosts of the search backends
+	// compute.web_search selects, in the order they will be tried.
+	// Derived, never written by hand: the operator configures the
+	// backend and this follows.
+	//
+	// Note for anyone pointing web_search at a service on the local
+	// network — a SearXNG in the same compose file being the obvious
+	// case — the hostname allowance is necessary but not sufficient.
+	// Smokescreen refuses private IP ranges regardless of the ACL, so
+	// that deployment also needs security.egress_allow_ranges.
+	WebSearchHosts []string
+
 	// BinariesInstallHosts is the union of upstream hostnames declared
 	// by the operator's [[binary]] entries (apt repos, brew CDN, pypi,
 	// etc.). Used to seed the "binaries-install" role. Empty when no
@@ -225,6 +237,15 @@ func Build(in ACLInputs) Rules {
 		rules.Roles["oauth/"+name] = hosts.list
 	}
 
+	// web_search is the opposite of fetch_url: the set of hosts it can
+	// reach is exactly the search backends config declared, so the
+	// allowlist writes itself and there is no permissive fallback. A
+	// node with no search provider gets no role at all, which fails
+	// closed.
+	if len(in.WebSearchHosts) > 0 {
+		rules.Roles["web_search"] = in.WebSearchHosts
+	}
+
 	// fetch_url is the deliberately permissive role. Operators who
 	// want it locked down declare an explicit allowlist.
 	if len(in.FetchURLAllowHosts) > 0 {
@@ -257,6 +278,13 @@ func hostOf(rawURL string) string {
 	// scheme.
 	return strings.TrimSpace(rawURL)
 }
+
+// HostOf exposes hostOf to callers outside this package that must
+// derive the SAME host the ACL builder will. The wiring layer needs it
+// for the web_search role: a role granting one host while the driver
+// dials another is a denial at first use, and the two derivations
+// agreeing by construction is cheaper than them agreeing by test.
+func HostOf(rawURL string) string { return hostOf(rawURL) }
 
 // hostOfOrSelf returns hostOf when parseable, otherwise the original
 // string trimmed. Used for clawhub-style configs where the operator
