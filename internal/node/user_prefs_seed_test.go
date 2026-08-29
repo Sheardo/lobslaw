@@ -75,3 +75,39 @@ func TestMergeMissingChannelsHandlesNilRecord(t *testing.T) {
 		t.Errorf("added = %v; want nil", added)
 	}
 }
+
+// A config entry reading type = "Slack" must bind something notify can
+// actually find: findChannelAddress compares against the lowercase
+// channel constants exactly, so the stored type has to be folded.
+func TestMergeMissingChannelsNormalisesTypeCase(t *testing.T) {
+	t.Parallel()
+
+	rec := &lobslawv1.UserPreferences{}
+	added := mergeMissingChannels(rec, []config.UserChannelAddrConfig{
+		{Type: "  Slack  ", Address: "U1"},
+	})
+	if len(added) != 1 || added[0] != "slack" {
+		t.Fatalf("added = %v; want [slack]", added)
+	}
+	if got := rec.Channels[0].GetType(); got != "slack" {
+		t.Errorf("stored type = %q; notify would never match it", got)
+	}
+}
+
+// And the same folding stops a differently-cased duplicate shadowing a
+// binding that already works.
+func TestMergeMissingChannelsDoesNotDuplicateOnCase(t *testing.T) {
+	t.Parallel()
+
+	rec := &lobslawv1.UserPreferences{
+		Channels: []*lobslawv1.UserChannelAddress{{Type: "slack", Address: "U1"}},
+	}
+	if added := mergeMissingChannels(rec, []config.UserChannelAddrConfig{
+		{Type: "SLACK", Address: "U2"},
+	}); len(added) != 0 {
+		t.Errorf("added = %v; want none", added)
+	}
+	if len(rec.Channels) != 1 {
+		t.Errorf("channels = %d; want 1", len(rec.Channels))
+	}
+}

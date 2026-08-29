@@ -352,13 +352,20 @@ func mergeMissingChannels(rec *lobslawv1.UserPreferences, configured []config.Us
 	if rec == nil {
 		return nil
 	}
+	// Types are compared and stored lowercased. notify's
+	// findChannelAddress matches c.Type against the channel constants
+	// exactly, and those are lowercase, so a config entry reading
+	// type = "Slack" would bind an address that nothing can ever look
+	// up — the same silent no-op this function exists to end, wearing a
+	// different hat. Folding case also stops "Slack" being added
+	// alongside an existing "slack" as a second, shadowed binding.
 	have := make(map[string]struct{}, len(rec.Channels))
 	for _, c := range rec.Channels {
-		have[strings.TrimSpace(c.GetType())] = struct{}{}
+		have[normaliseChannelType(c.GetType())] = struct{}{}
 	}
 	var added []string
 	for _, c := range configured {
-		t := strings.TrimSpace(c.Type)
+		t := normaliseChannelType(c.Type)
 		if t == "" || strings.TrimSpace(c.Address) == "" {
 			continue
 		}
@@ -373,4 +380,8 @@ func mergeMissingChannels(rec *lobslawv1.UserPreferences, configured []config.Us
 		added = append(added, t)
 	}
 	return added
+}
+
+func normaliseChannelType(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
