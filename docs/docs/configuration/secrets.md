@@ -22,9 +22,10 @@ A provider's `label` *is* the reference scheme it answers to. Declare one and `b
 
 ```toml
 [[secrets.providers]]
-label  = "bw"
-driver = "bitwarden"
-env    = { BW_SESSION = "env:BW_SESSION" }
+label      = "bw"
+driver     = "bitwarden"
+env        = { BW_CONFIG_DIR = "/etc/lobslaw/bw" }   # plaintext
+secret_env = { BW_SESSION = "env:BW_SESSION" }       # secret references
 
 [[compute.providers]]
 label       = "openrouter"
@@ -64,6 +65,27 @@ It is an **argv, never a shell string**. A secret path containing a space must n
 | `trim_whitespace` | `true` | strip surrounding whitespace from stdout |
 
 The default is on because a CLI that prints a trailing newline is the norm, and a key with `\n` on the end fails authentication in a way nothing reports usefully. Turn it off for the rare secret whose newline is load-bearing.
+
+### Environment for the subprocess
+
+`env` values are **plaintext**; `secret_env` values are **secret references**, resolved through the bootstrap schemes only.
+
+The split matters because most of what a vault CLI needs in its environment is not secret — a config directory, a CA bundle path, an account alias — and it exists in exactly the shape `[mcp.servers.<name>]` already uses. If both name the same variable, `secret_env` wins: that is the only ordering that cannot silently downgrade a secret to a literal.
+
+TOML inline tables must fit on one line, so use a sub-table when the values are long:
+
+```toml
+[[secrets.providers]]
+label  = "bw"
+driver = "bitwarden"
+
+[secrets.providers.env]
+BITWARDENCLI_APPDATA_DIR = "/var/lib/lobslaw/bw"
+NODE_EXTRA_CA_CERTS      = "/etc/ssl/certs/internal-ca.pem"
+
+[secrets.providers.secret_env]
+BW_SESSION = "file:/run/secrets/bw-session"
+```
 
 ## The bootstrap floor
 

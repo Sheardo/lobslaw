@@ -49,10 +49,10 @@ type ProviderConfig struct {
 	// wrapper script around `bw` is a normal thing to have.
 	Command []string
 
-	// Env is extra environment for the subprocess, already resolved.
-	// Values arrive as plaintext: the wiring layer resolves any nested
-	// refs through the BOOTSTRAP resolver only, so a vault credential
-	// can never itself come from a vault.
+	// Env is the subprocess environment, already resolved and merged.
+	// The wiring layer takes plaintext from config's env and resolves
+	// config's secret_env through the BOOTSTRAP resolver only, so a
+	// vault credential can never itself come from a vault.
 	Env map[string]string
 
 	// Timeout bounds one fetch. Zero takes DefaultFetchTimeout.
@@ -210,11 +210,18 @@ func FromConfig(cfg config.SecretsConfig, reg *Registry, log *slog.Logger) (*Res
 			return nil, fmt.Errorf("secrets: duplicate provider label %q; "+
 				"a reference scheme can only mean one backend", p.Label)
 		}
-		env := make(map[string]string, len(p.Env))
-		for k, ref := range p.Env {
+		// Plaintext first, then the resolved refs — so a secret_env
+		// entry wins if both name the same variable, which is the only
+		// ordering that cannot silently downgrade a secret to a
+		// literal.
+		env := make(map[string]string, len(p.Env)+len(p.SecretEnv))
+		for k, v := range p.Env {
+			env[k] = v
+		}
+		for k, ref := range p.SecretEnv {
 			v, err := Bootstrap(ref)
 			if err != nil {
-				return nil, fmt.Errorf("secrets: provider %q: env %s: %w", p.Label, k, err)
+				return nil, fmt.Errorf("secrets: provider %q: secret_env %s: %w", p.Label, k, err)
 			}
 			env[k] = v
 		}

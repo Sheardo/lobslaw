@@ -336,9 +336,10 @@ func TestFromConfigBuildsAndRejects(t *testing.T) {
 	r, err := FromConfig(config.SecretsConfig{
 		Providers: []config.SecretProviderConfig{
 			{Label: "pass", Driver: "exec", Command: []string{"true", pathPlaceholder}},
-			{Label: "bw", Driver: "bitwarden", Env: map[string]string{
-				"BW_SESSION": "env:LOBSLAW_TEST_BW_SESSION",
-			}},
+			{Label: "bw", Driver: "bitwarden",
+				Env:       map[string]string{"BW_CONFIG_DIR": "/etc/lobslaw/bw"},
+				SecretEnv: map[string]string{"BW_SESSION": "env:LOBSLAW_TEST_BW_SESSION"},
+			},
 		},
 	}, nil, nil)
 	if err != nil {
@@ -360,11 +361,58 @@ func TestFromConfigBuildsAndRejects(t *testing.T) {
 	// because the vault it names cannot exist yet.
 	_, err = FromConfig(config.SecretsConfig{
 		Providers: []config.SecretProviderConfig{
-			{Label: "bw", Driver: "bitwarden", Env: map[string]string{"BW_SESSION": "op:a/b/c"}},
+			{Label: "bw", Driver: "bitwarden", SecretEnv: map[string]string{"BW_SESSION": "op:a/b/c"}},
 		},
 	}, nil, nil)
 	if err == nil {
 		t.Error("a provider credential from another vault must be refused")
+	}
+}
+
+// env is plaintext and secret_env is references, split exactly as
+// [mcp.servers.<name>] splits them. An earlier version resolved every
+// env value as a reference, which made a non-secret setting —
+// BITWARDENCLI_APPDATA_DIR, NODE_EXTRA_CA_CERTS — impossible to
+// configure at all, because a bare path is not a valid reference.
+func TestFromConfigSplitsPlaintextFromReferences(t *testing.T) {
+	t.Setenv("LOBSLAW_TEST_SESSION", "resolved-session")
+
+	r, err := FromConfig(config.SecretsConfig{
+		Providers: []config.SecretProviderConfig{{
+			Label: "bw", Driver: "exec", Command: []string{"true"},
+			Env:       map[string]string{"BW_CONFIG_DIR": "/var/lib/bw", "OTHER": "plain"},
+			SecretEnv: map[string]string{"BW_SESSION": "env:LOBSLAW_TEST_SESSION"},
+		}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("FromConfig: %v", err)
+	}
+	env := r.providers["bw"].(*execProvider).env
+	if env["BW_CONFIG_DIR"] != "/var/lib/bw" {
+		t.Errorf("plaintext env was not passed through: %q", env["BW_CONFIG_DIR"])
+	}
+	if env["BW_SESSION"] != "resolved-session" {
+		t.Errorf("secret_env was not resolved: %q", env["BW_SESSION"])
+	}
+}
+
+// If both name the same variable the reference wins, which is the only
+// ordering that cannot silently downgrade a secret to a literal.
+func TestSecretEnvBeatsPlaintextOnCollision(t *testing.T) {
+	t.Setenv("LOBSLAW_TEST_SESSION2", "the-real-secret")
+
+	r, err := FromConfig(config.SecretsConfig{
+		Providers: []config.SecretProviderConfig{{
+			Label: "bw", Driver: "exec", Command: []string{"true"},
+			Env:       map[string]string{"TOKEN": "placeholder"},
+			SecretEnv: map[string]string{"TOKEN": "env:LOBSLAW_TEST_SESSION2"},
+		}},
+	}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.providers["bw"].(*execProvider).env["TOKEN"]; got != "the-real-secret" {
+		t.Errorf("TOKEN = %q; the reference must win", got)
 	}
 }
 
