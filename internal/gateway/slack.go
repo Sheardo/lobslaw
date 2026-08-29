@@ -205,6 +205,26 @@ type SlackHandler struct {
 	// commands is the shared runtime control surface. Built here rather
 	// than handed in so it can close over conv, which stays private.
 	commands *CommandSet
+
+	// keepaliveEvery and pongWithin override the package defaults.
+	// Zero means the default. Set only by tests, which cannot wait
+	// thirty seconds to find out that a quiet socket survived.
+	keepaliveEvery time.Duration
+	pongWithin     time.Duration
+}
+
+func (h *SlackHandler) keepaliveInterval() time.Duration {
+	if h.keepaliveEvery > 0 {
+		return h.keepaliveEvery
+	}
+	return slackKeepaliveInterval
+}
+
+func (h *SlackHandler) pongTimeout() time.Duration {
+	if h.pongWithin > 0 {
+		return h.pongWithin
+	}
+	return slackPongTimeout
 }
 
 // NewSlackHandler constructs the handler. Both tokens are required at
@@ -353,14 +373,14 @@ func (h *SlackHandler) runOneConnection(ctx context.Context) error {
 	connCtx, stopKeepalive := context.WithCancel(ctx)
 	defer stopKeepalive()
 	go func() {
-		t := time.NewTicker(slackKeepaliveInterval)
+		t := time.NewTicker(h.keepaliveInterval())
 		defer t.Stop()
 		for {
 			select {
 			case <-connCtx.Done():
 				return
 			case <-t.C:
-				pingCtx, cancel := context.WithTimeout(connCtx, slackPongTimeout)
+				pingCtx, cancel := context.WithTimeout(connCtx, h.pongTimeout())
 				err := sock.ping(pingCtx)
 				cancel()
 				if err == nil {
@@ -370,7 +390,11 @@ func (h *SlackHandler) runOneConnection(ctx context.Context) error {
 					return
 				}
 				h.log.Warn("slack: keepalive ping failed; closing the socket", "err", err)
-				sock.close()
+				// closeNow, not close: the peer has stopped answering,
+				// so waiting for it to complete a closing handshake
+				// would block the very call that is meant to unblock
+				// the Read below.
+				sock.closeNow()
 				return
 			}
 		}

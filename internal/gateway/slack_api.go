@@ -648,3 +648,14 @@ func (s *slackSocket) ping(ctx context.Context) error {
 func (s *slackSocket) close() {
 	_ = s.conn.Close(websocket.StatusNormalClosure, "")
 }
+
+// closeNow tears the connection down without the closing handshake.
+//
+// For a peer that has stopped answering, the graceful Close is the
+// wrong tool: it writes a close frame and waits for the peer's reply,
+// which is precisely what a dead peer will not send — so the call meant
+// to unblock Read can itself block. CloseNow drops the TCP connection
+// and Read returns immediately.
+func (s *slackSocket) closeNow() {
+	_ = s.conn.CloseNow()
+}
