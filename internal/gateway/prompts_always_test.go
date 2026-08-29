@@ -59,6 +59,13 @@ func newApprovalRulesForGateway(t *testing.T) (*policy.ApprovalRules, *memory.St
 // tested elsewhere and would only add noise here.
 func raiseConfirmation(t *testing.T, h *tgPromptHarness, action, resource string) {
 	t.Helper()
+	raiseConfirmationScoped(t, h, action, resource, true)
+}
+
+// raiseConfirmationScoped is the same with grantable spelled out, for
+// the operations whose answer cannot be remembered.
+func raiseConfirmationScoped(t *testing.T, h *tgPromptHarness, action, resource string, grantable bool) {
+	t.Helper()
 	budget, err := compute.NewTurnBudget(compute.BudgetCaps{})
 	if err != nil {
 		t.Fatal(err)
@@ -71,9 +78,10 @@ func raiseConfirmation(t *testing.T, h *tgPromptHarness, action, resource string
 			Claims: &types.Claims{UserID: "tg-@alice"},
 		},
 		&compute.ProcessMessageResponse{
-			ConfirmationReason:   "do the thing?",
-			ConfirmationAction:   action,
-			ConfirmationResource: resource,
+			ConfirmationReason:    "do the thing?",
+			ConfirmationAction:    action,
+			ConfirmationResource:  resource,
+			ConfirmationGrantable: grantable,
 		},
 		SessionRef{Channel: "telegram", ChannelID: "99", UserID: "tg-@alice"},
 	)

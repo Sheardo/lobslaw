@@ -695,12 +695,14 @@ func (h *TelegramHandler) sendConfirmationKeyboard(chatID int64, req compute.Pro
 	buttons := []map[string]string{
 		{"text": "Approve", "callback_data": "prompt:approve:" + p.ID},
 	}
-	// "for this chat" is offered only when a policy rule asked. A
-	// budget confirmation is about spend, not an operation, so there
-	// is nothing coherent to remember — and a button that silenced
-	// future budget warnings would be the last thing an operator
-	// wants on that particular prompt.
-	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" {
+	// "for this chat" is offered only when a policy rule asked AND the
+	// answer is worth remembering. A budget confirmation is about
+	// spend, not an operation, so there is nothing coherent to remember
+	// — and a button that silenced future budget warnings would be the
+	// last thing an operator wants on that particular prompt. A shell
+	// command with no stable form is the other case: policy evaluates
+	// it, but no grant could name it, so remembering is not on offer.
+	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable {
 		subject := grantSubject(req.Claims)
 		h.pendingScopeMu.Lock()
 		h.pendingScope[p.ID] = scopedOperation{
@@ -962,6 +964,11 @@ func (h *TelegramHandler) resumeAfterApproval(ctx context.Context, p *Prompt) {
 	cont.Request.ChannelID = p.ChannelID
 
 	cont.Request.Budget.Relax()
+	// The policy equivalent of Relax: carry the answer into the resumed
+	// turn. Taken from the prompt record rather than the callback, which
+	// is attacker-shaped input. Without it an "Approve" resumes into the
+	// same rule and asks again.
+	ctx = compute.WithTurnApproval(ctx, p.Action, p.Resource)
 	resp, err := h.agent.ResumeFromConfirmation(ctx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("telegram: resume failed",

@@ -463,6 +463,16 @@ func (e *Executor) policyAllow(ctx context.Context, claims *types.Claims, action
 		// Only session grants are consulted here. "always" is a
 		// policy allow rule, so it is already handled above by
 		// Evaluate returning allow — there is nothing to check.
+		// The answer the user just gave, for the turn they gave it in.
+		// Without this "Approve" resolves the prompt, the turn resumes,
+		// and the very same call meets the very same rule — so tapping
+		// it produces another keyboard rather than the thing the user
+		// approved.
+		if turnApproved(ctx, action, resource) {
+			e.logger.Debug("policy: approved for this turn",
+				"action", action, "resource", resource)
+			return nil
+		}
 		if e.approvals.Granted(ctx, action, resource) {
 			e.logger.Debug("policy: confirmation already approved for this conversation",
 				"action", action, "resource", resource)

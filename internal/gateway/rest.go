@@ -597,8 +597,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 		// Approved: lift caps and re-enter. resp.Messages carries the
 		// conversation at the moment the original turn stopped.
+		//
+		// The turn approval is the policy half of the same idea: the
+		// operation the user just answered for does not get asked again
+		// inside the turn they answered it in.
 		agentReq.Budget.Relax()
-		resumed, rerr := s.agent.ResumeFromConfirmation(turnCtx, agentReq, resp.Messages)
+		resumeCtx := compute.WithTurnApproval(turnCtx, resp.ConfirmationAction, resp.ConfirmationResource)
+		resumed, rerr := s.agent.ResumeFromConfirmation(resumeCtx, agentReq, resp.Messages)
 		if rerr != nil {
 			s.log.Error("rest: resume after approval failed",
 				"turn_id", req.TurnID, "err", rerr)

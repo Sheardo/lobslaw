@@ -128,13 +128,8 @@ func (e *Executor) checkGate(ctx context.Context, claims *types.Claims, tool str
 	if !errors.Is(err, ErrRequireConfirm) {
 		return err
 	}
-	req := &ConfirmationRequest{inner: err, Action: gate.action, Resource: resource}
-	if !grantable {
-		// Evaluated under the resource, but nothing may be minted from
-		// it. An empty resource is how the channels already suppress
-		// the session and always buttons, so this needs no channel
-		// change to take effect.
-		req.Resource = ""
+	req := &ConfirmationRequest{
+		inner: err, Action: gate.action, Resource: resource, Grantable: grantable,
 	}
 	if gate.summarise != nil {
 		req.Summary = gate.summarise(params)
@@ -160,6 +155,16 @@ type ConfirmationRequest struct {
 	Action   string
 	Resource string
 	Summary  string
+	// Grantable reports whether an answer to this may be REMEMBERED.
+	//
+	// Separate from Resource because the two questions are different,
+	// and conflating them cost a bug: a shell command with no stable
+	// form was reported with a blank resource so the channels would
+	// hide the scope buttons, and then the turn approval had nothing to
+	// match on, so approving it once resumed straight back into the
+	// same prompt. The resource is what policy evaluates and what the
+	// turn approval keys on; this is what the channel offers.
+	Grantable bool
 }
 
 func (c *ConfirmationRequest) Error() string {

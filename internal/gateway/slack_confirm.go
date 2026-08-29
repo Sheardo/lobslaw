@@ -55,7 +55,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	// policy rule asked the question. A budget confirmation is about
 	// spend, so there is no operation to remember and a button that
 	// silenced future budget warnings would be actively harmful.
-	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" {
+	if resp.ConfirmationAction != "" && resp.ConfirmationResource != "" && resp.ConfirmationGrantable {
 		subject := grantSubject(req.Claims)
 		h.pendingScopeMu.Lock()
 		h.pendingScope[p.ID] = scopedOperation{
@@ -396,6 +396,9 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	defer cleanup()
 
 	cont.Request.Budget.Relax()
+	// The policy equivalent of Relax — see the Telegram twin. From the
+	// prompt record, never the interaction payload.
+	turnCtx = compute.WithTurnApproval(turnCtx, p.Action, p.Resource)
 	resp, err := h.agent.ResumeFromConfirmation(turnCtx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("slack: resume failed", "turn_id", cont.Request.TurnID, "err", err)

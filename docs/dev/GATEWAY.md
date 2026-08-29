@@ -222,10 +222,34 @@ sequenceDiagram
     else ErrPromptResolved
       Handler->>TG: sendMessage("That prompt was already resolved.")
     else ok
-      Handler->>TG: sendMessage("Approved." / "Denied.")
+      Handler->>TG: sendMessage("Approved <what>." / "Denied.")
+      opt approved with a paused turn
+        Handler->>Agent: ResumeFromConfirmation(ctx + turn approval, continuation)
+        Note over Agent: re-runs the APPROVED tool call and replaces<br/>the refusal in the transcript with its result
+        Agent-->>Handler: reply (or a further confirmation)
+        Handler->>TG: sendMessage(reply)
+      end
     end
   end
 ```
+
+### Approving has to run the thing
+
+A paused turn's transcript ends with the assistant's tool call and a
+tool-role result reading `tool invocation requires confirmation`.
+Resuming used to replay exactly that, so the first thing the model saw
+was its own call having been refused — and a model just told it was
+refused does not retry, it explains the refusal. The approval was
+recorded, the policy gate would have passed, and the command still never
+ran.
+
+So the resume re-executes the call the user approved (`pendingToolCall`
+finds it by tool-call id at the tail of the transcript) and overwrites
+the refusal with the real result, in place, before the loop continues.
+Two things ride the resumed context to make that pass: `Budget.Relax()`
+for the spend cap, and `compute.WithTurnApproval` for the policy gate —
+the latter keyed on the operation from the PROMPT RECORD, never from the
+callback payload.
 
 ### Update dedup
 

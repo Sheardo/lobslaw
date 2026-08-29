@@ -188,3 +188,55 @@ func approvalKey(ctx context.Context, action, resource string) (string, bool) {
 	// id containing the separator cannot forge a different key.
 	return id.Channel + ":" + id.ChannelID + "\x00" + action + "\x00" + resource, true
 }
+
+// Approving ONCE has to mean something.
+//
+// "Approve" resolves the prompt and resumes the turn, and until this
+// existed it recorded nothing anywhere — so the resumed turn re-ran the
+// same tool call, met the same require_confirmation, and sent another
+// keyboard. Tapping Approve produced a new prompt, forever, and the
+// only escape was a scope the user had not asked for.
+//
+// The budget path never hit it because Budget.Relax() carries "this
+// turn is authorised" across the resume. Policy had no equivalent, and
+// the gap stayed invisible while no default rule asked for confirmation
+// — every deployment that met it had written the rule on purpose and
+// tapped "for this chat" out of habit.
+//
+// Turn-scoped rather than conversation-scoped, because the user
+// answered a question about one operation in one turn. It rides the
+// context, so it expires when the resumed turn's context does; there is
+// nothing to store, sweep, or replicate.
+type turnApprovalKey struct{}
+
+type turnApproval struct {
+	action   string
+	resource string
+}
+
+// WithTurnApproval marks one operation as answered for the remainder
+// of this turn.
+//
+// The pair comes from the PROMPT RECORD, written when the turn paused,
+// never from the callback that resolved it. A callback is
+// attacker-shaped input — the same reason the grant helpers take the
+// operation from the pending scope rather than reading it off the tap.
+//
+// An empty action grants nothing: a budget confirmation carries no
+// operation, and "approved everything" is not the reading of a blank.
+func WithTurnApproval(ctx context.Context, action, resource string) context.Context {
+	if action == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, turnApprovalKey{}, turnApproval{action: action, resource: resource})
+}
+
+// turnApproved reports whether this turn already answered for exactly
+// this operation.
+func turnApproved(ctx context.Context, action, resource string) bool {
+	a, ok := ctx.Value(turnApprovalKey{}).(turnApproval)
+	if !ok || a.action == "" {
+		return false
+	}
+	return a.action == action && a.resource == resource
+}

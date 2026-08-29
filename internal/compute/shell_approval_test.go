@@ -201,8 +201,14 @@ func TestACompoundCommandOffersNoGrant(t *testing.T) {
 	if !errors.As(err, &cr) {
 		t.Fatal("the confirmation did not carry its operation")
 	}
-	if cr.Resource != "" {
-		t.Errorf("Resource = %q, want empty so no scope button is offered", cr.Resource)
+	if cr.Grantable {
+		t.Error("a compound command was offered as grantable")
+	}
+	// The resource is still the real one: policy has to match on it, and
+	// the turn approval has to key on it, or approving once resumes
+	// straight back into the same prompt.
+	if cr.Resource != ShellUnclassified {
+		t.Errorf("Resource = %q, want %q", cr.Resource, ShellUnclassified)
 	}
 	if !strings.Contains(cr.Summary, "git status && rm -rf ~") {
 		t.Errorf("Summary = %q; the user cannot see what would run", cr.Summary)
@@ -271,5 +277,115 @@ func TestAnUngatedToolIsNotShellChecked(t *testing.T) {
 	if err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"read_file", shellParams("git status")); err != nil {
 		t.Fatalf("an ungated tool was checked: %v", err)
+	}
+}
+
+// Approving ONCE has to mean something.
+//
+// It used to record nothing anywhere, so the resumed turn re-ran the
+// same call, met the same rule, and produced another keyboard. Tapping
+// Approve made a new prompt, forever. The budget path never hit this
+// because Budget.Relax() carries the answer across the resume; policy
+// had no equivalent, and no default rule asked for confirmation until
+// the per-command gate landed — so the gap sat there invisible.
+func TestApprovingOnceIsHonouredForTheRestOfTheTurn(t *testing.T) {
+	t.Parallel()
+	e, _ := shellGatedExecutor(t)
+	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
+	})
+
+	err := checkShell(t, e, ctx, "git status --short")
+	if !errors.Is(err, ErrRequireConfirm) {
+		t.Fatalf("the first call was not asked about: %v", err)
+	}
+	var cr *ConfirmationRequest
+	if !errors.As(err, &cr) {
+		t.Fatal("the confirmation did not carry its operation")
+	}
+
+	// Exactly what the channel does on resume, with the operation read
+	// off the prompt record.
+	resumed := WithTurnApproval(ctx, cr.Action, cr.Resource)
+	if err := checkShell(t, e, resumed, "git status --short"); err != nil {
+		t.Errorf("an approved command was asked about again on resume: %v", err)
+	}
+}
+
+// The approval covers the operation that was answered for, not the
+// next thing the model decides to run in the same turn.
+func TestATurnApprovalDoesNotCoverAnotherCommand(t *testing.T) {
+	t.Parallel()
+	e, _ := shellGatedExecutor(t)
+	ctx := WithTurnApproval(
+		WithTurnIdentity(context.Background(), TurnIdentity{
+			Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
+		}),
+		ShellAction, "git status --short")
+
+	if err := checkShell(t, e, ctx, "rm -rf /home/james"); !errors.Is(err, ErrRequireConfirm) {
+		t.Errorf("a turn approval leaked to a different command: %v", err)
+	}
+}
+
+// It expires with the turn. A conversation-scoped grant is what the
+// middle button is for, and a once-approval that outlived its turn
+// would be that button without the user having chosen it.
+func TestATurnApprovalDoesNotOutliveItsTurn(t *testing.T) {
+	t.Parallel()
+	e, _ := shellGatedExecutor(t)
+	base := WithTurnIdentity(context.Background(), TurnIdentity{
+		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
+	})
+	approved := WithTurnApproval(base, ShellAction, "git status --short")
+	if err := checkShell(t, e, approved, "git status --short"); err != nil {
+		t.Fatalf("the approved turn was asked again: %v", err)
+	}
+	// The next turn is a fresh context from the same conversation.
+	if err := checkShell(t, e, base, "git status --short"); !errors.Is(err, ErrRequireConfirm) {
+		t.Errorf("a once-approval survived into the next turn: %v", err)
+	}
+}
+
+// A budget confirmation carries no operation, and a blank must not
+// read as "approved everything".
+func TestAnEmptyApprovalGrantsNothing(t *testing.T) {
+	t.Parallel()
+	e, _ := shellGatedExecutor(t)
+	ctx := WithTurnApproval(
+		WithTurnIdentity(context.Background(), TurnIdentity{
+			Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
+		}), "", "")
+
+	if err := checkShell(t, e, ctx, "git status --short"); !errors.Is(err, ErrRequireConfirm) {
+		t.Errorf("an empty approval satisfied the gate: %v", err)
+	}
+}
+
+// The ungrantable case has to survive an approve-once too.
+//
+// It did not, and the cause was conflating two questions: the resource
+// was blanked so the channels would hide the scope buttons, which left
+// the turn approval nothing to match on. Approving a compound command
+// resumed into the same prompt, forever.
+func TestApprovingAnUngrantableCommandOnceStillRuns(t *testing.T) {
+	t.Parallel()
+	e, _ := shellGatedExecutor(t)
+	ctx := WithTurnIdentity(context.Background(), TurnIdentity{
+		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
+	})
+
+	err := checkShell(t, e, ctx, "git status && make")
+	var cr *ConfirmationRequest
+	if !errors.As(err, &cr) {
+		t.Fatalf("err = %v, want a confirmation", err)
+	}
+	if cr.Grantable {
+		t.Fatal("a compound command was offered as grantable")
+	}
+
+	resumed := WithTurnApproval(ctx, cr.Action, cr.Resource)
+	if err := checkShell(t, e, resumed, "git status && make"); err != nil {
+		t.Errorf("approving a compound command once did not let it run: %v", err)
 	}
 }

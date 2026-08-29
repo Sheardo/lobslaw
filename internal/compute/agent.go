@@ -503,6 +503,12 @@ type ProcessMessageResponse struct {
 	ConfirmationAction   string
 	ConfirmationResource string
 
+	// ConfirmationGrantable is whether the channel may offer to
+	// remember the answer. False for an operation with no stable form
+	// to remember — a compound shell command, say — where a scope
+	// button would mint something that matches nothing.
+	ConfirmationGrantable bool
+
 	ConfirmationReason string
 }
 
@@ -560,7 +566,7 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if len(seeded) > 0 && seeded[len(seeded)-1].Role == "user" {
 		turnStart = len(seeded) - 1
 	}
-	return a.runLoop(ctx, req, seeded, &ProcessMessageResponse{TurnStartIndex: turnStart})
+	return a.runLoop(ctx, req, seeded, &ProcessMessageResponse{TurnStartIndex: turnStart}, false)
 }
 
 // fillDefaults populates req.Tools from the agent's Registry and
@@ -741,10 +747,10 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	// Everything handed in was already recorded when the turn
 	// stopped for confirmation; only what the resumed leg appends
 	// is new.
-	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{TurnStartIndex: len(msgs)})
+	return a.runLoop(ctx, req, msgs, &ProcessMessageResponse{TurnStartIndex: len(msgs)}, true)
 }
 
-func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse) (*ProcessMessageResponse, error) {
+func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages []Message, resp *ProcessMessageResponse, resuming bool) (*ProcessMessageResponse, error) {
 	// Every exit from this loop — normal, budget-exceeded, confirmation
 	// or hard-timeout — must carry whatever files the turn produced.
 	// A turn that synthesised audio and then hit its budget still
@@ -764,6 +770,43 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// it is wanted.
 	attribution := newToolAttributor(a.cfg.Traces, req.TurnID)
 	defer attribution.flush()
+
+	// Resuming means the user said yes to something. Run THAT, rather
+	// than replaying a transcript whose last line says it was refused.
+	//
+	// The turn paused with the assistant's tool call followed by a
+	// tool-role result reading "tool invocation requires confirmation",
+	// and handing that back to the model asks it to decide again from
+	// evidence that the call does not work. Models do the reasonable
+	// thing with that: they stop calling the tool and explain the
+	// refusal instead. So the approval was recorded, the gate would
+	// have passed, and the command still never ran.
+	if resuming {
+		if tc, idx, ok := pendingToolCall(messages); ok {
+			inv, confirmation, err := a.runToolCall(ctx, req, tc)
+			if err != nil {
+				return nil, fmt.Errorf("resume tool call %q: %w", tc.Name, err)
+			}
+			resp.ToolCalls = append(resp.ToolCalls, inv)
+			if confirmation != nil {
+				// Still gated — a second, different question rather
+				// than the one just answered. Hand it back up so the
+				// channel can ask it, instead of looping here.
+				resp.NeedsConfirmation = true
+				resp.ConfirmationReason = confirmation.Reason
+				resp.ConfirmationAction = confirmation.Action
+				resp.ConfirmationResource = confirmation.Resource
+				resp.ConfirmationGrantable = confirmation.Grantable
+				resp.BudgetState = req.Budget.State()
+				resp.Messages = messages
+				return resp, nil
+			}
+			// In place: the model must see the RESULT where it last saw
+			// the refusal. Appending instead would leave both, and the
+			// refusal is the more emphatic of the two.
+			messages[idx] = toolResultMessage(tc, inv)
+		}
+	}
 
 	for loop := range a.cfg.MaxToolLoops {
 		a.cfg.Logger.Debug("agent: LLM round-trip",
@@ -870,6 +913,7 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 				resp.ConfirmationReason = confirmation.Reason
 				resp.ConfirmationAction = confirmation.Action
 				resp.ConfirmationResource = confirmation.Resource
+				resp.ConfirmationGrantable = confirmation.Grantable
 				resp.BudgetState = req.Budget.State()
 				messages = append(messages, toolResultMessage(tc, inv))
 				resp.Messages = messages
@@ -1504,6 +1548,9 @@ type pendingConfirmation struct {
 	Reason   string
 	Action   string
 	Resource string
+	// Grantable is whether a channel may offer to remember the answer.
+	// False for an operation that has no stable form to remember.
+	Grantable bool
 }
 
 func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc ToolCall) (ToolInvocation, *pendingConfirmation, error) {
@@ -1571,9 +1618,10 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
 				inv.Error = err.Error()
 				if errors.Is(err, ErrRequireConfirm) {
-					action, resource := confirmationOperation(err, tc.Name)
+					action, resource, grantable := confirmationOperation(err, tc.Name)
 					return inv, &pendingConfirmation{
-						Reason: confirmationReason(err), Action: action, Resource: resource,
+						Reason: confirmationReason(err), Action: action,
+						Resource: resource, Grantable: grantable,
 					}, nil
 				}
 				return inv, nil, nil
@@ -1621,9 +1669,10 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		// path implemented it.
 		if errors.Is(err, ErrRequireConfirm) {
 			inv.Error = err.Error()
-			action, resource := confirmationOperation(err, tc.Name)
+			action, resource, grantable := confirmationOperation(err, tc.Name)
 			return inv, &pendingConfirmation{
-				Reason: confirmationReason(err), Action: action, Resource: resource,
+				Reason: confirmationReason(err), Action: action,
+				Resource: resource, Grantable: grantable,
 			}, nil
 		}
 		inv.Error = err.Error()
@@ -1720,6 +1769,46 @@ func endsWithNewline(b []byte) bool {
 // assistant tool-call so the model can match outputs to requests.
 // Content is wrapped in trust delimiters so the model treats tool
 // output as untrusted data, not instructions.
+// pendingToolCall finds the call a confirmation paused on.
+//
+// A paused turn ends with the assistant's tool_calls message and the
+// refusal it produced, so the pair is the tail of the transcript.
+// Matched by tool-call id rather than by position: a model that emitted
+// several calls in one message pauses on one of them, and the others
+// already carry real results that must not be re-run.
+//
+// The refusal is recognised by the sentinel its own error carries. That
+// is a string comparison against a constant this package owns, not a
+// guess at model output — the alternative was a new field on Message,
+// which is serialised into the durable continuation and would have made
+// every paused turn from an older build unreadable.
+func pendingToolCall(msgs []Message) (ToolCall, int, bool) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "tool" {
+			continue
+		}
+		if !strings.Contains(msgs[i].Content, ErrRequireConfirm.Error()) {
+			// A tool result that is not a refusal means the tail has
+			// already been answered; stop rather than reaching further
+			// back into the turn.
+			return ToolCall{}, 0, false
+		}
+		id := msgs[i].ToolCallID
+		for j := i - 1; j >= 0; j-- {
+			if msgs[j].Role != "assistant" {
+				continue
+			}
+			for _, tc := range msgs[j].ToolCalls {
+				if tc.ID == id {
+					return tc, i, true
+				}
+			}
+		}
+		return ToolCall{}, 0, false
+	}
+	return ToolCall{}, 0, false
+}
+
 func toolResultMessage(tc ToolCall, inv ToolInvocation) Message {
 	var content string
 	// Redacted on the way in. A failing command routinely echoes the
@@ -1785,10 +1874,12 @@ func confirmationReason(err error) string {
 // tool:exec check returned require_confirmation because an operator
 // wrote a rule about this tool, and a grant about the tool is what they
 // were asking to be able to give.
-func confirmationOperation(err error, toolName string) (action, resource string) {
+func confirmationOperation(err error, toolName string) (action, resource string, grantable bool) {
 	var cr *ConfirmationRequest
 	if errors.As(err, &cr) && cr.Action != "" {
-		return cr.Action, cr.Resource
+		return cr.Action, cr.Resource, cr.Grantable
 	}
-	return "tool:exec", toolName
+	// An operator rule about the tool itself. Grantable: remembering
+	// "yes to this tool" is exactly what such a rule invites.
+	return "tool:exec", toolName, true
 }

@@ -18,11 +18,12 @@ import (
 // asking the user to take the narrow reading on trust.
 //
 // The other half is the commands that cannot be granted at all.
-// Compound commands have no stable form to remember, and the executor
-// reports them with an empty resource; the channels already read that
-// as "offer no scope button". These tests pin that, because the
-// alternative failure is silent: a button that mints nothing looks
-// exactly like a button that worked.
+// Compound commands have no stable form to remember, so the executor
+// reports them grantable=false while still naming the real resource —
+// policy has to match on it, and so does the turn approval. These tests
+// pin both halves, because either failure is silent: a button that
+// mints nothing looks exactly like one that worked, and a blanked
+// resource looks fine right up until approving once loops forever.
 
 func tapAlways(t *testing.T, h *tgPromptHarness, updateID, promptID string) {
 	t.Helper()
@@ -106,9 +107,9 @@ func TestTheApprovalReplyNamesWhatWasGranted(t *testing.T) {
 	}
 }
 
-// An ungrantable command is reported with an empty resource, and both
-// channels already read that as "Approve and Deny only". Offering a
-// scope button that mints nothing would be worse than offering none.
+// An ungrantable command gets Approve and Deny only. Offering a scope
+// button that mints something matching nothing would be worse than
+// offering none.
 func TestACommandWithNoStableFormOffersNoScopeButtons(t *testing.T) {
 	t.Parallel()
 	rules, _ := newApprovalRulesForGateway(t)
@@ -118,8 +119,10 @@ func TestACommandWithNoStableFormOffersNoScopeButtons(t *testing.T) {
 		ApprovalRules:    rules,
 	})
 
-	// What the executor reports for `git status && rm -rf ~`.
-	raiseConfirmation(t, h, compute.ShellAction, "")
+	// What the executor reports for `git status && rm -rf ~`: a real
+	// resource, so policy and the turn approval can both match on it,
+	// and grantable=false, so nothing is offered to remember.
+	raiseConfirmationScoped(t, h, compute.ShellAction, compute.ShellUnclassified, false)
 
 	texts := buttonTexts(t, h.capturedCalls())
 	for _, text := range texts {
