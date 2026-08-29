@@ -29,11 +29,21 @@ const slackWildcard = "*"
 // slackDMSentinel matches every direct message in AllowedChannels.
 const slackDMSentinel = "dm"
 
-// slackReadIdleTimeout bounds one socket read.
+// slackKeepaliveInterval is how often the connection is proved alive,
+// and slackPongTimeout is how long a pong may take before the socket
+// counts as dead.
 //
-// Slack pings this connection every few seconds, so silence past this
-// is a socket that died without saying so.
-const slackReadIdleTimeout = 60 * time.Second
+// A KEEPALIVE rather than a read deadline. The first attempt at this
+// bounded Read on the theory that Slack pings every few seconds so
+// silence meant death — but coder/websocket answers those pings inside
+// Read without making Read return, so an idle-but-healthy socket
+// produced no read for a minute and got torn down. Running it showed
+// the result immediately: a reconnect every 60s, each one re-running
+// auth.test.
+const (
+	slackKeepaliveInterval = 30 * time.Second
+	slackPongTimeout       = 10 * time.Second
+)
 
 // SlackConfig wires the Slack channel. Mirrors TelegramConfig field
 // for field wherever the two channels genuinely share a concern, so
@@ -337,21 +347,38 @@ func (h *SlackHandler) runOneConnection(ctx context.Context) error {
 	defer sock.close()
 	h.log.Info("slack: socket connected")
 
-	for {
-		// A read deadline, because coder/websocket answers pings inside
-		// Read: a live socket is fine without one, but a silent
-		// partition blocks Read forever and the reconnect logic below
-		// never runs. The bot goes deaf and logs nothing.
-		readCtx, cancel := context.WithTimeout(ctx, slackReadIdleTimeout)
-		env, err := sock.read(readCtx)
-		cancel()
-		if err != nil {
-			// A timeout is a dead socket, not a fatal error: returning
-			// it takes the same reconnect-with-backoff path everything
-			// else here does.
-			if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-				return fmt.Errorf("slack: no traffic for %s; treating the socket as dead", slackReadIdleTimeout)
+	// Liveness runs beside the read rather than bounding it. A failed
+	// ping closes the connection, which is what makes the blocked Read
+	// below return so the reconnect path can take over.
+	connCtx, stopKeepalive := context.WithCancel(ctx)
+	defer stopKeepalive()
+	go func() {
+		t := time.NewTicker(slackKeepaliveInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-connCtx.Done():
+				return
+			case <-t.C:
+				pingCtx, cancel := context.WithTimeout(connCtx, slackPongTimeout)
+				err := sock.ping(pingCtx)
+				cancel()
+				if err == nil {
+					continue
+				}
+				if connCtx.Err() != nil {
+					return
+				}
+				h.log.Warn("slack: keepalive ping failed; closing the socket", "err", err)
+				sock.close()
+				return
 			}
+		}
+	}()
+
+	for {
+		env, err := sock.read(ctx)
+		if err != nil {
 			return err
 		}
 		switch env.Type {
