@@ -528,6 +528,7 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		MemoryPinnedProfileChars:  cfg.Memory.PinnedProfileChars,
 		MemoryPinnedNotesChars:    cfg.Memory.PinnedNotesChars,
 		SelfLearningMode:          cfg.SelfLearning.Mode,
+		SecretProviderLabels:      secretSchemes(cfg.Secrets),
 		ReviewSkillToolIterations: cfg.SelfLearning.ReviewSkillToolIterations,
 		ReviewMemoryTurnInterval:  cfg.SelfLearning.ReviewMemoryTurnInterval,
 		SelfTaughtHistoryDepth:    cfg.SelfLearning.HistoryDepth,

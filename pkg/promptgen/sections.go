@@ -731,6 +731,22 @@ type RuntimeInfo struct {
 	// was unavailable and a confident wrong one took its place — the
 	// same shape as list_providers not reporting roles.
 	SelfLearning string
+
+	// SecretProviders are the labels of the configured vaults, if any.
+	//
+	// Here for the same reason SelfLearning is, and it is the same bug
+	// twice: a capability the node HAS, that nothing in the prompt or
+	// the tool list mentions, so the model answers from a guess. Asked
+	// where to keep an API key on a node with a vault wired up, it
+	// otherwise suggests an environment variable — or worse, invites
+	// the user to paste the key into the chat, which puts it in the
+	// transcript, the session store and the next turn's replay.
+	//
+	// Labels only. The model is told a vault EXISTS and how references
+	// are written; it cannot read one, and there is no tool that would
+	// let it. That asymmetry is the point: knowing where secrets belong
+	// is useful, holding their values is a liability.
+	SecretProviders []string
 }
 
 // BuildChannelFormatting tells the model how to render for the channel
@@ -832,6 +848,15 @@ func BuildRuntime(info RuntimeInfo) Section {
 		case "auto":
 			b.WriteString("  (you may write instructions for yourself and they take effect immediately)\n")
 		}
+	}
+	if len(info.SecretProviders) > 0 {
+		fmt.Fprintf(&b, "- secret_vaults: %s\n", strings.Join(info.SecretProviders, ", "))
+		b.WriteString("  (this node resolves secrets from those vaults. A secret belongs in one, " +
+			"referenced from config as \"<vault>:<path>\" — e.g. \"" + info.SecretProviders[0] +
+			":stripe/live-key\" wherever an api_key_ref or token_ref is accepted. " +
+			"NEVER ask the user to paste a key, token or password into the chat: it would land in " +
+			"the transcript and be replayed to the model on later turns. You cannot read vault " +
+			"values yourself and have no tool that can — tell the user where to put it, not what it is)\n")
 	}
 	if b.Len() == 0 {
 		b.WriteString("(runtime info unavailable)\n")

@@ -101,6 +101,12 @@ type Config struct {
 	// SelfLearningMode is "off" | "propose" | "auto". Empty is off.
 	SelfLearningMode string
 
+	// SecretProviderLabels are the configured vault labels, surfaced in
+	// the agent's prompt so it knows where a secret belongs. Labels
+	// only — nothing here lets the agent read a vault, and no tool
+	// does either.
+	SecretProviderLabels []string
+
 	// Review trigger thresholds. Zero takes the defaults (10 tool
 	// iterations in one turn for skills, 10 conversation turns for
 	// memory); negative disables that axis.
