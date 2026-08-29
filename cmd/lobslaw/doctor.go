@@ -172,15 +172,26 @@ func (d doctorEnv) secretRefsByScheme() map[string]string {
 	for _, p := range d.cfg.Compute.Providers {
 		note(p.APIKeyRef)
 	}
+	note(d.cfg.Compute.Embeddings.APIKeyRef)
 	for _, ch := range d.cfg.Gateway.Channels {
 		note(ch.BotTokenRef)
 		note(ch.AppTokenRef)
+		note(ch.SecretTokenRef)
+		note(ch.SharedSecretRef)
 	}
 	for _, srv := range d.cfg.MCP.Servers {
 		for _, ref := range srv.SecretEnv {
 			note(ref)
 		}
 	}
+	// OAuth and the JWT secret are easy to forget and are exactly the
+	// kind of reference an operator moves into a vault first, being the
+	// longest-lived credentials on the node.
+	for _, p := range d.cfg.Security.OAuth {
+		note(p.ClientIDRef)
+		note(p.ClientSecretRef)
+	}
+	note(d.cfg.Auth.JWTSecretRef)
 	return out
 }
 

@@ -194,6 +194,22 @@ func FromConfig(cfg config.SecretsConfig, reg *Registry, log *slog.Logger) (*Res
 	built := make(map[string]Provider, len(cfg.Providers))
 	for _, p := range cfg.Providers {
 		label := normalise(p.Label)
+		// Checked here as well as in Config.Validate, because this is
+		// exported and takes a config struct a caller may not have
+		// validated. A reserved label would BUILD fine and then be
+		// unreachable — Resolve routes env: and file: to the bootstrap
+		// path before it ever consults this map — and a duplicate would
+		// silently take the last one. Both are the shape of failure
+		// this package exists to stop shipping.
+		if IsBootstrapScheme(label) {
+			return nil, fmt.Errorf(
+				"secrets: provider label %q is reserved; %s: resolves before any provider exists",
+				p.Label, label)
+		}
+		if _, dup := built[label]; dup {
+			return nil, fmt.Errorf("secrets: duplicate provider label %q; "+
+				"a reference scheme can only mean one backend", p.Label)
+		}
 		env := make(map[string]string, len(p.Env))
 		for k, ref := range p.Env {
 			v, err := Bootstrap(ref)

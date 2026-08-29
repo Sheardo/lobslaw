@@ -366,3 +366,53 @@ func TestFromConfigBuildsAndRejects(t *testing.T) {
 		t.Error("a provider credential from another vault must be refused")
 	}
 }
+
+// FromConfig is exported and takes a config struct a caller may not
+// have validated, so it cannot rely on Config.Validate having run.
+//
+// Both failures here BUILD cleanly and go wrong later, which is the
+// shape this package exists to stop shipping: a reserved label is
+// unreachable because Resolve routes env: and file: to the bootstrap
+// path before consulting the provider map at all, and a duplicate
+// silently takes whichever came last.
+func TestFromConfigRefusesReservedAndDuplicateLabels(t *testing.T) {
+	t.Parallel()
+
+	_, err := FromConfig(config.SecretsConfig{
+		Providers: []config.SecretProviderConfig{
+			{Label: "env", Driver: "exec", Command: []string{"true"}},
+		},
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("a reserved label should be refused; got %v", err)
+	}
+
+	_, err = FromConfig(config.SecretsConfig{
+		Providers: []config.SecretProviderConfig{
+			{Label: "bw", Driver: "exec", Command: []string{"true"}},
+			{Label: "BW", Driver: "exec", Command: []string{"false"}},
+		},
+	}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("a duplicate label should be refused, case-folded; got %v", err)
+	}
+}
+
+// Errors carry the command's stderr because that is where every CLI
+// puts the real reason. They must never carry stdout, which is the
+// secret itself.
+func TestExecErrorsNeverIncludeStdout(t *testing.T) {
+	stubBin(t, "leakyvault", `echo "SUPER-SECRET-VALUE"; echo "boom" >&2; exit 3`)
+
+	p := mustProvider(t, ExecFactory, ProviderConfig{Label: "v", Command: []string{"leakyvault"}})
+	_, err := p.Fetch(context.Background(), "x")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if strings.Contains(err.Error(), "SUPER-SECRET-VALUE") {
+		t.Errorf("the secret reached the error, and therefore the logs: %v", err)
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("stderr should survive so the operator learns why: %v", err)
+	}
+}
