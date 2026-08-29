@@ -37,6 +37,19 @@ const (
 	// session's thread is an ordered prefix scan and trimming is a
 	// delete of the lowest keys.
 	BucketSessionMessages = "session_messages"
+
+	// BucketRaftMeta holds the FSM's own bookkeeping rather than any
+	// replicated record — currently just the last raft index applied.
+	//
+	// It exists because this FSM's state is DURABLE. hashicorp/raft
+	// assumes an FSM is rebuilt by replaying the log (in-memory) or by
+	// Restore-then-replay; ours is a bbolt file that already holds the
+	// final state, so a replay from index 1 re-applies history on top
+	// of it. Recording how far we got is what makes replay idempotent.
+	BucketRaftMeta = "raft_meta"
+
+	// KeyLastAppliedIndex is the only key in BucketRaftMeta.
+	KeyLastAppliedIndex = "last_applied_index"
 	// BucketUserPrefs holds per-user preferences: timezone,
 	// subscribed channel addresses (telegram chat_id, future Slack
 	// user, etc.), language. Keyed by canonical user_id. Plaintext
@@ -135,6 +148,7 @@ const SoulTuneRecordID = "soul:tune"
 
 // allBuckets lists every bucket the store ensures exists on open.
 var allBuckets = []string{
+	BucketRaftMeta,
 	BucketPolicyRules,
 	BucketScheduledTasks,
 	BucketCommitments,
