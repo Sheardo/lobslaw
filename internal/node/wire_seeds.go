@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -234,7 +235,32 @@ func (n *Node) seedUserPrefsFromConfig(ctx context.Context) error {
 			n.log.Warn("user_prefs: skipping config entry with empty id")
 			continue
 		}
+		// An existing record keeps its addresses, but a channel type
+		// config declares and the record lacks is ADDED.
+		//
+		// Skipping the record wholesale meant a channel bound after
+		// first boot never took effect. The comment above justified
+		// that with "runtime edits via builtins win" — except no such
+		// builtin exists, so operator config is the only source there
+		// is, and it was being ignored on every boot after the first.
+		//
+		// The failure was silent and looked like something else
+		// entirely: a reminder scheduled from Slack fired, found no
+		// slack address in prefs, fell back to the originating
+		// conversation id, and posted into channel_not_found. Adding
+		// the binding to config and restarting changed nothing.
 		if existing, err := n.userPrefsSvc.Get(ctx, u.ID); err == nil && existing != nil {
+			added := mergeMissingChannels(existing, u.Channels)
+			if len(added) == 0 {
+				continue
+			}
+			if err := n.userPrefsSvc.Put(ctx, existing); err != nil {
+				n.log.Warn("user_prefs: adding newly configured channels failed",
+					"id", u.ID, "channels", added, "err", err)
+				continue
+			}
+			n.log.Info("user_prefs: bound newly configured channels",
+				"id", u.ID, "channels", added)
 			continue
 		}
 		channels := make([]*lobslawv1.UserChannelAddress, 0, len(u.Channels))
@@ -311,4 +337,51 @@ func (n *Node) seedDreamTask(ctx context.Context) error {
 	}
 	n.log.Info("memory: seeded dream task", "id", dreamTaskID, "schedule", schedule)
 	return nil
+}
+
+// mergeMissingChannels adds any channel type declared in config that
+// the stored record does not already carry, and returns the types it
+// added.
+//
+// Matched on TYPE, not on the pair: a record that already binds
+// "telegram" keeps whatever address it holds, because that address may
+// have been corrected at runtime and config is not entitled to
+// overwrite it. A type that is absent entirely was never a decision
+// anybody made — it is a binding the operator has just written down.
+func mergeMissingChannels(rec *lobslawv1.UserPreferences, configured []config.UserChannelAddrConfig) []string {
+	if rec == nil {
+		return nil
+	}
+	// Types are compared and stored lowercased. notify's
+	// findChannelAddress matches c.Type against the channel constants
+	// exactly, and those are lowercase, so a config entry reading
+	// type = "Slack" would bind an address that nothing can ever look
+	// up — the same silent no-op this function exists to end, wearing a
+	// different hat. Folding case also stops "Slack" being added
+	// alongside an existing "slack" as a second, shadowed binding.
+	have := make(map[string]struct{}, len(rec.Channels))
+	for _, c := range rec.Channels {
+		have[normaliseChannelType(c.GetType())] = struct{}{}
+	}
+	var added []string
+	for _, c := range configured {
+		t := normaliseChannelType(c.Type)
+		if t == "" || strings.TrimSpace(c.Address) == "" {
+			continue
+		}
+		if _, ok := have[t]; ok {
+			continue
+		}
+		rec.Channels = append(rec.Channels, &lobslawv1.UserChannelAddress{
+			Type:    t,
+			Address: c.Address,
+		})
+		have[t] = struct{}{}
+		added = append(added, t)
+	}
+	return added
+}
+
+func normaliseChannelType(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
 }
