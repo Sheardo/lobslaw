@@ -159,13 +159,11 @@ func (n *Node) wireCompute() error {
 	// Council registration happens HERE, after wireLLMProviders has
 	// populated the registry, and not with the other tools above.
 	//
-	// It used to sit with them, guarded on n.providerRegistry != nil —
-	// which is assigned 200 lines further down, inside
-	// wireLLMProviders. wireCompute runs once, the field starts nil,
-	// and nothing else assigns it, so the guard was never true and
-	// list_providers and council_review have never registered on any
-	// node. The guard read like a capability check and was really a
-	// read of a variable that did not exist yet.
+	// n.providerRegistry is assigned inside wireLLMProviders, 200 lines
+	// down. Guarding on it any earlier reads a field that is still nil,
+	// which looks like a capability check and is really a check that
+	// can never pass — list_providers and council_review then register
+	// on no node at all.
 	// After the self-taught stage, which runs earlier in nodeWireStages
 	// and is what sets n.selfTaught. Registering before it would find
 	// nil and skip the tool on every node that has the store.
@@ -210,18 +208,9 @@ func (n *Node) wireCompute() error {
 
 // wireResolver builds the provider/chain resolver.
 //
-// The resolver VALIDATES chains and then nothing routes through it.
-// `Resolver.Resolve` has no callers: the turn path is the provider
-// backup chain (ProviderRegistry.Chain), which knows about `backup`
-// links and nothing about triggers, multi-step chains or per-chain
-// trust floors. So `[[compute.chains]]` is parsed, checked for
-// coherence, and inert.
-//
-// Kept, rather than deleted, because the validation is worth having
-// the day the routing lands and deleting it would silently accept
-// broken chains in the meantime. But an operator who writes a chain
-// and sees it accepted is entitled to think it does something, so
-// this says otherwise, loudly, once.
+// A node with no [[compute.chains]] still gets a resolver: the turn
+// then starts at roles.main, which is what it did before chains
+// routed. Chains only ever move the start.
 func (n *Node) wireResolver() error {
 	// Before anything is constructed, and fatal. A dev source that is
 	// configured but not gated is a node that would either silently

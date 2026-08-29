@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -291,11 +292,19 @@ func NewGenerationCommitment(id string, h compute.JobHandle, iv time.Duration, o
 		Status:     "pending",
 		Owner:      owner,
 		Trigger:    "time",
-		Reason:     "generation job " + h.Driver,
+		// Without a DueAt the scheduler skips this commitment on every
+		// scan (see fireDue: a nil DueAt is never due), so the job runs
+		// at the provider, is billed, and is collected by nobody. iv is
+		// the delay before the FIRST poll; zero means the next tick.
+		DueAt:  timestamppb.New(time.Now().Add(iv)),
+		Reason: "generation job " + h.Driver,
 		Params: map[string]string{
-			paramJobHandle:     raw,
-			paramJobDeadline:   time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
-			paramArtifactName:  name,
+			paramJobHandle:   raw,
+			paramJobDeadline: time.Now().Add(compute.MaxJobLifetime).Format(time.RFC3339),
+			// Slugged, as the synchronous modalities already do. name is
+			// the prompt, so storing it raw produced filenames that were
+			// the whole prompt — punctuation, spaces and all.
+			paramArtifactName:  compute.ArtifactFileName(name, "video"),
 			paramOrigChannel:   channel,
 			paramOrigChatID:    chatID,
 			paramProviderLabel: providerLabel,

@@ -197,3 +197,43 @@ func TestResolverRefusesWithNowhereToWrite(t *testing.T) {
 		t.Error("resolved into a mount that does not exist")
 	}
 }
+
+// A prompt-derived name ends in a full stop whenever the prompt did,
+// and filepath.Ext("x.") is "." rather than "" — so the type suffix was
+// skipped and a delivered MP4 landed with no extension at all. Nothing
+// downstream could identify it by name.
+func TestSafeArtifactNameAppendsExtAfterTrailingDot(t *testing.T) {
+	for _, tc := range []struct {
+		name, in, mime, want string
+	}{
+		{"trailing dot", "a green triangle spinning.", "video/mp4", "generated/a green triangle spinning.mp4"},
+		{"several dots", "clip...", "video/mp4", "generated/clip.mp4"},
+		{"real extension kept", "clip.webm", "video/mp4", "generated/clip.webm"},
+		{"no dot", "clip", "video/mp4", "generated/clip.mp4"},
+		{"only dots", "...", "video/mp4", "generated/artifact.mp4"},
+		{"internal dots, no real ext", "a triangle on grey. Simple 3D render", "video/mp4", "generated/a triangle on grey. Simple 3D render.mp4"},
+		{"long pseudo-ext", "clip.reallylongsuffix", "video/mp4", "generated/clip.reallylongsuffix.mp4"},
+		{"punctuation ext is not an ext", "clip.a b", "video/mp4", "generated/clip.a b.mp4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := safeArtifactName(tc.in, tc.mime); got != tc.want {
+				t.Errorf("safeArtifactName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The name is derived from model-supplied text, so it has to be
+// bounded. A video's name was the entire prompt: 242 characters of
+// spaces and punctuation, one longer prompt from failing to write.
+func TestArtifactFileNameIsBounded(t *testing.T) {
+	long := "A flat bright green triangle spinning slowly and smoothly around its center " +
+		"on a clean neutral light-gray background. Simple minimalist 3D render."
+	got := ArtifactFileName(long, "video")
+	if got != "a-flat-bright-green-triangle" {
+		t.Errorf("ArtifactFileName = %q", got)
+	}
+	if ArtifactFileName("!!! ???", "video") != "video" {
+		t.Error("unsluggable input should fall back")
+	}
+}
