@@ -1251,10 +1251,21 @@ type SecretProviderConfig struct {
 	// must not be able to become a second command.
 	Command []string `koanf:"command,omitempty"`
 
-	// Env is extra environment for the subprocess. Values are secret
-	// references themselves, resolved through the BOOTSTRAP resolver
-	// only: a vault credential cannot come from a vault.
+	// Env is extra environment for the subprocess, as plaintext. Most
+	// of what a vault CLI needs is not secret — a config directory, a
+	// CA bundle path, an account alias — and an earlier version routed
+	// every value through the secret resolver, which made those
+	// impossible to set at all.
+	//
+	// Split exactly as [mcp.servers.<name>] splits them, and for the
+	// same reason: "Env pairs are plaintext; SecretEnv names env vars
+	// whose values resolve via secret refs".
 	Env map[string]string `koanf:"env,omitempty"`
+
+	// SecretEnv names env vars whose values are secret references,
+	// resolved through the BOOTSTRAP resolver only: a vault credential
+	// cannot come from a vault.
+	SecretEnv map[string]string `koanf:"secret_env,omitempty"`
 
 	// Timeout bounds one fetch. Zero takes 15s, which is generous
 	// because the alternative to waiting for a vault is a node that

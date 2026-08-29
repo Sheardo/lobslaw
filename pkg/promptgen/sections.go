@@ -731,6 +731,22 @@ type RuntimeInfo struct {
 	// was unavailable and a confident wrong one took its place — the
 	// same shape as list_providers not reporting roles.
 	SelfLearning string
+
+	// SecretProviders are the labels of the configured vaults, if any.
+	//
+	// Here for the same reason SelfLearning is, and it is the same bug
+	// twice: a capability the node HAS, that nothing in the prompt or
+	// the tool list mentions, so the model answers from a guess. Asked
+	// where to keep an API key on a node with a vault wired up, it
+	// otherwise suggests an environment variable — or worse, invites
+	// the user to paste the key into the chat, which puts it in the
+	// transcript, the session store and the next turn's replay.
+	//
+	// Labels only. The model is told a vault EXISTS and how references
+	// are written; it cannot read one, and there is no tool that would
+	// let it. That asymmetry is the point: knowing where secrets belong
+	// is useful, holding their values is a liability.
+	SecretProviders []string
 }
 
 // BuildChannelFormatting tells the model how to render for the channel
@@ -832,6 +848,25 @@ func BuildRuntime(info RuntimeInfo) Section {
 		case "auto":
 			b.WriteString("  (you may write instructions for yourself and they take effect immediately)\n")
 		}
+	}
+	if len(info.SecretProviders) > 0 {
+		fmt.Fprintf(&b, "- secret_vaults: %s\n", strings.Join(info.SecretProviders, ", "))
+		// Leads with the ACTION, and that ordering is the whole lesson.
+		// A first version led with the prohibitions — cannot read, no
+		// tool, never ask — and the model reproduced exactly those: it
+		// answered "no, I can't read your vault", correctly and
+		// uselessly, without ever mentioning that it knew where the
+		// user should put the thing. A prompt that is mostly what NOT
+		// to do gets obeyed as what to say.
+		b.WriteString("  (when a key, token, password or credential comes up — the user has one to add, " +
+			"a tool or provider needs one, or something is failing to authenticate — tell them to put it " +
+			"in one of those vaults and point config at it as \"<vault>:<path>\", e.g. \"" +
+			info.SecretProviders[0] + ":stripe/live-key\", which works anywhere an api_key_ref or " +
+			"token_ref is accepted. That is the answer to \"where does this go?\" on this node — offer it " +
+			"without being asked, and do not suggest an environment variable or a literal in config " +
+			"instead. Never ask for the secret itself in chat: it would persist in the transcript and be " +
+			"replayed on later turns. You cannot read vault values and have no tool that can, which is " +
+			"why you name the location rather than the contents)\n")
 	}
 	if b.Len() == 0 {
 		b.WriteString("(runtime info unavailable)\n")

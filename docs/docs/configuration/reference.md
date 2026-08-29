@@ -228,7 +228,8 @@ main = "openrouter"
 [[secrets.providers]]
 label  = "bw"
 driver = "bitwarden"                          # or onepassword, or exec
-env    = { BW_SESSION = "env:BW_SESSION" }    # the vault's own credential stays on env:/file:
+env        = { BW_CONFIG_DIR = "/etc/lobslaw/bw" }  # plaintext
+secret_env = { BW_SESSION = "env:BW_SESSION" }      # refs; the vault's own credential stays on env:/file:
 
 [[secrets.providers]]
 label   = "pass"

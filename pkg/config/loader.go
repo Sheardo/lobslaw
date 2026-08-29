@@ -264,6 +264,26 @@ func validateSecretProviders(c SecretsConfig) error {
 			return fmt.Errorf("%w: [[secrets.providers]] %q has a negative timeout",
 				types.ErrInvalidConfig, p.Label)
 		}
+		// env used to BE the reference field, and a config written
+		// against that version would now hand its CLI the literal
+		// string "env:BW_SESSION" as a session token — authentication
+		// failing for a reason nothing in the error would name.
+		//
+		// A silent semantics change is the worst kind, so a value that
+		// still looks like a reference is a boot error naming the field
+		// that replaced it. A plaintext value legitimately beginning
+		// "env:" or "file:" is not a thing anyone has.
+		for k, v := range p.Env {
+			for _, scheme := range reservedSecretSchemes {
+				if strings.HasPrefix(strings.TrimSpace(v), scheme+":") {
+					return fmt.Errorf(
+						"%w: [[secrets.providers]] %q sets env.%s to %q, which is a secret reference — "+
+							"env is plaintext, so move it to [secrets.providers.secret_env] "+
+							"(env holds non-secret settings like a config directory or CA path)",
+						types.ErrInvalidConfig, p.Label, k, v)
+				}
+			}
+		}
 	}
 	return nil
 }

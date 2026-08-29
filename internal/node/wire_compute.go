@@ -402,12 +402,16 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		// is configured to do, rather than from the shape of its tool
 		// list.
 		SelfLearningMode: n.cfg.SelfLearningMode,
-		Providers:        n.providerRegistry,
-		Resolver:         n.resolver,
-		Judge:            n.newJudge(),
-		Health:           n.providerHealth,
-		Executor:         n.executor,
-		Registry:         n.toolRegistry,
+		// Labels, never values. The agent should know a vault exists so
+		// it can tell somebody where a key belongs instead of asking
+		// them to paste one into the chat.
+		SecretProviderLabels: n.cfg.SecretProviderLabels,
+		Providers:            n.providerRegistry,
+		Resolver:             n.resolver,
+		Judge:                n.newJudge(),
+		Health:               n.providerHealth,
+		Executor:             n.executor,
+		Registry:             n.toolRegistry,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {

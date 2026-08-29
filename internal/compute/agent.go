@@ -128,6 +128,11 @@ type AgentConfig struct {
 	// own configuration. Empty when off.
 	SelfLearningMode string
 
+	// SecretProviderLabels are the configured vault labels, surfaced in
+	// the prompt so the agent knows where a secret belongs. Labels
+	// only — it cannot read a vault and has no tool that can.
+	SecretProviderLabels []string
+
 	// PrimaryLabel names the provider that maps to Provider above
 	// in the registry. Used as the starting point for backup-chain
 	// walks. Empty → no chain walk, single-provider behaviour.
@@ -605,9 +610,10 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) {
 				Pinned:         pinned,
 				Binaries:       bins,
 				Runtime: promptgen.RuntimeInfo{
-					Channel:      req.Channel,
-					ChannelID:    req.ChannelID,
-					SelfLearning: a.cfg.SelfLearningMode,
+					Channel:         req.Channel,
+					ChannelID:       req.ChannelID,
+					SelfLearning:    a.cfg.SelfLearningMode,
+					SecretProviders: a.cfg.SecretProviderLabels,
 				},
 			})
 		}
