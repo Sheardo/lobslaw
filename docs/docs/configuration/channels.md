@@ -4,21 +4,140 @@ sidebar_position: 5
 
 # Channels
 
-A **channel** is a way for users to talk to lobslaw. Telegram is the most-tested; REST + webhooks ship; Slack/Discord don't yet.
+A **channel** is a way for users to talk to lobslaw. Telegram is the most-tested; Slack, REST and webhooks ship; Discord and Matrix don't yet.
+
+:::warning The allowlist is the gate, not `[[user]]`
+Every channel authorises inbound messages from its **own** `user_scopes` map. `[[user]]` binds identity, timezone and roles — it grants **no** access. A channel with an empty `user_scopes` and an empty `gateway.unknown_user_scope` silently drops every message, with no reply and only a log line. That looks identical to a broken connection.
+:::
 
 ## Telegram
 
 ```toml
 [[gateway.channels]]
-type      = "telegram"
-token_ref = "env:TELEGRAM_BOT_TOKEN"
-
-[gateway.channels.user_scopes]
-"123456789" = "owner"          # specific chat_id → scope override
-"987654321" = "household"
+type          = "telegram"
+bot_token_ref = "env:TELEGRAM_BOT_TOKEN"
+mode          = "poll"
+user_scopes   = { "123456789" = "owner", "987654321" = "household" }
 ```
 
-The bot uses Telegram's long-poll `getUpdates` (no webhook). Egress role: `gateway/telegram` → `api.telegram.org` only.
+`mode = "poll"` uses Telegram's long-poll `getUpdates` and needs no inbound network — the right default behind NAT. The alternative, `mode = "webhook"`, additionally requires `secret_token_ref`; leaving both unset fails at boot.
+
+Egress role: `gateway/telegram` → `api.telegram.org` only.
+
+Group chats are treated as **shared conversations**, which narrows what passive recall may surface into them — see [Slack → shared conversations](#shared-conversations) for the rule, which applies to both channels.
+
+## Slack
+
+```toml
+[[gateway.channels]]
+type          = "slack"
+bot_token_ref = "env:SLACK_BOT_TOKEN"   # xoxb-…
+app_token_ref = "env:SLACK_APP_TOKEN"   # xapp-…, needs connections:write
+
+allowed_channels = ["dm", "C0123ABC"]         # "dm" = every DM; ["*"] = anywhere it is invited
+user_scopes      = { "U06DZJWNACV" = "owner" }
+```
+
+Two tokens with different jobs: the **bot** token signs every Web API call, the **app** token opens the Socket Mode connection. Neither substitutes for the other, and both are required at boot.
+
+Socket Mode is an **outbound** WebSocket, so this channel needs no public ingress, no Request URL and no request-signature verification. Egress role: `gateway/slack` → `slack.com` and `*.slack.com` (the wildcard is unavoidable — `apps.connections.open` picks a per-connection WSS subdomain).
+
+The loop is pinned to the raft leader. Slack delivers each event to exactly one open connection, so two connected nodes would split a conversation between them at random.
+
+### Slack app setup
+
+In api.slack.com/apps:
+
+1. **Socket Mode** → enable.
+2. **Event Subscriptions** → enable, then *Subscribe to bot events*: `app_mention`, `message.im`, `message.channels`, `message.groups`, `message.mpim`.
+3. **App Home** → enable the Messages Tab and tick *"Allow users to send Slash commands and messages from the messages tab"*. Without this the DM box is greyed out and `message.im` never fires.
+4. **Slash Commands** → create `/lobslaw` (leave the Request URL blank). One umbrella command covers every command; see [Commands](#commands).
+5. Invite the bot to any channel you want it in: `/invite @yourbot`.
+
+Bot scopes needed: `app_mentions:read`, `chat:write`, `commands`, `users:read`, plus `channels:history`/`groups:history`/`im:history`/`mpim:history` for the conversations you want readable.
+
+Granting `chat:write.public` is **not** recommended: without it the bot cannot post to a channel it was never invited to, which is a useful floor under the allowlist.
+
+### `allowed_channels`
+
+Empty is **closed**. An operator who has not said where the bot may act has not thereby said "anywhere".
+
+It is enforced in two places, and both matter:
+
+- on inbound events, deciding which conversations produce turns;
+- inside `slack_read_channel` / `slack_search`, deciding which conversations the agent may fetch.
+
+Enforcing only the first would govern what the agent *hears* while leaving what it can *go and read* wide open.
+
+Three forms of entry:
+
+| Entry | Matches |
+|---|---|
+| `"C0123ABC"` | that conversation, by id |
+| `"dm"` | every direct message |
+| `"*"` | every conversation |
+
+`"dm"` exists because a DM's id is minted per user on first contact, so there is nothing to write down in advance. Without it, the only configuration that let anyone DM the bot was `["*"]` — which also opened every channel it had been invited to. The shape most deployments want is:
+
+```toml
+allowed_channels = ["dm", "C0123ABC"]   # anyone may DM it; it speaks in one channel
+```
+
+### Slash commands
+
+A message matching `/<name>` is dispatched as a command **only when that command is registered**. Anything else — `/start`, which every Telegram client sends automatically on first contact, or `/help me pick a model` — falls through to the agent as an ordinary message.
+
+That fall-through is deliberate. Answering every unregistered `/word` with *"Unknown command"* means the first thing a new Telegram user hears from the bot is a complaint about something they never typed.
+
+### Threads and DMs
+
+A thread is its own conversation, keyed `<channel>/<thread_ts>`, so each thread carries its own transcript and memory rather than interleaving into the channel's. Replies go into a thread in channels and inline in DMs.
+
+### Shared conversations {#shared-conversations}
+
+Anything that is not a 1:1 DM — a Slack channel, group DM, or Telegram group — is a **shared conversation**, and passive recall is narrowed there: the agent surfaces only memories the **speaker** owns, plus memories that **this conversation** produced.
+
+Without that rule the speaker changes between turns and recall keyed on them alone would surface whatever the last person to type happens to own, to an audience that never owned any of it. DMs are unaffected.
+
+An unknown channel type counts as shared. The two ways to be wrong are not symmetric: under-sharing costs some recall, over-sharing discloses one person's memories to a room.
+
+The rule is **not** limited to passive recall. `memory_search` and the other `memory_*` builtins go through the same audience filter, so an explicit search in a shared conversation returns records other people own if this conversation produced them. That is the consistent choice — a rule that applied to background recall but not to the tool the model can simply call would not be a rule — but it is worth knowing before you ask the bot to search in a busy channel.
+
+### Reading Slack as a source
+
+`slack_read_channel` and `slack_search` let the agent read history. They are the only builtins with **no default-allow policy seed** — reading a workspace's conversations is an operator decision, so it takes an explicit rule:
+
+There is **no per-user membership check**. `allowed_channels` is operator-global, so anyone who gets past the tool policy can read any allowed channel from a DM, whether or not they are a member of it. That is a much coarser rule than the shared-conversation rule above, and it is the doorway to the same content that rule is careful about — so scope the policy by subject, and list conversations rather than reaching for `"*"`.
+
+```toml
+[[policy.rules]]
+id       = "owner-slack-read"
+subject  = "scope:owner"
+action   = "tool:exec"
+resource = "slack_*"
+effect   = "allow"
+priority = 20
+```
+
+`slack_search` is a bounded local scan over recent history, not a workspace search: Slack's `search.messages` needs `search:read`, a user-token scope a bot cannot hold. Treat a miss as "not in recent history", never as "never said".
+
+## Commands {#commands}
+
+Slash commands share one dispatcher across channels, so `/new` means the same thing everywhere. Built in: `help`, `whoami`, `status`, `new`.
+
+Every command is evaluated by the policy engine under action `command:exec` with the command name as the resource, and is **default-deny** — the builtin default-allow seed covers tool paths only:
+
+```toml
+[[policy.rules]]
+id       = "operator-commands"
+subject  = "role:operator"
+action   = "command:exec"
+resource = "*"
+effect   = "allow"
+priority = 20
+```
+
+On Slack these arrive as `/lobslaw <command>`; a directly-registered `/status` also dispatches as itself. Replies are ephemeral — only the person who ran it sees the output. `whoami` refuses to run outside a DM, since it prints your principal, scope and roles.
 
 **File attachments** are downloaded to `/workspace/incoming/<turn_id>/` and surfaced to the agent's prompt as `[user attached: <local-path>]`. The agent can then call vision / audio / pdf builtins on the local path.
 
@@ -86,27 +205,41 @@ External services POST to `https://<host>:8444/hooks`. The body is HMAC-verified
 
 ## User scopes
 
-Without explicit scope binding, users default to `policy.unknown_user_scope` (recommended: `public`). Scopes:
+Without explicit scope binding, users fall through to `gateway.unknown_user_scope` (recommended: `public`, or empty to reject). Scopes:
 
 - `owner` — you, the operator. Sensitive built-ins are typically allowed for this scope.
 - `household` — trusted family members. Allow read tools + maybe scheduling.
 - `public` — strangers. Allow `current_time` and not much else.
 
-Bind a chat_id to a scope per-channel (`gateway.channels.user_scopes`) or globally via `[[user]]`:
+**Scope comes from the channel's `user_scopes` map, and only from there.** `[[user]]` does something different and complementary: it binds a channel address to a canonical principal, and declares the policy roles that person holds. Both are usually needed.
 
 ```toml
+# Authorisation: may this person talk to the bot, and as what?
+[[gateway.channels]]
+type        = "telegram"
+user_scopes = { "123456789" = "owner" }
+
+# Identity: who is this person, across channels?
 [[user]]
 id           = "alice"
 display_name = "Alice"
-scope        = "owner"
 timezone     = "Europe/London"
+roles        = ["operator"]
 
 [[user.channels]]
 type    = "telegram"
 address = "123456789"
+
+# Roles only reach a channel with no JWT via an alias. The key is the
+# channel-DERIVED id ("tg-<id>", "slack-<team>-<user>"), not the bare
+# address above.
+[identity.aliases]
+"tg-123456789" = "alice"
 ```
 
-User prefs live in raft; once bound, the scope persists across restarts.
+There is no `scope` key on `[[user]]`; a scope written there is silently ignored. `lobslaw doctor` checks the alias and role wiring and names what is missing.
+
+User prefs live in raft; once bound, they persist across restarts.
 
 ## Notification routing
 
@@ -121,7 +254,11 @@ REST channel returns an error on async push — that's correct behaviour, not a 
 ## Reference
 
 - `internal/gateway/telegram.go` — long-poll loop, attachment download
+- `internal/gateway/slack.go` — Socket Mode loop, event routing, authorisation
+- `internal/gateway/slack_read.go` — `slack_read_channel` / `slack_search` backing
+- `internal/gateway/commands.go` — channel-agnostic slash-command dispatcher
 - `internal/gateway/rest.go` — REST handler + auth
 - `internal/gateway/webhook.go` — webhook HMAC verifier
+- `internal/memory/visibility.go` — `Audience`, including the shared-conversation rule
 - `internal/notify/` — channel-agnostic dispatch
-- `pkg/config/config.go` — `GatewayConfig`, `ChannelConfig`
+- `pkg/config/config.go` — `GatewayConfig`, `GatewayChannelConfig`

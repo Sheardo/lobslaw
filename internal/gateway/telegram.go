@@ -202,6 +202,12 @@ type TelegramConfig struct {
 	// hides the button rather than showing one that does nothing —
 	// a node without raft has nowhere to record a lasting grant.
 	ApprovalRules *policy.ApprovalRules
+
+	// CommandAuthorizer gates slash commands through the policy engine.
+	// Nil refuses every command rather than allowing them: a command is
+	// a privileged operation, and an unwired authorizer is an
+	// incomplete deployment, not a permissive one.
+	CommandAuthorizer CommandAuthorizer
 }
 
 // grantSubject is the policy subject a permanent grant binds to.
@@ -275,6 +281,10 @@ type TelegramHandler struct {
 	// ProcessMessageRequest.ConversationHistory: durable when a
 	// session store is wired, in-memory otherwise.
 	conv *conversationLog
+
+	// commands is the shared runtime control surface, the same set
+	// Slack dispatches. Built here so it can close over conv.
+	commands *CommandSet
 }
 
 // Telegram Update / Message types — minimal subset we consume. The
@@ -338,6 +348,19 @@ type tgChat struct {
 	Type string `json:"type"`
 }
 
+// isSharedChat reports whether a chat has an audience beyond the
+// person speaking. Telegram's own vocabulary: "private" is a 1:1 DM,
+// everything else ("group", "supergroup", "channel") has onlookers.
+//
+// Defaulting the UNKNOWN type to shared is deliberate. The two ways to
+// be wrong are not symmetric: treating a group as private leaks one
+// person's recalled memories to everyone in it, while treating a DM as
+// shared costs only some recall the speaker could have had. A type
+// Telegram adds after this was written should land on the cheap side.
+func isSharedChat(c tgChat) bool {
+	return c.Type != "" && c.Type != "private"
+}
+
 type tgCallbackQuery struct {
 	ID      string     `json:"id"`
 	From    *tgUser    `json:"from,omitempty"`
@@ -385,7 +408,7 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TelegramHandler{
+	h := &TelegramHandler{
 		cfg:          cfg,
 		agent:        agent,
 		log:          logger,
@@ -395,7 +418,10 @@ func NewTelegramHandler(cfg TelegramConfig, agent *compute.Agent) (*TelegramHand
 		pendingScope: make(map[string]scopedOperation),
 		seenUpdate:   make(map[int64]time.Time),
 		conv:         newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, logger),
-	}, nil
+	}
+	h.commands = NewCommandSet(cfg.CommandAuthorizer, logger)
+	RegisterBuiltinCommands(h.commands, h.conv)
+	return h, nil
 }
 
 // ServeHTTP is the webhook receiver. Methods other than POST get
@@ -473,6 +499,18 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ChannelID: strconv.FormatInt(msg.Chat.ID, 10),
 		UserID:    claims.UserID,
 	}
+	// Before the gate: a command is not a turn. It must not take a
+	// lease, load a transcript, or reach the model — /new in particular
+	// would otherwise queue behind the very conversation it exists to
+	// discard.
+	if h.handleCommand(ctx, msg.Chat.ID, turnText(msg), CommandRequest{
+		Claims:  claims,
+		Session: sessionRef,
+		Shared:  isSharedChat(msg.Chat),
+	}) {
+		return
+	}
+
 	// Everything from here to the Append below is one turn, and two
 	// of them on the same chat must not overlap: both would Load the
 	// same prior history and both would Append it, interleaving the
@@ -537,6 +575,7 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
 		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
+		SharedConversation:  isSharedChat(msg.Chat),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing
@@ -584,6 +623,15 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		h.sendText(msg.Chat.ID, "Confirmation required: "+resp.ConfirmationReason)
 	case resp.Reply == "":
 		h.sendText(msg.Chat.ID, "(empty reply)")
+	case isSharedChat(msg.Chat):
+		// No notice in a group. The nudge says how many proposals the
+		// OPERATOR has waiting — their queue, not the group's — and the
+		// subject allowlist only decides who may be told, never who is
+		// standing behind them. cmd/lobslaw's own comment warns that a
+		// channel allowlist alone "would tell a group chat what the
+		// operator has pending"; the subject list narrows who triggers
+		// it, not who reads it.
+		h.sendText(msg.Chat.ID, resp.Reply)
 	default:
 		// Appended AFTER the transcript was persisted above, and to
 		// the outbound text only. A notice recorded as an assistant
@@ -792,6 +840,13 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 	if !h.mayResolve(ctx, promptID, q) {
 		return
 	}
+
+	// Whatever the verb, this prompt is finished after this tap, so its
+	// remembered operation goes. The grant helpers take it first when
+	// they need it; this drains the rest — a plain "approve", a "deny",
+	// or a grant that could not be recorded. Without it the map only
+	// ever grew, keyed by prompts nobody will tap again.
+	defer h.takePendingScope(promptID)
 
 	var decision PromptDecision
 	var scope PromptScope
@@ -1582,6 +1637,17 @@ func turnText(msg *tgMessage) string {
 }
 
 // scopedOperation is the (action, resource) a pending prompt is about.
+// takePendingScope removes and returns the operation a prompt was
+// raised about. Idempotent: a second call for the same prompt reports
+// absence rather than replaying the grant.
+func (h *TelegramHandler) takePendingScope(promptID string) (scopedOperation, bool) {
+	h.pendingScopeMu.Lock()
+	defer h.pendingScopeMu.Unlock()
+	op, ok := h.pendingScope[promptID]
+	delete(h.pendingScope, promptID)
+	return op, ok
+}
+
 type scopedOperation struct {
 	action   string
 	resource string
@@ -1599,14 +1665,11 @@ type scopedOperation struct {
 // protected paths and destructive commands, and that refusal must
 // reach the user rather than being logged and forgotten.
 func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
-	if h.cfg.ApprovalRules == nil || q.Message == nil {
-		return false
-	}
-	h.pendingScopeMu.Lock()
-	op, ok := h.pendingScope[promptID]
-	delete(h.pendingScope, promptID)
-	h.pendingScopeMu.Unlock()
-	if !ok || op.subject == "" {
+	// Taken before the store is checked so the entry is consumed even
+	// when there is nowhere to record the grant. Returning early with
+	// it still in the map is how the map only ever grew.
+	op, ok := h.takePendingScope(promptID)
+	if !ok || op.subject == "" || h.cfg.ApprovalRules == nil || q.Message == nil {
 		return false
 	}
 
@@ -1633,14 +1696,9 @@ func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *t
 // not happen — no approvals store wired, or a prompt whose operation
 // we no longer know.
 func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
-	if h.cfg.Approvals == nil || q.Message == nil {
-		return false
-	}
-	h.pendingScopeMu.Lock()
-	op, ok := h.pendingScope[promptID]
-	delete(h.pendingScope, promptID)
-	h.pendingScopeMu.Unlock()
-	if !ok {
+	// Taken first, for the same reason as grantAlways.
+	op, ok := h.takePendingScope(promptID)
+	if !ok || h.cfg.Approvals == nil || q.Message == nil {
 		return false
 	}
 

@@ -1168,6 +1168,32 @@ type GatewayChannelConfig struct {
 	WebhookPath     string `koanf:"webhook_path,omitempty"`
 	SharedSecretRef string `koanf:"shared_secret_ref,omitempty"`
 	Scope           string `koanf:"scope,omitempty"`
+
+	// Slack channel fields. Only consulted when Type == "slack".
+	//
+	// AppTokenRef is the app-level token ("xapp-…") that opens a
+	// Socket Mode connection; BotTokenRef above is the bot token
+	// ("xoxb-…") every Web API call authenticates with. Two tokens,
+	// two jobs — Socket Mode cannot be opened with a bot token and
+	// chat.postMessage cannot be called with an app token.
+	AppTokenRef string `koanf:"app_token_ref,omitempty"`
+
+	// AllowedChannels lists the Slack channel ids this bot will act
+	// in. ["*"] is wide open. EMPTY IS CLOSED: an operator who has not
+	// said where the bot may speak has not thereby said "anywhere".
+	//
+	// "dm" is a sentinel matching every direct message, because a D-id
+	// is minted per user on first contact and cannot be written down in
+	// advance. allowed_channels = ["dm", "C0123ABC"] is the shape most
+	// deployments want: anyone may DM the assistant, and it speaks in
+	// exactly one channel.
+	//
+	// It gates two different things and must be consulted for both —
+	// which conversations produce turns, and which conversations the
+	// slack_* read tools may fetch. Enforcing it only on inbound
+	// events would govern what the agent HEARS while leaving what it
+	// can GO AND READ wide open.
+	AllowedChannels []string `koanf:"allowed_channels,omitempty"`
 }
 
 // DiscoveryConfig is the [discovery] section: how this node finds

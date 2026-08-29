@@ -193,6 +193,11 @@ func (i *EpisodicIngester) IngestTurn(ctx context.Context, turn EpisodicTurn) er
 				Visibility: rec.Visibility,
 				CreatedAt:  rec.Timestamp,
 				SourceIds:  []string{rec.Id},
+				// Same reasoning as Owner above. A conversation-scoped
+				// audience decides during the vector scan, so a vector
+				// without the origin its episodic record carries is
+				// invisible in the conversation that produced it.
+				SessionRef: rec.SessionRef,
 				// Stamped here rather than in the FSM, where Norm is
 				// derived: the model is NODE CONFIG, and two replicas
 				// could legitimately hold different values, so an FSM

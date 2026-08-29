@@ -52,6 +52,7 @@ const (
 	fieldOwner      = 9
 	fieldVisibility = 10
 	fieldNorm       = 11
+	fieldSessionRef = 13
 )
 
 // scanEntry holds what the scan filters and scores on, reusing its
@@ -59,9 +60,14 @@ const (
 // the slice rather than keeping capacity, costing D floats per record —
 // 61 MB of the 130 MB a 10k-record query allocated at D=1536.
 type scanEntry struct {
-	embedding  []float32
-	scope      string
-	owner      string
+	embedding []float32
+	scope     string
+	owner     string
+	// sessionRef is the conversation this record came from. Read on the
+	// hot path because a conversation-scoped audience decides on it, and
+	// deciding after the scan would mean filtering the top-N rather than
+	// choosing it — the records that lose are the ones never scored.
+	sessionRef string
 	retention  lobslawv1.Retention
 	visibility lobslawv1.Visibility
 	norm       float32
@@ -69,7 +75,7 @@ type scanEntry struct {
 
 func (e *scanEntry) decode(b []byte) error {
 	e.embedding = e.embedding[:0]
-	e.scope, e.owner = "", ""
+	e.scope, e.owner, e.sessionRef = "", "", ""
 	e.retention, e.visibility, e.norm = 0, 0, 0
 
 	for len(b) > 0 {
@@ -133,6 +139,13 @@ func (e *scanEntry) decode(b []byte) error {
 			}
 			e.norm = math.Float32frombits(v)
 			b = b[n:]
+		case num == fieldSessionRef && typ == protowire.BytesType:
+			v, n := protowire.ConsumeBytes(b)
+			if n < 0 {
+				return protowire.ParseError(n)
+			}
+			e.sessionRef = string(v)
+			b = b[n:]
 		default:
 			n := protowire.ConsumeFieldValue(num, typ, b)
 			if n < 0 {
@@ -173,7 +186,7 @@ func vectorSearch(store *Store, query []float32, limit int, audience Audience, s
 		}
 		// Ownership before anything else: a record this audience may
 		// not read should not reach scoring, let alone a result set.
-		if !audience.allows(entry.owner, entry.visibility) {
+		if !audience.allows(entry.owner, entry.visibility, entry.sessionRef) {
 			return nil
 		}
 		if scopeFilter != "" && entry.scope != scopeFilter {

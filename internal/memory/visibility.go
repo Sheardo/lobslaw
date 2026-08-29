@@ -30,6 +30,20 @@ type Audience struct {
 	everyone bool
 	// principal is the canonical identity the read is for.
 	principal identity.Principal
+	// conversation, when non-empty, widens the audience to records
+	// this conversation produced, as "<channel>:<channel_id>".
+	//
+	// Only set for a conversation SEVERAL PEOPLE CAN READ. In a DM,
+	// ownership already says everything: the one person reading owns
+	// what they should see. In a Slack channel it does not — the
+	// speaker changes between turns, and recall keyed on the speaker
+	// alone would surface whatever the last person to type happens to
+	// own, to an audience that never owned any of it.
+	//
+	// So a shared conversation reads: what the speaker owns, plus what
+	// this conversation itself produced. The second half is what keeps
+	// the agent useful in a team channel rather than amnesiac.
+	conversation string
 }
 
 // For returns the audience for a principal. A zero principal — an
@@ -38,6 +52,17 @@ type Audience struct {
 // shared and legacy records.
 func For(p identity.Principal) Audience {
 	return Audience{set: true, principal: p}
+}
+
+// ForConversation returns the audience for a principal speaking in a
+// conversation others can read, addressed as "<channel>:<channel_id>".
+//
+// An empty conversation degrades to For(p) rather than widening: the
+// dangerous direction here is the one that costs nothing to write, and
+// a caller that could not name its conversation has not thereby earned
+// a view of every conversation.
+func ForConversation(p identity.Principal, conversation string) Audience {
+	return Audience{set: true, principal: p, conversation: conversation}
 }
 
 // Everyone is the unrestricted read, spelled out so it can be grepped
@@ -70,7 +95,11 @@ func (a Audience) IsZero() bool { return !a.set }
 // "webhook:<name>", "scheduler", the Telegram identity), so an unowned
 // record now means a bug upstream, and being invisible is how it
 // surfaces rather than how it hides.
-func (a Audience) allows(owner string, vis lobslawv1.Visibility) bool {
+//   - Same conversation. Only when the audience names one, which only
+//     happens for a conversation with an audience — see ForConversation.
+//     A record with no origin ("" session_ref) matches no conversation,
+//     so a scheduled task's memory never arrives this way.
+func (a Audience) allows(owner string, vis lobslawv1.Visibility, sessionRef string) bool {
 	if !a.set {
 		return false
 	}
@@ -80,7 +109,10 @@ func (a Audience) allows(owner string, vis lobslawv1.Visibility) bool {
 	if vis == lobslawv1.Visibility_VISIBILITY_SHARED {
 		return true
 	}
-	return !a.principal.IsZero() && owner == a.principal.String()
+	if !a.principal.IsZero() && owner == a.principal.String() {
+		return true
+	}
+	return a.conversation != "" && sessionRef == a.conversation
 }
 
 // AllowsVector reports whether a vector record is readable. Exported
@@ -89,7 +121,7 @@ func (a Audience) AllowsVector(rec *lobslawv1.VectorRecord) bool {
 	if rec == nil {
 		return false
 	}
-	return a.allows(rec.Owner, rec.Visibility)
+	return a.allows(rec.Owner, rec.Visibility, rec.SessionRef)
 }
 
 // AllowsEpisodic reports whether an episodic record is readable.
@@ -97,5 +129,5 @@ func (a Audience) AllowsEpisodic(rec *lobslawv1.EpisodicRecord) bool {
 	if rec == nil {
 		return false
 	}
-	return a.allows(rec.Owner, rec.Visibility)
+	return a.allows(rec.Owner, rec.Visibility, rec.SessionRef)
 }

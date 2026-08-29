@@ -27,6 +27,30 @@ func (s *TelegramSink) Deliver(_ context.Context, address, body string) error {
 	return s.Handler.Send(chatID, body)
 }
 
+// SlackSink adapts a SlackHandler to the notify.Sink interface.
+//
+// The address is a Slack conversation id, and chat.postMessage accepts
+// a user id there directly — it opens the DM itself — so a proactive
+// notification reaches a person without the sink needing to know
+// whether it is addressing a channel or a human.
+type SlackSink struct {
+	Handler *SlackHandler
+}
+
+func (s *SlackSink) ChannelType() string { return ChannelSlack }
+
+func (s *SlackSink) Deliver(ctx context.Context, address, body string) error {
+	if s.Handler == nil {
+		return errors.New("slack sink: handler not wired")
+	}
+	if address == "" {
+		return errors.New("slack sink: empty address")
+	}
+	// No thread: a notification is a new topic, not a reply to
+	// whatever the last conversation happened to be about.
+	return s.Handler.api.postMessage(ctx, address, "", body)
+}
+
 // RESTSink is a placeholder — REST is request/response and can't
 // push asynchronously to an already-disconnected client. The
 // originator-channel reply path doesn't go through here; the

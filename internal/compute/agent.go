@@ -370,6 +370,13 @@ type ProcessMessageRequest struct {
 	Channel   string
 	ChannelID string
 
+	// SharedConversation marks an origin more than one person can read
+	// — a Slack channel, a Telegram group. Only the channel can know
+	// this, and getting it wrong in the permissive direction leaks one
+	// person's memories to an audience, so it defaults to false and
+	// every channel that can host a group must set it deliberately.
+	SharedConversation bool
+
 	// Hint routes this turn explicitly — "fast", "deep". Set by a
 	// channel or an API caller who already knows how much thought the
 	// turn deserves. An explicit hint SKIPS the preflight call: it
@@ -1429,6 +1436,7 @@ func (a *Agent) turnIdentityFor(req ProcessMessageRequest) TurnIdentity {
 		TurnID:    req.TurnID,
 		Channel:   req.Channel,
 		ChannelID: req.ChannelID,
+		Shared:    req.SharedConversation,
 		Timezone:  req.UserTimezone,
 	}
 	if req.Claims != nil {

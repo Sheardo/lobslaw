@@ -23,9 +23,16 @@ func (n *Node) wireGateway() error {
 	}
 
 	var tg *gateway.TelegramHandler
+	var sl *gateway.SlackHandler
 	var webhooks []*gateway.WebhookHandler
 	for i, ch := range n.cfg.Gateway.Channels {
 		switch ch.Type {
+		case "slack":
+			h, err := n.buildSlackHandler(ch)
+			if err != nil {
+				return fmt.Errorf("gateway.channels[%d] (slack): %w", i, err)
+			}
+			sl = h
 		case "telegram":
 			h, err := n.buildTelegramHandler(ch)
 			if err != nil {
@@ -55,35 +62,8 @@ func (n *Node) wireGateway() error {
 	}
 	n.webhookHandlers = webhooks
 
-	// Notification dispatch service: routes the channel-agnostic
-	// `notify` builtin through registered Sinks. Each gateway
-	// channel handler that supports outbound delivery registers
-	// its own Sink. Per-user channel addresses live in
-	// BucketUserPrefs (seeded from [[user]] config at boot).
-	if n.builtinsRegistry != nil && n.toolRegistry != nil && n.userPrefsSvc != nil {
-		notifySvc := notify.NewService(n.userPrefsSvc, n.log)
-		if tg != nil {
-			if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
-				n.log.Warn("notify: telegram sink register failed", "err", err)
-			}
-		}
-		if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
-			n.log.Warn("notify: rest sink register failed", "err", err)
-		}
-		n.notifySvc = notifySvc
-		if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
-			Service: notifySvc,
-		}); err != nil {
-			n.log.Warn("notify: builtin register failed", "err", err)
-		} else {
-			for _, td := range compute.NotifyToolDefs() {
-				if err := n.toolRegistry.Register(td); err != nil {
-					n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
-				}
-			}
-			n.log.Debug("compute: notify registered")
-		}
-	}
+	n.registerSlackTools(sl)
+	n.wireNotifySinks(tg, sl)
 
 	// HTTPPort=0 means "let the OS pick an ephemeral port" (test
 	// + dev setup that doesn't care about a fixed bind). Shipped
@@ -127,6 +107,7 @@ func (n *Node) wireGateway() error {
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
 		Telegram:         tg,
+		Slack:            sl,
 		Webhooks:         webhooks,
 		Prompts:          n.promptRegistry,
 		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
@@ -146,6 +127,132 @@ func (n *Node) wireGateway() error {
 		"require_auth", cfg.RequireAuth,
 	)
 	return nil
+}
+
+// registerSlackTools exposes slack_read_channel / slack_search.
+//
+// Registered here rather than alongside the other builtins in
+// wireCompute, because they need the handler and the gateway is wired
+// second. seedDefaultPolicyRules runs later still, in Start, so it sees
+// them — and skips them, since they are in noSeedTools.
+func (n *Node) registerSlackTools(sl *gateway.SlackHandler) {
+	if sl == nil || n.builtinsRegistry == nil || n.toolRegistry == nil {
+		return
+	}
+	if err := compute.RegisterSlackBuiltins(n.builtinsRegistry, compute.SlackToolConfig{
+		Reader: sl,
+	}); err != nil {
+		n.log.Warn("slack: read tools not registered", "err", err)
+		return
+	}
+	for _, td := range compute.SlackToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			n.log.Warn("slack: tool def register failed", "name", td.Name, "err", err)
+		}
+	}
+	n.log.Debug("compute: slack read tools registered")
+}
+
+// wireNotifySinks routes the channel-agnostic `notify` builtin through
+// each channel that can deliver outbound. Per-user channel addresses
+// live in BucketUserPrefs, seeded from [[user]] config at boot.
+func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHandler) {
+	if n.builtinsRegistry == nil || n.toolRegistry == nil || n.userPrefsSvc == nil {
+		return
+	}
+	notifySvc := notify.NewService(n.userPrefsSvc, n.log)
+	if tg != nil {
+		if err := notifySvc.RegisterSink(&gateway.TelegramSink{Handler: tg}); err != nil {
+			n.log.Warn("notify: telegram sink register failed", "err", err)
+		}
+	}
+	if sl != nil {
+		if err := notifySvc.RegisterSink(&gateway.SlackSink{Handler: sl}); err != nil {
+			n.log.Warn("notify: slack sink register failed", "err", err)
+		}
+	}
+	if err := notifySvc.RegisterSink(&gateway.RESTSink{}); err != nil {
+		n.log.Warn("notify: rest sink register failed", "err", err)
+	}
+	n.notifySvc = notifySvc
+
+	if err := compute.RegisterNotifyBuiltins(n.builtinsRegistry, compute.NotifyConfig{
+		Service: notifySvc,
+	}); err != nil {
+		n.log.Warn("notify: builtin register failed", "err", err)
+		return
+	}
+	for _, td := range compute.NotifyToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			n.log.Warn("notify: tool def register failed", "name", td.Name, "err", err)
+		}
+	}
+	n.log.Debug("compute: notify registered")
+}
+
+// buildSlackHandler resolves both Slack tokens and constructs the
+// handler. Two tokens with different jobs: the bot token signs Web API
+// calls, the app token opens Socket Mode. Either missing is fatal at
+// boot rather than at first message — a Slack channel that cannot
+// connect or cannot reply is not a degraded channel, it is a silent one.
+func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.SlackHandler, error) {
+	botToken, err := n.resolveChannelSecret(ch.BotTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("bot_token_ref %q: %w", ch.BotTokenRef, err)
+	}
+	if botToken == "" {
+		return nil, fmt.Errorf("bot_token_ref %q resolved to empty — required for Slack (the xoxb- token)", ch.BotTokenRef)
+	}
+	appToken, err := n.resolveChannelSecret(ch.AppTokenRef)
+	if err != nil {
+		return nil, fmt.Errorf("app_token_ref %q: %w", ch.AppTokenRef, err)
+	}
+	if appToken == "" {
+		return nil, fmt.Errorf("app_token_ref %q resolved to empty — required for Slack Socket Mode (the xapp- token, needs connections:write)", ch.AppTokenRef)
+	}
+
+	// Slack delivers each event to exactly ONE open Socket Mode
+	// connection. Two nodes both connected would split a conversation
+	// between them at random, so the loop is pinned to the leader
+	// wherever there is one to pin it to.
+	var gate singleton.Gate
+	if n.leaderGate != nil {
+		gate = n.leaderGate
+	}
+
+	return gateway.NewSlackHandler(gateway.SlackConfig{
+		BotToken:          botToken,
+		AppToken:          appToken,
+		AllowedChannels:   ch.AllowedChannels,
+		UserScopes:        ch.UserScopes,
+		UnknownUserScope:  n.cfg.Gateway.UnknownUserScope,
+		Roles:             n.resolveUserRoles,
+		Identity:          n.identityResolver(),
+		DefaultBudget:     compute.FromComputeConfig(n.cfg.Compute),
+		Notices:           n.notices,
+		Prompts:           n.promptRegistry,
+		ConfirmationTTL:   n.cfg.Gateway.ConfirmationTimeout,
+		Approvals:         n.approvals,
+		ApprovalRules:     n.approvalRules,
+		Leaser:            n.newSessionLeaser(),
+		Sessions:          n.newSessionStore(),
+		Compactor:         n.newSessionCompactor(),
+		Conversation:      n.conversationConfig(),
+		QueueMode:         gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:     n.cfg.Gateway.QueueDebounce,
+		RelatednessJudge:  n.newRelatednessJudge(),
+		QueueBurstWindow:  n.cfg.Gateway.QueueBurstWindow,
+		QueueBurstReset:   n.cfg.Gateway.QueueBurstReset,
+		TypingInterval:    n.cfg.Gateway.TypingInterval,
+		InterimTimeout:    n.cfg.Gateway.InterimTimeout,
+		HardTimeout:       n.cfg.Gateway.HardTimeout,
+		Soul:              n.soulProvider,
+		ArtifactOpener:    n.artifactOpener(),
+		IncomingDir:       n.incomingDir(),
+		CommandAuthorizer: n.commandAuthorizerOrNil(),
+		Gate:              gate,
+		Logger:            n.log,
+	}, n.agent)
 }
 
 // buildTelegramHandler resolves bot token + webhook secret from the
@@ -215,22 +322,23 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		UserIDScopes:     userScopes,
 		// Nil when enrolment is not wired, which disables channel
 		// approval and leaves the CLI path working.
-		Enrolments:       n.enrolmentDecider(),
-		Roles:            n.resolveUserRoles,
-		UnknownUserScope: n.cfg.Gateway.UnknownUserScope,
-		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
-		Prompts:          n.promptRegistry,
-		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
-		TypingInterval:   n.cfg.Gateway.TypingInterval,
-		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
-		HardTimeout:      n.cfg.Gateway.HardTimeout,
-		Soul:             n.soulProvider,
-		Logger:           n.log,
-		Gate:             gate,
-		ChannelState:     channelState,
-		Sessions:         n.newSessionStore(),
-		Compactor:        n.newSessionCompactor(),
-		Conversation:     n.conversationConfig(),
+		Enrolments:        n.enrolmentDecider(),
+		CommandAuthorizer: n.commandAuthorizerOrNil(),
+		Roles:             n.resolveUserRoles,
+		UnknownUserScope:  n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget:     compute.FromComputeConfig(n.cfg.Compute),
+		Prompts:           n.promptRegistry,
+		ConfirmationTTL:   n.cfg.Gateway.ConfirmationTimeout,
+		TypingInterval:    n.cfg.Gateway.TypingInterval,
+		InterimTimeout:    n.cfg.Gateway.InterimTimeout,
+		HardTimeout:       n.cfg.Gateway.HardTimeout,
+		Soul:              n.soulProvider,
+		Logger:            n.log,
+		Gate:              gate,
+		ChannelState:      channelState,
+		Sessions:          n.newSessionStore(),
+		Compactor:         n.newSessionCompactor(),
+		Conversation:      n.conversationConfig(),
 	}, n.agent)
 }
 

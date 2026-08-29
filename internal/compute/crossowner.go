@@ -47,6 +47,15 @@ func readAudience(ctx context.Context, turn TurnIdentity, authz CrossOwnerAuthor
 	if authz != nil && authz.AllowsAny(ctx, turn.Claims()) {
 		return memory.Everyone()
 	}
+	// A conversation several people can read gets the records that
+	// conversation produced, on top of the speaker's own. Not the other
+	// way round: this WIDENS a shared channel to its own history, it
+	// never narrows a DM, and it never crosses between two channels.
+	if turn.Shared {
+		if key := turn.SessionKey(); key.Channel != "" && key.ChannelID != "" {
+			return memory.ForConversation(turn.Principal, key.Channel+":"+key.ChannelID)
+		}
+	}
 	return memory.For(turn.Principal)
 }
 

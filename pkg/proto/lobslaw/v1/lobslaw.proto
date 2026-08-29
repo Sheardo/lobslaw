@@ -418,6 +418,20 @@ message VectorRecord {
   // actually happens. Empty means a record written before this field
   // existed, which readers treat as "unknown", never as "matches".
   string embedding_model = 12;
+  // session_ref addresses the conversation this vector came from, as
+  // "<channel>:<channel_id>" — the same value carried by the
+  // EpisodicRecord it embeds, stamped here because the recall scan
+  // reads vectors and never sees the episodic record until after it
+  // has already chosen its candidates.
+  //
+  // Exists for shared conversations. In a channel several people can
+  // read, "may this caller see this record" stops being answerable
+  // from ownership alone: a memory the speaker owns is fair game, and
+  // so is one this conversation produced, but one person's private
+  // memory surfacing because somebody else spoke is a disclosure.
+  // Empty means a record with no conversation origin — a scheduled
+  // task, a commitment fire — which no conversation scope matches.
+  string session_ref = 13;
 }
 
 // VectorScanEntry is a narrow VIEW over VectorRecord's wire format: the
@@ -443,6 +457,7 @@ message VectorScanEntry {
   string owner = 9;
   Visibility visibility = 10;
   float norm = 11;
+  string session_ref = 13;
 }
 
 message EpisodicRecord {
