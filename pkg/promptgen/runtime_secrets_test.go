@@ -30,9 +30,20 @@ func TestRuntimeNamesConfiguredVaults(t *testing.T) {
 	if !strings.Contains(body, "bw:stripe/live-key") {
 		t.Errorf("a worked example should use a real configured label:\n%s", body)
 	}
-	// The instruction that stops a secret entering the transcript.
-	if !strings.Contains(body, "NEVER ask the user to paste") {
-		t.Errorf("must forbid asking for secrets in chat:\n%s", body)
+	// The action has to come FIRST. An earlier version led with the
+	// prohibitions and the model reproduced exactly those — answering
+	// "no, I can't read your vault", correctly and uselessly, without
+	// mentioning that it knew where the secret should go.
+	action := strings.Index(body, "tell them to put it")
+	prohibition := strings.Index(body, "Never ask for the secret")
+	if action < 0 || prohibition < 0 {
+		t.Fatalf("both halves should be present:\n%s", body)
+	}
+	if action > prohibition {
+		t.Error("the prohibition leads; a prompt that is mostly what NOT to do gets obeyed as what to say")
+	}
+	if !strings.Contains(body, "offer it without being asked") {
+		t.Errorf("must instruct it to volunteer the vault, not wait to be asked:\n%s", body)
 	}
 	// And the honesty about what it cannot do, so it does not offer.
 	if !strings.Contains(body, "cannot read vault values") {

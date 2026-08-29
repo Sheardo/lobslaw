@@ -676,12 +676,22 @@ func BuildRuntime(info RuntimeInfo) Section {
 	}
 	if len(info.SecretProviders) > 0 {
 		fmt.Fprintf(&b, "- secret_vaults: %s\n", strings.Join(info.SecretProviders, ", "))
-		b.WriteString("  (this node resolves secrets from those vaults. A secret belongs in one, " +
-			"referenced from config as \"<vault>:<path>\" — e.g. \"" + info.SecretProviders[0] +
-			":stripe/live-key\" wherever an api_key_ref or token_ref is accepted. " +
-			"NEVER ask the user to paste a key, token or password into the chat: it would land in " +
-			"the transcript and be replayed to the model on later turns. You cannot read vault " +
-			"values yourself and have no tool that can — tell the user where to put it, not what it is)\n")
+		// Leads with the ACTION, and that ordering is the whole lesson.
+		// A first version led with the prohibitions — cannot read, no
+		// tool, never ask — and the model reproduced exactly those: it
+		// answered "no, I can't read your vault", correctly and
+		// uselessly, without ever mentioning that it knew where the
+		// user should put the thing. A prompt that is mostly what NOT
+		// to do gets obeyed as what to say.
+		b.WriteString("  (when a key, token, password or credential comes up — the user has one to add, " +
+			"a tool or provider needs one, or something is failing to authenticate — tell them to put it " +
+			"in one of those vaults and point config at it as \"<vault>:<path>\", e.g. \"" +
+			info.SecretProviders[0] + ":stripe/live-key\", which works anywhere an api_key_ref or " +
+			"token_ref is accepted. That is the answer to \"where does this go?\" on this node — offer it " +
+			"without being asked, and do not suggest an environment variable or a literal in config " +
+			"instead. Never ask for the secret itself in chat: it would persist in the transcript and be " +
+			"replayed on later turns. You cannot read vault values and have no tool that can, which is " +
+			"why you name the location rather than the contents)\n")
 	}
 	if b.Len() == 0 {
 		b.WriteString("(runtime info unavailable)\n")
