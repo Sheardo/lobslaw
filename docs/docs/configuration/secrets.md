@@ -72,6 +72,8 @@ The default is on because a CLI that prints a trailing newline is the norm, and 
 
 The split matters because most of what a vault CLI needs in its environment is not secret — a config directory, a CA bundle path, an account alias — and it exists in exactly the shape `[mcp.servers.<name>]` already uses. If both name the same variable, `secret_env` wins: that is the only ordering that cannot silently downgrade a secret to a literal.
 
+`env` used to be the reference field. A config carrying `env = { BW_SESSION = "env:BW_SESSION" }` is refused at boot with an error naming `secret_env`, rather than quietly handing the CLI the literal string `"env:BW_SESSION"` as its token.
+
 TOML inline tables must fit on one line, so use a sub-table when the values are long:
 
 ```toml
