@@ -86,7 +86,6 @@ func TestTheKeyIsWhatTheUserIsShown(t *testing.T) {
 		`git status --short`,
 		`ssh host uptime`,
 		`sudo systemctl restart nginx`,
-		`grep '*.go'`,
 	} {
 		params := map[string]string{"command": cmd}
 		resource, grantable := ShellGrantResource(params)
@@ -247,6 +246,12 @@ func TestAQuotedMetacharacterIsData(t *testing.T) {
 	if _, ok := NormaliseCommand(`grep *.go .`); ok {
 		t.Error("an unquoted glob was accepted")
 	}
+	// And a key carrying a literal `*` is not grantable, because
+	// ApprovalRules.Mint refuses a wildcard resource — offering the
+	// button would report success and store nothing.
+	if _, grantable := ShellGrantResource(map[string]string{"command": `grep '*.go' .`}); grantable {
+		t.Error("a key containing a wildcard was offered as grantable")
+	}
 }
 
 func TestTheWorkingDirectoryIsPartOfTheGrantWhenSupplied(t *testing.T) {
@@ -299,5 +304,67 @@ func TestTheSummaryFlagsNonASCII(t *testing.T) {
 	summary := ShellCommandSummary(map[string]string{"command": "g\u0456t status"})
 	if !strings.Contains(summary, "non-ASCII") {
 		t.Errorf("summary = %q; a homoglyph command was not flagged", summary)
+	}
+}
+
+// The review found these. Each is a case where the key and the command
+// were the same string to a reader and different operations to the
+// shell — which is the one thing this design cannot tolerate, because
+// the key is what the user reads AND what the minted rule stores, while
+// the raw command is what actually runs.
+func TestAKeyNeverNamesADifferentOperationThanItRuns(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cmd  string
+		why  string
+	}{
+		{
+			"comment strips the tail",
+			`git clean -fdx #-n`,
+			"sh runs `git clean -fdx`; quoting the token would render a key naming a --dry-run that never happens",
+		},
+		{"comment at the end", `ls #foo`, "sh runs `ls`"},
+		{"comment mid-command", `rm -rf /tmp/x #--dry-run`, "the guard flag is a comment"},
+		{
+			"bang negates and still runs",
+			`! rm -rf /home/x`,
+			"`! rm` runs rm; `'!' rm` is command-not-found — one key, two behaviours",
+		},
+		{"time is a reserved word", `time rm -rf /tmp/x`, "shell builtin vs /usr/bin/time"},
+		{"quoted time is not", `'time' rm -rf /tmp/x`, "renders identically to the reserved word"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if key, ok := NormaliseCommand(tc.cmd); ok {
+				t.Errorf("NormaliseCommand(%q) = %q, want refused — %s", tc.cmd, key, tc.why)
+			}
+		})
+	}
+}
+
+// The exploit in full: approving the harmless form must not authorise
+// the destructive one.
+func TestTheCommentExploitCannotShareAKey(t *testing.T) {
+	t.Parallel()
+	harmless, okA := NormaliseCommand(`git clean -fdx '#-n'`)
+	destructive, okB := NormaliseCommand(`git clean -fdx #-n`)
+	if okA && okB && harmless == destructive {
+		t.Fatalf("both forms share the key %q; an approval for the first authorises the second", harmless)
+	}
+}
+
+// A cwd that cannot be shown safely must not be printed raw into the
+// prompt — that is the display deception isInvisible exists to stop.
+func TestAnUnprintableCwdIsNotRenderedIntoThePrompt(t *testing.T) {
+	t.Parallel()
+	params := map[string]string{"command": "rm -rf build", "cwd": "/home/x/safe\u202Eevil"}
+	summary := ShellCommandSummary(params)
+	if strings.ContainsRune(summary, '\u202E') {
+		t.Errorf("a bidi override reached the prompt: %q", summary)
+	}
+	if !strings.Contains(summary, "non-ASCII") && !strings.Contains(summary, "withheld") {
+		t.Errorf("summary = %q; the user is not told the directory was suppressed", summary)
 	}
 }

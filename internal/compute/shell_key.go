@@ -89,6 +89,23 @@ func NormaliseCommand(raw string) (string, bool) {
 			// Substitution and escaping. Both change what the tokens
 			// mean in ways the re-rendering below would not preserve.
 			return "", false
+		case r == '#':
+			// A comment, and the reason this is refused rather than
+			// quoted: `ls #foo` runs `ls`, but re-rendering the token
+			// yields `ls '#foo'`, which runs ls against a file called
+			// "#foo". The key would then name a longer command than the
+			// one that actually runs — so an approval given for
+			// `git clean -fdx '#-n'` (which deletes nothing) would be
+			// matched by `git clean -fdx #-n` (which deletes
+			// everything untracked). The whole design rests on the key
+			// and the command being the same operation.
+			return "", false
+		case r == '!':
+			// History expansion in an interactive shell, and a reserved
+			// word in front position: `! rm -rf x` negates rm's exit
+			// status and still runs it, while the quoted `'!' rm -rf x`
+			// is a command-not-found. One key, two behaviours.
+			return "", false
 		}
 	}
 
@@ -100,6 +117,13 @@ func NormaliseCommand(raw string) (string, bool) {
 	// so "PATH=/tmp git status" is not "git status" and must not
 	// inherit its grant.
 	if isEnvAssignment(tokens[0]) {
+		return "", false
+	}
+	// A reserved word in front position means the shell, not a program.
+	// `time ls` and `'time' ls` render identically and do different
+	// things — the first is the shell builtin, the second is
+	// /usr/bin/time — so no single key describes both.
+	if shellReservedWords[tokens[0]] {
 		return "", false
 	}
 
@@ -190,6 +214,16 @@ func renderToken(tok string) string {
 		return tok
 	}
 	return "'" + strings.ReplaceAll(tok, "'", `'\''`) + "'"
+}
+
+// shellReservedWords are the words the shell interprets itself rather
+// than executing. Quoting one changes what runs while leaving the
+// rendered token identical, so a key cannot distinguish the two.
+var shellReservedWords = map[string]bool{
+	"time": true, "do": true, "done": true, "if": true, "then": true,
+	"else": true, "elif": true, "fi": true, "case": true, "esac": true,
+	"while": true, "until": true, "for": true, "in": true,
+	"function": true, "select": true, "coproc": true,
 }
 
 // isInvisible reports the format, bidi and zero-width runes that can

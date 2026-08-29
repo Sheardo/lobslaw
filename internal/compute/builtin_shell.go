@@ -90,6 +90,20 @@ func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, i
 	if err := policy.CheckCommandPaths(cmd); err != nil {
 		return nil, 2, err
 	}
+	// And again on the canonical form, because the floor matches text:
+	// its filesystem-wipe pattern catches `rm -rf /` but not
+	// `rm -rf '/'`, which is the same operation with quotes on. The
+	// normaliser strips exactly that difference, so checking its output
+	// closes the quoting bypass without teaching the floor about shell
+	// syntax.
+	if key, ok := NormaliseCommand(cmd); ok && key != cmd {
+		if err := policy.CheckCommand(key); err != nil {
+			return nil, 2, err
+		}
+		if err := policy.CheckCommandPaths(key); err != nil {
+			return nil, 2, err
+		}
+	}
 
 	timeout := shellDefaultTimeout
 	if raw := args["timeout_secs"]; raw != "" {

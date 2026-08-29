@@ -188,8 +188,16 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// A sensitive-but-not-secret path escalates a policy allow to a
 	// confirmation. After policyAllow, so a path the operator's rules
 	// already deny is refused rather than prompted about.
+	// Honours the turn approval for the same reason policy does: this
+	// is an escalate-to-human verdict, and the human just answered it.
+	// Without the check the resumed call meets it again, raises another
+	// prompt, and every tap produces a new one — a loop the resume
+	// re-execution would drive indefinitely. PathDenied is a different
+	// verdict on a different path and is not reachable from here.
 	if err := hardlineConfirm(req.Params); err != nil {
-		return nil, err
+		if !turnApproved(ctx, "tool:exec", tool.Name) {
+			return nil, err
+		}
 	}
 	// The per-tool gate — the memory write staging, the per-command
 	// shell approval — for the same reason and in the same place: a

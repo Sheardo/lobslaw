@@ -89,9 +89,18 @@ dropped, so `git status --short` and `git push --force` are different grants. Ta
 allow* therefore stops one command from being asked about, not the shell.
 
 Some commands have no stable identity and are asked about **every time**, with no scope button
-offered: anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a glob, or a `VAR=`
-prefix. What runs depends on the environment or on more than one program, so no grant could
-honestly name it. Those are evaluated under the reserved resource `!unclassified`.
+offered: anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
+`#`, a `!`, a `VAR=` prefix, or a shell reserved word in front position. What runs depends on the
+environment, or on more than one program, or on shell syntax the key cannot preserve — so no grant
+could honestly name it. Those are evaluated under the reserved resource `!unclassified`, and an
+approval for one is spent on that single call rather than covering the class for the rest of the
+turn.
+
+`#` and `!` are refused rather than quoted because quoting them changes what runs: `ls #foo`
+executes `ls`, while the rendered key `ls '#foo'` executes `ls` against a file named `#foo`. A key
+that names a longer command than the one that actually runs is the one failure this design cannot
+absorb — an approval for `git clean -fdx '#-n'` (which deletes nothing) would otherwise be matched
+by `git clean -fdx #-n` (which deletes everything untracked).
 
 To stop being asked about a family of commands, write a rule. This is the deliberate,
 visible, revocable form of "generalise", and it is the answer to *"I don't want to approve every

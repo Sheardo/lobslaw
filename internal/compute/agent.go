@@ -781,7 +781,14 @@ func (a *Agent) runLoop(ctx context.Context, req ProcessMessageRequest, messages
 	// thing with that: they stop calling the tool and explain the
 	// refusal instead. So the approval was recorded, the gate would
 	// have passed, and the command still never ran.
-	if resuming {
+	//
+	// Gated on the turn approval, not on `resuming` alone. A BUDGET
+	// confirmation also resumes, and its transcript tail is the last
+	// SUCCESSFUL tool result rather than a refusal — so a document or
+	// web page containing the sentinel phrase could steer the sentinel
+	// scan onto a completed call and have it run a second time.
+	// Approving a spend increase must not re-run anything.
+	if resuming && turnApprovalPending(ctx) {
 		if tc, idx, ok := pendingToolCall(messages); ok {
 			inv, confirmation, err := a.runToolCall(ctx, req, tc)
 			if err != nil {
@@ -1794,14 +1801,33 @@ func pendingToolCall(msgs []Message) (ToolCall, int, bool) {
 			return ToolCall{}, 0, false
 		}
 		id := msgs[i].ToolCallID
+		if id == "" {
+			// Nothing to match on. Some OpenAI-compatible servers omit
+			// the id entirely, and guessing which call this was is how
+			// the wrong one gets re-run.
+			return ToolCall{}, 0, false
+		}
 		for j := i - 1; j >= 0; j-- {
 			if msgs[j].Role != "assistant" {
 				continue
 			}
+			// Reverse, and refusing on a duplicate: ids come off the
+			// wire verbatim and are not guaranteed unique, so a message
+			// carrying two calls with the same id must not resolve to
+			// whichever happens to be first.
+			var found ToolCall
+			matches := 0
 			for _, tc := range msgs[j].ToolCalls {
 				if tc.ID == id {
-					return tc, i, true
+					found = tc
+					matches++
 				}
+			}
+			if matches == 1 {
+				return found, i, true
+			}
+			if matches > 1 {
+				return ToolCall{}, 0, false
 			}
 		}
 		return ToolCall{}, 0, false

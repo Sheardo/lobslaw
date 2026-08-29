@@ -95,6 +95,14 @@ func ShellGrantResource(params map[string]string) (string, bool) {
 		// Matchable, not grantable. See shellKeyDisplayMax.
 		return key, false
 	}
+	if strings.Contains(key, "*") {
+		// ApprovalRules.Mint refuses any resource containing a
+		// wildcard, so offering "always" here would render a button
+		// that reports success and stores nothing. A quoted glob —
+		// `grep '*.go'` — is a literal to the shell but still a
+		// wildcard to the engine's matcher.
+		return key, false
+	}
 	return key, true
 }
 
@@ -123,7 +131,16 @@ func ShellCommandSummary(params map[string]string) string {
 		// Nothing will be minted, so there is no key to agree with —
 		// but the user still has to see exactly what runs.
 		if cwd := strings.TrimSpace(params["cwd"]); cwd != "" {
-			b.WriteString("(cwd=" + cwd + ") ")
+			// Only when it is safe to render. cwdUsableInKey rejects
+			// the runes that make one string display as another, and
+			// this is the branch those calls land in — printing the raw
+			// value here would put a bidi override into the prompt and
+			// undo the check that rejected it.
+			if cwdUsableInKey(cwd) {
+				b.WriteString("(cwd=" + cwd + ") ")
+			} else {
+				b.WriteString("(cwd withheld: unprintable) ")
+			}
 		}
 		b.WriteString(cmd)
 	}
@@ -132,7 +149,7 @@ func ShellCommandSummary(params map[string]string) string {
 	if !grantable {
 		b.WriteString(" (asked every time: this command has no stable form to remember)")
 	}
-	if hasNonASCII(resource) || hasNonASCII(cmd) {
+	if hasNonASCII(resource) || hasNonASCII(cmd) || hasNonASCII(params["cwd"]) {
 		b.WriteString(" — note: contains non-ASCII characters")
 	}
 	if fields := strings.Fields(cmd); len(fields) > 0 {

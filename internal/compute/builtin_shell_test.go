@@ -77,7 +77,7 @@ func TestTheDenylistedCommandsAreNowAskedAboutRatherThanRefused(t *testing.T) {
 	} {
 		t.Run(c, func(t *testing.T) {
 			t.Parallel()
-			err := checkShell(t, e, context.Background(), c)
+			err := checkShell(context.Background(), t, e, c)
 			if !errors.Is(err, ErrRequireConfirm) {
 				t.Errorf("%q: err = %v, want a confirmation the user can answer", c, err)
 			}
