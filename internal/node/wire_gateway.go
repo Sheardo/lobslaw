@@ -421,8 +421,12 @@ func (n *Node) registerMCPToolsWithCompute() {
 func (n *Node) startMCPFromConfig(ctx context.Context) error {
 	if n.mcpLoader == nil {
 		n.mcpLoader = mcp.NewLoader(mcp.LoaderConfig{
-			Logger:         n.log,
-			SecretResolver: config.ResolveSecret,
+			Logger: n.log,
+			// Through the node's resolver, not pkg/config directly:
+			// an MCP server's secret_env is as entitled to name a
+			// vault as a provider key is, and this was the one path
+			// that still bypassed the injected resolver.
+			SecretResolver: n.resolveChannelSecret,
 			// MCP servers don't carry the network_isolation flag —
 			// the manifest field is skill-only. Always pass false.
 			ProxyURL: func(role string) string { return n.subprocessProxyURL(role, false) },

@@ -1010,9 +1010,9 @@ func parseUserScopes(raw map[string]string) (map[int64]string, error) {
 }
 
 // resolveChannelSecret is the secret-ref resolver used by channel
-// handlers. Defaults to ChannelSecretResolver / the main APIKeyResolver
-// so tests can inject canned secrets without touching env:/file:/kms:
-// resolution.
+// handlers, MCP servers and storage mounts. Defaults to
+// ChannelSecretResolver / the main APIKeyResolver so tests can inject
+// canned secrets without touching real resolution.
 func (n *Node) resolveChannelSecret(ref string) (string, error) {
 	if n.cfg.ChannelSecretResolver != nil {
 		return n.cfg.ChannelSecretResolver(ref)
@@ -1021,9 +1021,15 @@ func (n *Node) resolveChannelSecret(ref string) (string, error) {
 }
 
 // resolveAPIKey looks up a provider's APIKeyRef via the configured
-// resolver, falling back to config.ResolveSecret for the default
-// "env:/file:/kms:" reference scheme. Empty ref means "no auth",
-// which is legitimate for local providers like Ollama.
+// resolver.
+//
+// cmd/lobslaw injects one built from [[secrets.providers]], so a ref
+// may name a vault. The fallback is the bootstrap scheme set —
+// env: and file: — which is what a node constructed directly in a test
+// gets, and what every deployment got before providers existed.
+//
+// Empty ref means "no auth", which is legitimate for local providers
+// like Ollama.
 func (n *Node) resolveAPIKey(ref string) (string, error) {
 	if ref == "" {
 		return "", nil

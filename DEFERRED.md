@@ -230,3 +230,13 @@ Mirroring is likewise not done. `multilingual-e5-large` (2.2 GB) and `bge-m3` (2
 The part that actually blocked people is fixed instead: every supported model has a verified `download_url` in the user documentation, and the `all-MiniLM-L6-v2` release documents the mirror layout for anyone hosting their own.
 
 **Trigger to revisit:** a deployment that must be multilingual AND cannot reach HuggingFace.
+
+---
+
+### Egress scoping for secret-provider subprocesses
+
+A `bw` or `op` CLI fetching a secret egresses directly rather than through the smokescreen proxy, so nothing bounds which host a secret provider may reach.
+
+Not done because it cannot be done uniformly. `cmd/lobslaw` resolves `memory.encryption.key_ref` before `node.New`, which is before the egress stage exists — so some resolutions could be proxied and others could not, and a security control that applies to an unpredictable subset is worse than one that visibly applies to none. The mechanism is otherwise ready: `internal/egress` already has `ForSkill` and `ForMCP`, and a `secrets/<label>` role would follow the same shape.
+
+**Trigger to revisit:** either the bootstrap floor shrinks so that all resolution happens inside the wiring stages, or a deployment needs a network-backed secret provider whose reachable hosts must be bounded.

@@ -48,6 +48,7 @@ const sidebars: SidebarsConfig = {
         "configuration/reference",
         "configuration/policy-rules",
         "configuration/providers",
+        "configuration/secrets",
         "configuration/channels",
         "configuration/storage-mounts",
       ],

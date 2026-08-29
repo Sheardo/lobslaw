@@ -147,7 +147,7 @@ options = {
 }
 ```
 
-**Secret handling.** Keys suffixed `_ref` are split out at factory time and resolved via the same secret-resolver LLM providers use (env:, file:, kms:). The resolved values become environment variables on the rclone subprocess — never written to logs, never stored in the Raft log.
+**Secret handling.** Keys suffixed `_ref` are split out at factory time and resolved via the same secret resolver LLM providers use (`env:`, `file:`, or any `[[secrets.providers]]` label). The resolved values become environment variables on the rclone subprocess — never written to logs, never stored in the Raft log.
 
 **FUSE prerequisites:**
 - `/dev/fuse` access on the container.

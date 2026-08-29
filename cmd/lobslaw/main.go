@@ -30,6 +30,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/node"
 	"github.com/jmylchreest/lobslaw/internal/sandbox"
+	"github.com/jmylchreest/lobslaw/internal/secrets"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/crypto"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
@@ -331,6 +332,28 @@ func main() {
 	// operator decision, never a persisted setting.
 	nodeCfg.AllowEmbeddingModelChange = f.allowEmbeddingModelChange
 
+	// One resolver for the whole node, injected through the two hooks
+	// that already existed for it. Built here because it must outlive
+	// nothing and precede everything: a provider key is resolved during
+	// wiring, so the resolver has to be ready before node.New.
+	//
+	// Failing to build one is fatal. A declared vault that cannot be
+	// constructed means every reference through it is about to fail,
+	// and booting anyway would turn one clear error into a scatter of
+	// unrelated ones.
+	resolver, err := secrets.FromConfig(cfg.Secrets, secrets.DefaultRegistry(), logger)
+	if err != nil {
+		logger.Error("secret providers", "error", err)
+		os.Exit(1)
+	}
+	nodeCfg.APIKeyResolver = resolver.Resolve
+	nodeCfg.ChannelSecretResolver = resolver.Resolve
+	if len(cfg.Secrets.Providers) > 0 {
+		// Said out loud, because the alternative is discovering which
+		// vault a reference went to by reading the source.
+		logger.Info("secrets: providers wired", "schemes", secretSchemes(cfg.Secrets))
+	}
+
 	n, err := node.New(nodeCfg)
 	if err != nil {
 		logger.Error("node.New", "error", err)
@@ -382,6 +405,16 @@ func main() {
 // the other fields node.New needs from the parsed config. The main
 // binary intentionally does NOT read the CA private key — that field
 // isn't present on MTLSConfig in the first place.
+// secretSchemes lists the declared provider labels for the boot line.
+// Labels only — never a path, and certainly never a value.
+func secretSchemes(c config.SecretsConfig) []string {
+	out := make([]string, 0, len(c.Providers))
+	for _, p := range c.Providers {
+		out = append(out, p.Label)
+	}
+	return out
+}
+
 func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFunction, logger *slog.Logger) (node.Config, error) {
 	needsRaft := containsFn(funcs, types.FunctionMemory) || containsFn(funcs, types.FunctionPolicy)
 
@@ -440,7 +473,13 @@ func buildNodeConfig(cfg *config.Config, nodeID string, funcs []types.NodeFuncti
 		if cfg.Memory.Encryption.KeyRef == "" {
 			return node.Config{}, fmt.Errorf("memory.encryption.key_ref required when memory or policy function is enabled")
 		}
-		raw, err := config.ResolveSecret(cfg.Memory.Encryption.KeyRef)
+		// Bootstrap, not the full resolver: this runs before node.New,
+		// so no wiring stage — and therefore no secret provider —
+		// exists yet. Bootstrap says so in its error rather than
+		// reporting an unknown scheme, which is a confusing thing to
+		// read when the vault is configured and working further down
+		// the same file.
+		raw, err := secrets.Bootstrap(cfg.Memory.Encryption.KeyRef)
 		if err != nil {
 			return node.Config{}, fmt.Errorf("resolve memory key: %w", err)
 		}

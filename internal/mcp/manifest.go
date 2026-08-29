@@ -24,7 +24,8 @@ type Manifest struct {
 
 // ServerConfig is one server entry. Command + Args compose the
 // argv the client spawns; Env is plain-text pairs; SecretEnv names
-// env vars whose values come from secret refs (env:/file:/kms:)
+// env vars whose values come from secret refs (env:, file:, or any
+// [[secrets.providers]] label)
 // resolved before the subprocess spawns — same convention rclone
 // and Telegram use. Everything is a concrete string in argv/env by
 // the time the subprocess starts.
