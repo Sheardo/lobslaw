@@ -99,6 +99,13 @@ func (r *Resolver) ResolveContext(ctx context.Context, ref string) (string, erro
 		return config.ResolveSecret(ref)
 	}
 
+	if strings.TrimSpace(path) == "" {
+		// "bw:" is a typo, not a request. Left alone it reaches the
+		// backend as an empty item name and comes back as whatever that
+		// CLI says about nothing, which is a long way from the config
+		// line that caused it.
+		return "", fmt.Errorf("%w: %q names provider %q but no path", types.ErrMissingSecret, ref, scheme)
+	}
 	provider, ok := r.providers[normalise(scheme)]
 	if !ok {
 		return "", fmt.Errorf("%w: %q; configured providers: %s",

@@ -416,3 +416,22 @@ func TestExecErrorsNeverIncludeStdout(t *testing.T) {
 		t.Errorf("stderr should survive so the operator learns why: %v", err)
 	}
 }
+
+// "bw:" is a typo, not a request. Reaching the backend with an empty
+// item name returns whatever that CLI says about nothing, which is a
+// long way from the config line that caused it.
+func TestResolverRejectsAnEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	r := NewResolver(map[string]Provider{"bw": stubProvider{}}, 0)
+	_, err := r.Resolve("bw:")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !errors.Is(err, types.ErrMissingSecret) {
+		t.Errorf("should wrap ErrMissingSecret; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "bw") {
+		t.Errorf("error should name the provider; got %v", err)
+	}
+}
