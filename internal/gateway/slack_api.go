@@ -630,6 +630,32 @@ func (s *slackSocket) ack(ctx context.Context, envelopeID string) error {
 	return s.conn.Write(ctx, websocket.MessageText, b)
 }
 
+// ping proves the connection is alive end to end.
+//
+// This is the liveness check a read deadline cannot be. coder/websocket
+// answers Slack's pings inside Read, but answering one does not make
+// Read RETURN — an idle Socket Mode connection is legitimately silent
+// for minutes at a time, so a deadline on Read kills healthy sockets
+// and only looks like it works on a busy workspace.
+//
+// Ping writes a ping frame and blocks until the matching pong arrives
+// or ctx expires, which is a genuine round trip and cannot be satisfied
+// by a partitioned link.
+func (s *slackSocket) ping(ctx context.Context) error {
+	return s.conn.Ping(ctx)
+}
+
 func (s *slackSocket) close() {
 	_ = s.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// closeNow tears the connection down without the closing handshake.
+//
+// For a peer that has stopped answering, the graceful Close is the
+// wrong tool: it writes a close frame and waits for the peer's reply,
+// which is precisely what a dead peer will not send — so the call meant
+// to unblock Read can itself block. CloseNow drops the TCP connection
+// and Read returns immediately.
+func (s *slackSocket) closeNow() {
+	_ = s.conn.CloseNow()
 }
