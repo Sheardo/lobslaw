@@ -328,7 +328,7 @@ Each plugin can include a `.mcp.json` at its root. Format mirrors Claude Code's 
 Fields:
 - `command` / `args` — subprocess argv; `command` required unless `disabled=true`.
 - `env` — plain KEY=value pairs.
-- `secret_env` — maps env-var names to secret refs (`env:`, `file:`, `kms:`). Resolved via the same resolver LLM providers + rclone use; refs never appear in process argv or logs.
+- `secret_env` — maps env-var names to secret refs (`env:`, `file:`, or any `[[secrets.providers]]` label). Resolved via the same resolver LLM providers + rclone use; refs never appear in process argv or logs.
 - `disabled` — honoured by the loader so operators can ship a manifest with a temporarily-off entry without removing it.
 
 ### Boot flow

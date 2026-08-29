@@ -27,6 +27,7 @@ type Config struct {
 	Logging   LoggingConfig    `koanf:"logging"`
 	MCP       MCPConfig        `koanf:"mcp"`
 	Security  SecurityConfig   `koanf:"security"`
+	Secrets   SecretsConfig    `koanf:"secrets"`
 	Identity  IdentityConfig   `koanf:"identity"`
 	// Trace is turn tracing. Off by default.
 	Trace TraceConfig `koanf:"trace"`
@@ -963,7 +964,8 @@ type MCPConfig struct {
 // MCPServerConfig is one server's subprocess specification.
 // Command + Args compose the argv; Env pairs are plaintext;
 // SecretEnv names env vars whose values resolve via secret refs
-// (env:/file:/kms:) the same way every other lobslaw secret does.
+// (env:, file:, or a [[secrets.providers]] label) the same way every
+// other lobslaw secret does.
 type MCPServerConfig struct {
 	Command   string            `koanf:"command"`
 	Args      []string          `koanf:"args,omitempty"`
@@ -1207,6 +1209,62 @@ type GatewayChannelConfig struct {
 	// events would govern what the agent HEARS while leaving what it
 	// can GO AND READ wide open.
 	AllowedChannels []string `koanf:"allowed_channels,omitempty"`
+}
+
+// SecretsConfig is the [secrets] section: where secret references
+// other than env: and file: resolve from.
+type SecretsConfig struct {
+	// Providers are the declared vaults. A provider's LABEL is the
+	// reference scheme it answers to, so a provider labelled "bw" makes
+	// "bw:app/key" resolvable anywhere "env:APP_KEY" works today.
+	Providers []SecretProviderConfig `koanf:"providers,omitempty"`
+
+	// CacheTTL is how long a resolved value is reused within one
+	// process. Zero takes the default (5m).
+	//
+	// A cache rather than a lookup per call because one boot resolves
+	// the same reference several times — the chat driver, the
+	// capability probe and doctor all read the same provider key — and
+	// on a CLI-backed vault each of those is a separate process.
+	CacheTTL time.Duration `koanf:"cache_ttl,omitempty"`
+}
+
+// SecretProviderConfig is one declared secret backend.
+type SecretProviderConfig struct {
+	// Label is the reference scheme. "env" and "file" are refused:
+	// they resolve against this machine before any provider can exist,
+	// and letting one be shadowed would make the bootstrap path depend
+	// on the thing it bootstraps.
+	Label string `koanf:"label"`
+
+	// Driver names the implementation: "exec" for any CLI, or
+	// "bitwarden" / "onepassword" for the two whose failure modes are
+	// worth translating.
+	Driver string `koanf:"driver"`
+
+	// Command overrides the driver's argv. Required by "exec" and
+	// optional elsewhere, so a wrapper script that unlocks the vault
+	// first does not need a new driver. "{{path}}" is replaced with the
+	// reference's path; with no placeholder the path is appended.
+	//
+	// An argv, never a shell string — a secret path containing a space
+	// must not be able to become a second command.
+	Command []string `koanf:"command,omitempty"`
+
+	// Env is extra environment for the subprocess. Values are secret
+	// references themselves, resolved through the BOOTSTRAP resolver
+	// only: a vault credential cannot come from a vault.
+	Env map[string]string `koanf:"env,omitempty"`
+
+	// Timeout bounds one fetch. Zero takes 15s, which is generous
+	// because the alternative to waiting for a vault is a node that
+	// will not boot.
+	Timeout time.Duration `koanf:"timeout,omitempty"`
+
+	// Options are driver-specific scalars, a map for the same reason
+	// the search providers use one: a new backend should not require a
+	// config-struct change.
+	Options map[string]string `koanf:"options,omitempty"`
 }
 
 // DiscoveryConfig is the [discovery] section: how this node finds

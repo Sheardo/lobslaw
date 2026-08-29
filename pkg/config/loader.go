@@ -120,6 +120,9 @@ func (c *Config) Validate() error {
 	if err := validateSearchProviders(c.Compute); err != nil {
 		return err
 	}
+	if err := validateSecretProviders(c.Secrets); err != nil {
+		return err
+	}
 	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
 		return err
 	}
@@ -195,6 +198,72 @@ func validateSearchProviders(c ComputeConfig) error {
 	if len(c.WebSearch.Providers) > 0 && c.WebSearch.Provider != "" {
 		return fmt.Errorf("%w: compute.web_search sets both provider and providers; providers alone expresses either case",
 			types.ErrInvalidConfig)
+	}
+	return nil
+}
+
+// reservedSecretSchemes are the two references that resolve against
+// this machine and must not be shadowed by a provider.
+//
+// Duplicated here rather than imported from internal/secrets because
+// pkg/config sits below internal and must not depend on it — the same
+// reason validateQueueMode duplicates the gateway's mode names. The
+// agreement is asserted from internal/secrets, which CAN see this
+// package.
+var reservedSecretSchemes = []string{"env", "file"}
+
+// ReservedSecretSchemes exposes that list so internal/secrets can
+// assert the two agree rather than hope they do — the same move
+// internal/gateway makes for the queue-mode names.
+func ReservedSecretSchemes() []string {
+	return append([]string(nil), reservedSecretSchemes...)
+}
+
+// validateSecretProviders rejects secret config that would otherwise
+// fail confusingly at first use.
+//
+// Which driver names exist is deliberately NOT checked: the registry
+// lives in internal/secrets, above this package, and it already
+// produces a better message than a duplicated list could.
+func validateSecretProviders(c SecretsConfig) error {
+	seen := make(map[string]struct{}, len(c.Providers))
+	for _, p := range c.Providers {
+		label := strings.ToLower(strings.TrimSpace(p.Label))
+		if label == "" {
+			return fmt.Errorf("%w: every [[secrets.providers]] entry needs a label; "+
+				"the label is the reference scheme, so a provider labelled \"bw\" makes \"bw:app/key\" resolvable",
+				types.ErrInvalidConfig)
+		}
+		for _, r := range reservedSecretSchemes {
+			if label == r {
+				return fmt.Errorf(
+					"%w: [[secrets.providers]] label %q is reserved; %s: resolves against this machine "+
+						"before any provider exists, and shadowing it would make the bootstrap path "+
+						"depend on the thing it bootstraps",
+					types.ErrInvalidConfig, p.Label, r)
+			}
+		}
+		if _, dup := seen[label]; dup {
+			return fmt.Errorf("%w: duplicate [[secrets.providers]] label %q; "+
+				"a reference scheme can only mean one backend", types.ErrInvalidConfig, p.Label)
+		}
+		seen[label] = struct{}{}
+
+		if strings.TrimSpace(p.Driver) == "" {
+			return fmt.Errorf("%w: [[secrets.providers]] %q needs a driver (exec, bitwarden or onepassword)",
+				types.ErrInvalidConfig, p.Label)
+		}
+		for _, arg := range p.Command {
+			if strings.TrimSpace(arg) == "" {
+				return fmt.Errorf("%w: [[secrets.providers]] %q has an empty element in command; "+
+					"an empty argument is passed to the process and is almost never meant",
+					types.ErrInvalidConfig, p.Label)
+			}
+		}
+		if p.Timeout < 0 {
+			return fmt.Errorf("%w: [[secrets.providers]] %q has a negative timeout",
+				types.ErrInvalidConfig, p.Label)
+		}
 	}
 	return nil
 }

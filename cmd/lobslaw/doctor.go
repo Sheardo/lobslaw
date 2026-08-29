@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/secrets"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/mtls"
 )
@@ -81,6 +83,7 @@ func lobslawDoctor(args []string) {
 		{Name: "identity aliases", Run: d.checkIdentityAliases},
 		{Name: "[[user]] roles reachable", Run: d.checkUserRolesReachable},
 		{Name: "operator role granted", Run: d.checkOperatorGrant},
+		{Name: "secret providers", Run: d.checkSecretProviders},
 		{Name: "egress fetch_url scope", Run: d.checkFetchScope},
 		{Name: "LLM provider reachable", Run: d.checkLLMReachable},
 	}
@@ -115,12 +118,89 @@ func (d doctorEnv) checkEnvFilePerms() (string, error) {
 	return envFile, nil
 }
 
+// checkSecretProviders builds every declared provider and resolves one
+// reference through each.
+//
+// Constructing them is not enough: a missing binary, a locked vault and
+// an expired session all build fine and fail at the first fetch, which
+// on this node is during wiring — so an operator who ran doctor and saw
+// OK would still watch the node refuse to boot. The probe is what makes
+// the check mean something.
+func (d doctorEnv) checkSecretProviders() (string, error) {
+	if len(d.cfg.Secrets.Providers) == 0 {
+		return "none declared (env: and file: always available)", nil
+	}
+	resolver, err := secrets.FromConfig(d.cfg.Secrets, secrets.DefaultRegistry(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		return "", err
+	}
+	probes := d.secretRefsByScheme()
+	ok := make([]string, 0, len(d.cfg.Secrets.Providers))
+	for _, p := range d.cfg.Secrets.Providers {
+		label := strings.ToLower(strings.TrimSpace(p.Label))
+		ref, found := probes[label]
+		if !found {
+			// Declared and unused is odd but not wrong — an operator
+			// may be mid-migration. Say so rather than inventing a
+			// reference and reporting a failure they cannot act on.
+			ok = append(ok, label+" (declared, no reference uses it yet)")
+			continue
+		}
+		if _, err := resolver.Resolve(ref); err != nil {
+			return "", fmt.Errorf("provider %q: %w", label, err)
+		}
+		ok = append(ok, label+" ✓")
+	}
+	return strings.Join(ok, ", "), nil
+}
+
+// secretRefsByScheme finds one real reference per scheme from the
+// config, so the probe exercises a path the operator actually uses
+// rather than one this function made up.
+func (d doctorEnv) secretRefsByScheme() map[string]string {
+	out := map[string]string{}
+	note := func(ref string) {
+		scheme, _, ok := strings.Cut(strings.TrimSpace(ref), ":")
+		if !ok || scheme == "" {
+			return
+		}
+		scheme = strings.ToLower(scheme)
+		if _, seen := out[scheme]; !seen {
+			out[scheme] = ref
+		}
+	}
+	for _, p := range d.cfg.Compute.Providers {
+		note(p.APIKeyRef)
+	}
+	note(d.cfg.Compute.Embeddings.APIKeyRef)
+	for _, ch := range d.cfg.Gateway.Channels {
+		note(ch.BotTokenRef)
+		note(ch.AppTokenRef)
+		note(ch.SecretTokenRef)
+		note(ch.SharedSecretRef)
+	}
+	for _, srv := range d.cfg.MCP.Servers {
+		for _, ref := range srv.SecretEnv {
+			note(ref)
+		}
+	}
+	// OAuth and the JWT secret are easy to forget and are exactly the
+	// kind of reference an operator moves into a vault first, being the
+	// longest-lived credentials on the node.
+	for _, p := range d.cfg.Security.OAuth {
+		note(p.ClientIDRef)
+		note(p.ClientSecretRef)
+	}
+	note(d.cfg.Auth.JWTSecretRef)
+	return out
+}
+
 func (d doctorEnv) checkMemoryKey() (string, error) {
 	ref := d.cfg.Memory.Encryption.KeyRef
 	if ref == "" {
 		return "", fmt.Errorf("memory.encryption.key_ref is empty")
 	}
-	val, err := config.ResolveSecret(ref)
+	val, err := secrets.Bootstrap(ref)
 	if err != nil {
 		return "", fmt.Errorf("resolve %q: %w", ref, err)
 	}

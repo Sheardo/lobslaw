@@ -222,6 +222,19 @@ format      = "openai"
 # "council" role.
 main = "openrouter"
 
+# Where secret references other than env: and file: resolve from. A
+# provider's label IS the reference scheme, so "bw:app/key" works
+# anywhere "env:APP_KEY" does. See /configuration/secrets.
+[[secrets.providers]]
+label  = "bw"
+driver = "bitwarden"                          # or onepassword, or exec
+env    = { BW_SESSION = "env:BW_SESSION" }    # the vault's own credential stays on env:/file:
+
+[[secrets.providers]]
+label   = "pass"
+driver  = "exec"
+command = ["pass", "show", "{{path}}"]
+
 [compute.web_search]
 # Ordered failover chain, naming [[compute.search_providers]] labels.
 # `provider = "searxng"` is sugar for a one-element list.

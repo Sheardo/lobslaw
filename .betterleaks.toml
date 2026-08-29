@@ -32,3 +32,21 @@ condition = "AND"
 regexTarget = "match"
 paths = ['''docs/docs/security/egress-and-acl\.md''']
 regexes = ['''skill%2F[a-z0-9-]+:_@127\.0\.0\.1''']
+
+[[allowlists]]
+description = """
+The 1Password driver's registry key. `DriverOnePassword = "onepassword"`
+is a Go constant whose value is the string an operator writes as
+`driver = "onepassword"`; generic-password matches it because the
+identifier ends in "Password" and is followed by ` = "..."`, and the
+rule cannot tell a constant's NAME from an assignment of one.
+"""
+# AND, per the entry above: either condition alone would allowlist the
+# whole file, and a real credential added to it later would be waved
+# through by an entry written about a driver name.
+condition = "AND"
+# Matched against the extracted secret — the literal driver name —
+# rather than the match, which begins at "Password" and not at the full
+# identifier. Anchored so it cannot cover a longer string containing it.
+paths = ['''internal/secrets/provider\.go''']
+regexes = ['''^onepassword$''']

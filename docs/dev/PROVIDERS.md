@@ -216,7 +216,8 @@ not considered at all:
 | Bedrock | SigV4 **request signing** with access key, secret and optional session token — a per-request signature, not a header value |
 
 `api_key = "env:OPENAI_KEY"` cannot express either of the last two.
-lobslaw's `ResolveSecret` (`env:` / `file:` / `kms:`) resolves a static
+lobslaw's secret resolution (`env:` / `file:`, plus any configured
+`[[secrets.providers]]` label) resolves a static
 value; Vertex needs a token *minter* with refresh, and Bedrock needs a
 request *signer*.
 
@@ -753,6 +754,15 @@ soul's trust floor is checked. That check mattered most on the builtin
 that had been missing it: a search hands the user's own words to
 whoever answers, and a self-hosted SearXNG declaring `local` against a
 hosted API declaring `public` is a real difference.
+
+**Secrets joined the waist too.** `internal/secrets` is the same shape
+for a different question: where lobslaw's own configuration gets its
+keys. Compiled drivers for Bitwarden and 1Password, `exec` for the long
+tail, and a provider's config label doubling as the reference scheme so
+`bw:app/key` resolves anywhere `env:APP_KEY` did. The one structural
+difference is a reserved floor — `env:` and `file:` cannot be shadowed,
+because `cmd/lobslaw` resolves the memory key before any wiring stage
+exists and a provider credential cannot come from a provider.
 
 ---
 

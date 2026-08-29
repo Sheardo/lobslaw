@@ -6,7 +6,7 @@ type ProviderConfig struct {
 	Label        string    `json:"label"`    // "fast", "smart", "local-llama"
 	Endpoint     string    `json:"endpoint"` // OpenAI-compatible base URL
 	Model        string    `json:"model"`
-	APIKeyRef    string    `json:"api_key_ref,omitempty"` // env:VAR, kms:arn, file:/path
+	APIKeyRef    string    `json:"api_key_ref,omitempty"` // env:VAR, file:/path, or a [[secrets.providers]] label
 	Capabilities []string  `json:"capabilities,omitempty"`
 	TrustTier    TrustTier `json:"trust_tier"`
 	// Pricing overrides the built-in pricing table for this
