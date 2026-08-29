@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +25,15 @@ var ErrClaimConflict = errors.New("fsm: claim conflict")
 type FSM struct {
 	mu    sync.RWMutex
 	store *Store
+
+	// lastApplied* caches the highest raft index applied, so the
+	// already-applied check in Apply is not a bbolt read per entry.
+	// Guarded separately from mu: Apply holds mu for the whole entry
+	// and setLastApplied runs inside that, so sharing one lock would
+	// need it to be reentrant.
+	lastAppliedMu     sync.Mutex
+	lastAppliedIdx    uint64
+	lastAppliedCached bool
 
 	// CALLBACK CONTRACT (applies to every *Change field below):
 	//
@@ -119,9 +129,58 @@ func (f *FSM) Apply(l *raft.Log) any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// Already-applied entries are skipped, because THIS FSM'S STATE IS
+	// DURABLE and hashicorp/raft does not assume that.
+	//
+	// raft replays the log from the last snapshot — index 1 when there
+	// is no snapshot — on the premise that the FSM is either in memory
+	// or has just been rebuilt by Restore. Ours is a bbolt file that
+	// survived the restart already holding the final state, so replay
+	// re-applies the whole of history on top of it: a PUT restores a
+	// record's original value, and the later CLAIM that superseded it
+	// then fails its CAS because the revision no longer matches, so the
+	// newer state is never restored.
+	//
+	// The user-visible symptom was a one-shot "remind me in 30 seconds"
+	// commitment firing again on every restart, for hours. It had been
+	// marked done correctly, in raft, and the mark was undone by the
+	// next boot replaying the PUT that created it.
+	//
+	// The index is written AFTER the entry, in its own transaction, so
+	// a crash between the two leaves the index BEHIND the state and
+	// that entry replays once more on the next boot. That direction is
+	// the safe one and is exactly the behaviour that existed before
+	// this guard; the reverse — an index ahead of the state — would
+	// skip an entry that never landed, and is what the ordering
+	// prevents. Doing both in one bbolt transaction would be stronger
+	// still, but it would mean threading a transaction through every
+	// apply path for a window this narrow.
+	//
+	// Index 0 means "not from raft": raft's first log index is 1, so a
+	// zero can only come from a direct call. Tests across this package
+	// build a raft.Log by hand, and those must always apply — a guard
+	// that swallowed them would turn the FSM into a silent no-op for
+	// every caller that is not raft itself.
+	if l.Index != 0 && l.Index <= f.lastApplied() {
+		return nil
+	}
+
 	var entry lobslawv1.LogEntry
 	if err := proto.Unmarshal(l.Data, &entry); err != nil {
+		// Still advance: a malformed entry will be malformed on every
+		// replay, and refusing to record it means re-deciding that
+		// forever.
+		if l.Index != 0 {
+			f.setLastApplied(l.Index)
+		}
 		return fmt.Errorf("unmarshal log entry: %w", err)
+	}
+	// Advanced even when the apply below returns an error. A CAS that
+	// legitimately loses is a decided outcome, not a retryable one:
+	// raft has committed the entry, and replaying it would reach the
+	// same verdict against the same state.
+	if l.Index != 0 {
+		defer f.setLastApplied(l.Index)
 	}
 
 	var result any
@@ -642,7 +701,54 @@ func (f *FSM) Restore(rc io.ReadCloser) error {
 	defer f.mu.Unlock()
 	defer func() { _ = rc.Close() }()
 
-	return f.store.RestoreFromSnapshot(rc)
+	if err := f.store.RestoreFromSnapshot(rc); err != nil {
+		return err
+	}
+	// The snapshot is a whole-database copy, so it carries the
+	// last-applied index that was current when it was taken. Dropping
+	// the cache makes the next read pick that up rather than a value
+	// belonging to the state we just replaced.
+	f.lastAppliedMu.Lock()
+	f.lastAppliedCached = false
+	f.lastAppliedMu.Unlock()
+	return nil
+}
+
+// lastApplied is the highest raft index this FSM has applied, read
+// through a cache because Apply consults it on every entry.
+func (f *FSM) lastApplied() uint64 {
+	f.lastAppliedMu.Lock()
+	defer f.lastAppliedMu.Unlock()
+	if f.lastAppliedCached {
+		return f.lastAppliedIdx
+	}
+	raw, err := f.store.Get(BucketRaftMeta, KeyLastAppliedIndex)
+	if err == nil && len(raw) == 8 {
+		f.lastAppliedIdx = binary.BigEndian.Uint64(raw)
+	} else {
+		// Absent on a store written before this existed. Zero replays
+		// everything once, exactly as before, and the entries then
+		// record their own index — so an existing deployment repairs
+		// itself on the first boot rather than needing a migration.
+		f.lastAppliedIdx = 0
+	}
+	f.lastAppliedCached = true
+	return f.lastAppliedIdx
+}
+
+func (f *FSM) setLastApplied(idx uint64) {
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], idx)
+	if err := f.store.Put(BucketRaftMeta, KeyLastAppliedIndex, buf[:]); err != nil {
+		// Not fatal: the cost is replaying this entry once more on the
+		// next boot, which is what happened before this existed.
+		// Failing the apply would be worse — the entry IS committed.
+		return
+	}
+	f.lastAppliedMu.Lock()
+	f.lastAppliedIdx = idx
+	f.lastAppliedCached = true
+	f.lastAppliedMu.Unlock()
 }
 
 // snapshot is the per-Snapshot() state captured for raft's async
