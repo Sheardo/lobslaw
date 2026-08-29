@@ -52,7 +52,8 @@ In api.slack.com/apps:
 2. **Event Subscriptions** → enable, then *Subscribe to bot events*: `app_mention`, `message.im`, `message.channels`, `message.groups`, `message.mpim`.
 3. **App Home** → enable the Messages Tab and tick *"Allow users to send Slash commands and messages from the messages tab"*. Without this the DM box is greyed out and `message.im` never fires.
 4. **Slash Commands** → create `/lobslaw` (leave the Request URL blank). One umbrella command covers every command; see [Commands](#commands).
-5. Invite the bot to any channel you want it in: `/invite @yourbot`.
+5. **Interactivity & Shortcuts** → enable (leave the Request URL blank — Socket Mode carries the payloads). Without this Slack never sends `block_actions`, so the buttons on a confirmation render but tapping them does nothing at all: no approval is recorded and the paused turn waits until it times out into a deny.
+6. Invite the bot to any channel you want it in: `/invite @yourbot`.
 
 Bot scopes needed: `app_mentions:read`, `chat:write`, `commands`, `users:read`, plus `channels:history`/`groups:history`/`im:history`/`mpim:history` for the conversations you want readable.
 

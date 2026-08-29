@@ -857,23 +857,27 @@ func (h *TelegramHandler) handleCallbackQuery(ctx context.Context, q *tgCallback
 		reply = "Approved."
 	case "approve-session":
 		decision, scope = PromptApproved, PromptScopeSession
-		reply = "Approved — I won't ask again for this in this chat."
 		// Recorded before Resolve, so the resumed turn already sees
 		// the grant. Resolving first would let the resume race the
 		// grant and prompt a second time for the same operation.
-		if !h.grantForSession(ctx, promptID, q) {
+		granted := h.grantForSession(ctx, promptID, q)
+		if granted == "" {
 			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
+		} else {
+			reply = sessionGrantReply(granted, "chat")
 		}
 	case "approve-always":
 		decision, scope = PromptApproved, PromptScopeAlways
-		reply = "Approved — I won't ask about this again. Revoke it with `lobslaw policy revoke-approvals`."
 		// Recorded before Resolve, for the same reason as the session
 		// grant: resolving first lets the resumed turn race the rule
 		// and prompt a second time for the same operation.
-		if !h.grantAlways(ctx, promptID, q) {
+		granted := h.grantAlways(ctx, promptID, q)
+		if granted == "" {
 			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
+		} else {
+			reply = alwaysGrantReply(granted)
 		}
 	case "deny":
 		decision, scope = PromptDenied, PromptScopeOnce
@@ -1660,17 +1664,23 @@ type scopedOperation struct {
 
 // grantAlways mints the permanent policy rule behind "always".
 //
-// Reports whether a rule was actually recorded, so the reply does not
-// promise something that did not happen — the floor refuses grants for
+// Returns the resource that was granted, so the reply can name it. The
+// whole risk of a permanent grant is forgetting it was given, and a
+// reply reading "I won't ask about this again" does not say what
+// "this" was — for a shell command the difference between `git status`
+// and every command on the machine is the entire point.
+//
+// Empty means nothing was recorded, so the reply does not promise
+// something that did not happen: the floor refuses grants for
 // protected paths and destructive commands, and that refusal must
 // reach the user rather than being logged and forgotten.
-func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
+func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *tgCallbackQuery) string {
 	// Taken before the store is checked so the entry is consumed even
 	// when there is nowhere to record the grant. Returning early with
 	// it still in the map is how the map only ever grew.
 	op, ok := h.takePendingScope(promptID)
 	if !ok || op.subject == "" || h.cfg.ApprovalRules == nil || q.Message == nil {
-		return false
+		return ""
 	}
 
 	rule, err := h.cfg.ApprovalRules.Mint(ctx, policy.MintRequest{
@@ -1682,12 +1692,12 @@ func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *t
 	if err != nil {
 		h.log.Warn("telegram: could not mint a permanent approval",
 			"action", op.action, "resource", op.resource, "err", err)
-		return false
+		return ""
 	}
 	h.log.Info("telegram: permanent approval recorded",
 		"rule_id", rule.Id, "subject", op.subject,
 		"action", op.action, "resource", op.resource)
-	return true
+	return op.resource
 }
 
 // grantForSession records "approved for the rest of this chat" for the
@@ -1695,11 +1705,11 @@ func (h *TelegramHandler) grantAlways(ctx context.Context, promptID string, q *t
 // actually recorded, so the reply does not promise something that did
 // not happen — no approvals store wired, or a prompt whose operation
 // we no longer know.
-func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, q *tgCallbackQuery) bool {
+func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, q *tgCallbackQuery) string {
 	// Taken first, for the same reason as grantAlways.
 	op, ok := h.takePendingScope(promptID)
 	if !ok || h.cfg.Approvals == nil || q.Message == nil {
-		return false
+		return ""
 	}
 
 	// The grant is scoped by the conversation on the context, not by
@@ -1712,9 +1722,9 @@ func (h *TelegramHandler) grantForSession(ctx context.Context, promptID string, 
 	if !h.cfg.Approvals.Grant(grantCtx, op.action, op.resource) {
 		h.log.Warn("telegram: could not record session approval",
 			"action", op.action, "resource", op.resource)
-		return false
+		return ""
 	}
 	h.log.Info("telegram: approved for this chat",
 		"action", op.action, "resource", op.resource, "chat_id", q.Message.Chat.ID)
-	return true
+	return op.resource
 }

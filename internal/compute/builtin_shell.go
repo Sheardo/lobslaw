@@ -28,21 +28,20 @@ const (
 
 // ShellToolDef is separate from StdlibToolDefs because the risk
 // tier is RiskIrreversible — a bash command can do anything in
-// principle. Operators are expected to layer a require_confirmation
-// rule; the ask-based permission model will replace this with
-// per-pattern approval once it lands.
+// principle. What gates it is the per-command approval in
+// shell_approval.go: every command is asked about, and the answer is
+// remembered against that command rather than against the tool.
 func ShellToolDef() *types.ToolDef {
 	return &types.ToolDef{
 		Name:        "shell_command",
 		Path:        BuiltinScheme + "shell_command",
-		Description: "Run a shell command and return stdout+stderr. Use sparingly — prefer dedicated tools (read_file, list_files, glob, grep, edit_file, write_file) for their use cases. Destructive or system-modifying commands (rm -rf, sudo, curl|sh, ssh) are rejected by a denylist. Compound commands (&&, ||, ;, |) are rejected unless allow_compound=true. timeout_secs bounds the run (default 30, max 300). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded 256KB.",
+		Description: "Run a shell command and return stdout+stderr. Use sparingly — prefer dedicated tools (read_file, list_files, glob, grep, edit_file, write_file) for their use cases. Commands the user has not already approved raise a confirmation they answer; ask for what you actually need rather than working around a pending approval. A small compiled-in floor (rm -rf /, fork bombs, mkfs, curl|sh) is refused outright and must not be retried or worked around. timeout_secs bounds the run (default 30, max 300). cwd is optional. Return value includes stdout, stderr, exit_code, and truncated flag if output exceeded 256KB.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {
 				"command": {"type": "string", "description": "Full command string (passed via sh -c)."},
 				"cwd": {"type": "string", "description": "Absolute path to run in. Default is server's workspace dir."},
-				"timeout_secs": {"type": "integer", "description": "Wall-clock timeout (default 30, max 300)."},
-				"allow_compound": {"type": "boolean", "description": "Permit && / || / ; / | in the command."}
+				"timeout_secs": {"type": "integer", "description": "Wall-clock timeout (default 30, max 300)."}
 			},
 			"required": ["command"],
 			"additionalProperties": false
@@ -54,59 +53,42 @@ func ShellToolDef() *types.ToolDef {
 // RegisterShellBuiltin installs shell_command. Operators who
 // don't want shell access simply don't register it via config
 // (once that toggle lands); today it's always registered on
-// compute-enabled nodes because RiskIrreversible + policy
-// override is the gating layer.
+// compute-enabled nodes because the per-command approval gate in
+// shell_approval.go asks about every command before it runs.
 func RegisterShellBuiltin(b *Builtins) error {
 	return b.Register("shell_command", shellCommandBuiltin)
 }
 
-// shellDenylist is the hard refusal set — commands that are almost
-// always wrong inside an agent turn. Operators running lobslaw on
-// a developer machine with a sandbox can relax this via config
-// once that surface exists; for now the denylist is conservative.
-var shellDenylist = []string{
-	"rm -rf /", "rm -rf /*",
-	"sudo ", "doas ",
-	"curl ", // inside shell is usually the "curl|sh" shape; force the model to use fetch_url
-	"wget ",
-	"ssh ", "scp ",
-	"dd if=", "mkfs.", "fdisk ",
-	"shutdown ", "reboot ", "halt ",
-	":(){:|:&};:", // classic fork bomb
-}
-
-// shellCompoundMarkers are what allow_compound gates. Spaces around
-// && and || are normalised in the command string before matching.
-var shellCompoundMarkers = []string{"&&", "||", ";", " | ", "|&"}
+// The substring denylist that used to live here is gone.
+//
+// It refused thirteen shapes — sudo, ssh, curl, wget, scp, dd, mkfs
+// and friends — with no way to say yes to any of them, so the answer
+// to "let me run this one ssh" was to edit this file. The per-command
+// gate asks about everything instead, which subsumes it: an operator
+// who wants sudo answers a prompt once rather than patching Go.
+//
+// It is not re-added as a promptable list on top, because a code
+// branch that forced confirmation regardless would mean an exact
+// grant on `sudo systemctl restart nginx` could never take effect —
+// the original complaint wearing a new hat.
+//
+// The compiled-in floor below is a different thing and stays.
 
 func shellCommandBuiltin(ctx context.Context, args map[string]string) ([]byte, int, error) {
 	cmd := strings.TrimSpace(args["command"])
 	if cmd == "" {
 		return nil, 2, errors.New("shell_command: command is required")
 	}
-	// The compiled-in floor first. shellDenylist below is the
-	// operator-facing layer and its own comment anticipates being
-	// relaxed by config; this one never is, and checking it here as
-	// well as in the executor means a future caller reaching the
-	// builtin directly still hits it.
+	// The compiled-in floor. Policy is operator-configurable all the
+	// way down to "allow everything" and an approval can say yes to
+	// anything policy would ask about, so this is the one layer that
+	// is neither — checking it here as well as in the executor means a
+	// future caller reaching the builtin directly still hits it.
 	if err := policy.CheckCommand(cmd); err != nil {
 		return nil, 2, err
 	}
 	if err := policy.CheckCommandPaths(cmd); err != nil {
 		return nil, 2, err
-	}
-	for _, bad := range shellDenylist {
-		if strings.Contains(cmd, bad) {
-			return nil, 2, fmt.Errorf("shell_command: rejected — matches denylist %q", bad)
-		}
-	}
-	allowCompound := args["allow_compound"] == "true"
-	if !allowCompound {
-		for _, m := range shellCompoundMarkers {
-			if strings.Contains(cmd, m) {
-				return nil, 2, fmt.Errorf("shell_command: rejected — %q in command (pass allow_compound=true to permit compound commands)", m)
-			}
-		}
 	}
 
 	timeout := shellDefaultTimeout

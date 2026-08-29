@@ -655,9 +655,11 @@ func (n *Node) wireDebugTools(builtins *compute.Builtins) error {
 }
 
 // wireShellTools registers shell_command — most dangerous of all the
-// stdlib tools. Denylist + compound-command gate + 30s default timeout
-// give an MVP-acceptable surface; the ask-based permission model
-// replaces this with per-pattern approval later.
+// stdlib tools. What bounds it is the per-command approval gate wired
+// in wireApprovalGates (every command is asked about, and the answer
+// is remembered against that command), the compiled-in hardline floor,
+// a Landlock sandbox derived from the active mounts, and a 30s default
+// timeout.
 func (n *Node) wireShellTools(builtins *compute.Builtins) error {
 	if err := compute.RegisterShellBuiltin(builtins); err != nil {
 		return fmt.Errorf("register shell_command: %w", err)

@@ -28,7 +28,7 @@ resource    = "soul_*"
 | `priority` | yes | int | Higher = wins; see priority table |
 | `effect` | yes | enum | `allow`, `deny`, `require_confirmation` |
 | `subject` | yes | string | `kind:value` form — `scope:owner`, `user:alice`, `channel:telegram`, `subject:google:1234567890` |
-| `action` | yes | string | `tool:exec`, `credentials:read`, `credentials:grant`, `oauth:start`, `clawhub:install` |
+| `action` | yes | string | `tool:exec`, `shell:run`, `memory:write`, `credentials:read`, `credentials:grant`, `oauth:start`, `clawhub:install` |
 | `resource` | yes | string | Glob — `*` matches everything; `soul_*` prefix; `*.send` suffix |
 
 ## Priority conventions
@@ -115,6 +115,34 @@ resource = "gws-workspace.gmail.send"
 ```
 
 The agent pauses, the channel asks `[Yes / No]`, the human decides. This is the **single most effective defence against prompt injection** for write tools.
+
+### Stop being asked about a family of shell commands
+
+Every `shell_command` call is asked about individually, and *Always allow* grants that one
+command — so approving `git status --short` leaves `git push --force` still asked about. That is
+deliberate: no rule about argv shape separates `git status` from `ssh host`, so nothing is
+generalised automatically.
+
+Generalising is an operator decision, written down where it is visible and revocable:
+
+```toml
+[[policy.rules]]
+id       = "james-git-is-fine"
+priority = 20
+effect   = "allow"
+subject  = "user:tg-@james"
+action   = "shell:run"
+resource = "git *"
+```
+
+Edit the config **once**, rather than approving every git command forever. The
+[hardline floor](/security/hardline-floor) still applies underneath — this cannot open up
+`rm -rf /`.
+
+Commands with no stable form — pipelines, `&&`, redirects, globs, `$` — are asked about every
+time and offer no scope button, because no grant could honestly name them. They evaluate under the
+reserved resource `!unclassified`; an `allow` on it is the explicit "stop asking me about compound
+commands".
 
 ### Allow a public visitor to call read-only tools
 

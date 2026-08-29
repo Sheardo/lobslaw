@@ -207,6 +207,16 @@ func hardlineGuard(resource string) error {
 	if hErr := CheckCommand(resource); hErr != nil {
 		return fmt.Errorf("%w: %v", ErrHardlineRule, hErr)
 	}
+	// A resource can now BE a command, so the paths inside one have to
+	// be checked too: without this, "cat /etc/shadow" reads as an
+	// unremarkable word to CheckPath and passes CheckCommand. The
+	// executor refuses it long before a prompt is raised, so this is
+	// belt and braces — but the point of the guard is that a rule
+	// listing never shows an operator a grant that reads as though it
+	// works.
+	if hErr := CheckCommandPaths(resource); hErr != nil {
+		return fmt.Errorf("%w: %v", ErrHardlineRule, hErr)
+	}
 	return nil
 }
 

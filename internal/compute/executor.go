@@ -191,11 +191,17 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	if err := hardlineConfirm(req.Params); err != nil {
 		return nil, err
 	}
-	// The write gate, for the same reason and in the same place: a
+	// The per-tool gate — the memory write staging, the per-command
+	// shell approval — for the same reason and in the same place: a
 	// tool the operator's rules already deny is refused rather than
 	// prompted about. Only tools explicitly marked have one, so a
 	// deployment that never opted in pays a map lookup.
-	if err := e.checkWriteApproval(ctx, req.Claims, tool.Name, req.Params); err != nil {
+	//
+	// Before dispatch, and it has to be: runBuiltin folds a builtin's
+	// error into an InvokeResult and returns nil, so a confirmation
+	// raised inside the builtin would become tool output the model
+	// reads and the user never sees.
+	if err := e.checkGate(ctx, req.Claims, tool.Name, req.Params); err != nil {
 		return nil, err
 	}
 	if e.hooks != nil {

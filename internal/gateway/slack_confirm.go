@@ -184,20 +184,24 @@ func (h *SlackHandler) handleInteraction(ctx context.Context, in slackInteractio
 		reply = "Approved."
 	case "approve-session":
 		decision, scope = PromptApproved, PromptScopeSession
-		reply = "Approved — I won't ask again for this in this conversation."
 		// Recorded before Resolve so the resumed turn already sees the
 		// grant; resolving first lets the resume race it and prompt a
 		// second time for the same operation.
-		if !h.grantForSession(ctx, promptID, grantSession) {
+		granted := h.grantForSession(ctx, promptID, grantSession)
+		if granted == "" {
 			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
+		} else {
+			reply = sessionGrantReply(granted, "conversation")
 		}
 	case "approve-always":
 		decision, scope = PromptApproved, PromptScopeAlways
-		reply = "Approved — I won't ask about this again. Revoke it with `lobslaw policy revoke-approvals`."
-		if !h.grantAlways(ctx, promptID) {
+		granted := h.grantAlways(ctx, promptID)
+		if granted == "" {
 			decision, scope = PromptApproved, PromptScopeOnce
 			reply = "Approved."
+		} else {
+			reply = alwaysGrantReply(granted)
 		}
 	case "deny":
 		decision, scope = PromptDenied, PromptScopeOnce
@@ -290,14 +294,14 @@ func (h *SlackHandler) isAudience(ctx context.Context, teamID, userID, raisedFor
 // grantForSession records "approved for the rest of this conversation".
 // Reports whether a grant was actually recorded, so the reply does not
 // promise something that did not happen.
-func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) bool {
+func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID string) string {
 	// Taken before the store is checked so the entry is consumed even
 	// when there is nowhere to record the grant. A pending scope that
 	// outlives its prompt is a slow leak and, worse, something a later
 	// tap on a recycled id could pick up.
 	op, ok := h.takePendingScope(promptID)
 	if !ok || h.cfg.Approvals == nil {
-		return false
+		return ""
 	}
 	if convID == "" {
 		// No conversation to scope to. Refusing means the caller
@@ -306,7 +310,7 @@ func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID str
 		// findable by nobody, and both are wrong.
 		h.log.Warn("slack: session grant has no conversation; narrowing to once",
 			"prompt", promptID)
-		return false
+		return ""
 	}
 	grantCtx := compute.WithTurnIdentity(ctx, compute.TurnIdentity{
 		Channel:   ChannelSlack,
@@ -315,19 +319,23 @@ func (h *SlackHandler) grantForSession(ctx context.Context, promptID, convID str
 	if !h.cfg.Approvals.Grant(grantCtx, op.action, op.resource) {
 		h.log.Warn("slack: could not record session approval",
 			"action", op.action, "resource", op.resource)
-		return false
+		return ""
 	}
 	h.log.Info("slack: approved for this conversation",
 		"action", op.action, "resource", op.resource, "conversation", convID)
-	return true
+	return op.resource
 }
 
 // grantAlways mints the revocable policy rule behind "always".
-func (h *SlackHandler) grantAlways(ctx context.Context, promptID string) bool {
+//
+// Returns the resource granted so the reply can name it, for the
+// reason spelled out on the Telegram twin: a permanent grant whose
+// scope the user cannot see is one they cannot audit.
+func (h *SlackHandler) grantAlways(ctx context.Context, promptID string) string {
 	// Taken first, for the same reason as grantForSession.
 	op, ok := h.takePendingScope(promptID)
 	if !ok || op.subject == "" || h.cfg.ApprovalRules == nil {
-		return false
+		return ""
 	}
 	rule, err := h.cfg.ApprovalRules.Mint(ctx, policy.MintRequest{
 		PromptID: promptID,
@@ -338,12 +346,12 @@ func (h *SlackHandler) grantAlways(ctx context.Context, promptID string) bool {
 	if err != nil {
 		h.log.Warn("slack: could not mint a permanent approval",
 			"action", op.action, "resource", op.resource, "err", err)
-		return false
+		return ""
 	}
 	h.log.Info("slack: permanent approval recorded",
 		"rule_id", rule.Id, "subject", op.subject,
 		"action", op.action, "resource", op.resource)
-	return true
+	return op.resource
 }
 
 func (h *SlackHandler) takePendingScope(promptID string) (scopedOperation, bool) {

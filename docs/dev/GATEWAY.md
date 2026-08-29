@@ -283,7 +283,20 @@ The atomicity of Resolve matters: a split lock would let multiple concurrent cal
 | `session` | A `SessionApprovals` grant, keyed by conversation, living only in the process — a restart ends the continuity the user was reasoning about. |
 | `always` | Mints a policy allow rule with `created_by = "approval:<prompt_id>"`. See [Policy Engine](/security/policy-engine) for the constraints on minting and `lobslaw policy approvals` / `revoke-approvals` for listing and undoing them. |
 
-Telegram renders one button per available scope; REST takes `{"approve": true, "scope": "session"}`. An unrecognised scope narrows to `once` — a typo must never widen a grant.
+Telegram and Slack render one button per **available** scope; REST takes `{"approve": true, "scope": "session"}`. An unrecognised scope narrows to `once` — a typo must never widen a grant.
+
+Availability is decided by the confirmation itself. A prompt whose `ConfirmationAction` /
+`ConfirmationResource` are empty gets **Approve and Deny only**, and that is load-bearing in two
+places: a budget confirmation is about spend rather than an operation, so there is nothing a
+channel could offer to remember; and a shell command with no stable form — a pipeline, a compound
+command, anything with a glob or `$` in it — is reported with an empty resource precisely so no
+scope button appears. A button that minted nothing would be worse than no button, because it would
+look like it worked.
+
+Both channels name what they granted in the reply (`Approved — I won't ask about \`git status
+--short\` again`). With a grant covering one command rather than a whole tool, a reply that only
+said "this" would be asking the user to take the narrow reading on trust. Shared by both channels
+via `alwaysGrantReply` / `sessionGrantReply` so the two cannot drift.
 
 No scope can reach past the [hardline floor](/security/hardline-floor).
 
