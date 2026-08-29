@@ -295,3 +295,28 @@ func TestSlackAllowedChannelsStillClosedByDefault(t *testing.T) {
 		t.Error("empty allowed_channels is closed, including to DMs")
 	}
 }
+
+// Review #7's second half. Two files sharing a name in one turn is
+// ordinary — "screenshot.png" twice — and the second used to overwrite
+// the first, so the agent read one image while being told about two.
+func TestSlackFilePrefixDisambiguatesSameNamedFiles(t *testing.T) {
+	t.Parallel()
+
+	a := slackFilePrefix("https://files.slack.com/files-pri/T024BE7LD-F024BERPE/screenshot.png")
+	b := slackFilePrefix("https://files.slack.com/files-pri/T024BE7LD-F07XYZ123/screenshot.png")
+	if a == "" || b == "" {
+		t.Fatalf("no prefix derived: %q %q", a, b)
+	}
+	if a == b {
+		t.Errorf("both files got the same prefix %q; they would still collide", a)
+	}
+
+	// A filename that happens to look like an id must not donate one:
+	// the prefix has to identify the FILE, not the last path segment.
+	if got := slackFilePrefix("https://example.com/FOO-bar.png"); got != "" {
+		t.Errorf("filename contributed a prefix: %q", got)
+	}
+	if got := slackFilePrefix("not-a-url"); got != "" {
+		t.Errorf("prefix from a reference with no file id: %q", got)
+	}
+}

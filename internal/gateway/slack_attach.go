@@ -215,7 +215,13 @@ func (h *SlackHandler) sendAttachment(ctx context.Context, channel, thread strin
 // id is already in the reference every inbound Slack file has, and one
 // channel's identifier does not belong in the shared attachment type.
 func slackFilePrefix(ref string) string {
-	for _, seg := range strings.Split(ref, "/") {
+	segs := strings.Split(ref, "/")
+	// The last segment is the filename, and a file genuinely called
+	// "FOO-bar.png" would otherwise donate its own prefix.
+	if len(segs) > 1 {
+		segs = segs[:len(segs)-1]
+	}
+	for _, seg := range segs {
 		for _, part := range strings.Split(seg, "-") {
 			if len(part) > 1 && part[0] == 'F' && isSlackIDBody(part[1:]) {
 				return part + "-"

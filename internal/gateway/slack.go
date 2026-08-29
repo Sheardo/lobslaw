@@ -396,14 +396,16 @@ func (h *SlackHandler) dispatchEnvelope(ctx context.Context, env *slackEnvelope)
 			h.log.Warn("slack: malformed interaction payload", "err", err)
 			return
 		}
-		go h.handleInteraction(context.WithoutCancel(ctx), in)
+		// Same context choice as an event, and for the same reason: an
+		// approval tap re-enters the agent loop, so it is a turn.
+		go h.handleInteraction(ctx, in)
 	case "slash_commands":
 		var sc slackSlashCommand
 		if err := json.Unmarshal(env.Payload, &sc); err != nil {
 			h.log.Warn("slack: malformed slash command payload", "err", err)
 			return
 		}
-		go h.handleSlashCommand(context.WithoutCancel(ctx), sc)
+		go h.handleSlashCommand(ctx, sc)
 	default:
 		h.log.Debug("slack: unhandled envelope type", "type", env.Type)
 	}
