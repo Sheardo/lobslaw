@@ -735,7 +735,9 @@ func searchCredential(driver, apiKey string) compute.Credential {
 	if apiKey == "" {
 		return nil
 	}
-	if strings.EqualFold(strings.TrimSpace(driver), compute.DriverExa) || driver == "" {
+	// Empty means Exa, the same default DriverSet.Search applies, so the
+	// credential shape and the driver lookup cannot disagree.
+	if d := normaliseSearchDriver(driver); d == "" || d == compute.DriverExa {
 		return compute.ExaCredential(apiKey)
 	}
 	return compute.NewBearerCredential(apiKey)

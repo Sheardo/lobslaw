@@ -1,6 +1,8 @@
 package node
 
 import (
+	"strings"
+
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -74,4 +76,12 @@ func resolvedSearchProviders(c config.ComputeConfig) []config.SearchProviderConf
 		})
 	}
 	return out
+}
+
+// normaliseSearchDriver matches DriverSet.Search's own key handling, so
+// "which driver is this" has one answer across the wiring. Empty stays
+// empty: the DriverSet resolves that to Exa, and callers here need to
+// know it was unset rather than be handed the default twice.
+func normaliseSearchDriver(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }

@@ -184,6 +184,13 @@ func option(opts map[string]string, key string) string {
 
 // unknownOptions reports any key not in allowed, so a factory can
 // reject a typo at boot. Returned sorted for a stable message.
+//
+// Matched EXACTLY, because option() looks keys up exactly. An earlier
+// version lowercased here and not there, which meant `Method = "POST"`
+// passed validation and was then silently ignored — a setting that
+// parses, validates, and does nothing, which is the failure
+// TestEverySettingIsReadBySomething exists to keep out of this tree.
+// Case-sensitive is also simply what TOML keys are.
 func unknownOptions(opts map[string]string, allowed ...string) []string {
 	if len(opts) == 0 {
 		return nil
@@ -194,7 +201,7 @@ func unknownOptions(opts map[string]string, allowed ...string) []string {
 	}
 	var bad []string
 	for k := range opts {
-		if _, ok := known[strings.ToLower(strings.TrimSpace(k))]; !ok {
+		if _, ok := known[k]; !ok {
 			bad = append(bad, k)
 		}
 	}

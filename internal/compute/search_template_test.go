@@ -163,12 +163,24 @@ func TestTemplateFactoryRejectsBadMappings(t *testing.T) {
 		{"typo'd option", SearchDriverConfig{
 			Endpoint: "https://x", Options: map[string]string{"quesry_param": "q"},
 		}, "quesry_param"},
+		// Rejected rather than silently ignored. option() reads keys
+		// exactly, so a case-insensitive validator would have let this
+		// through to do nothing.
+		{"wrong-case option", SearchDriverConfig{
+			Endpoint: "https://x", Options: map[string]string{"Method": "POST"},
+		}, "Method"},
 		{"typo'd response field", SearchDriverConfig{
 			Endpoint: "https://x", Response: map[string]string{"snipppet": "content"},
 		}, "snipppet"},
 		{"unsupported method", SearchDriverConfig{
 			Endpoint: "https://x", Options: map[string]string{"method": "PATCH"},
 		}, "PATCH"},
+		// Silently replacing the user's query with a constant would
+		// return confident results for a question nobody asked.
+		{"extra_params collides with the query", SearchDriverConfig{
+			Endpoint: "https://x", Options: map[string]string{"auth_style": "none", "query_param": "q"},
+			ExtraParams: map[string]string{"q": "static"},
+		}, "query_param"},
 		{"header auth without a name", SearchDriverConfig{
 			Endpoint: "https://x", Credential: NewBearerCredential("k"),
 			Options: map[string]string{"auth_style": "header"},

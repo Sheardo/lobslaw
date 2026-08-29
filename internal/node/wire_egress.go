@@ -178,15 +178,22 @@ func webSearchEgressHosts(n *Node) []string {
 	}
 	privateOK := n.cfg.Security.EgressAllowPrivateRanges || len(n.cfg.Security.EgressAllowRanges) > 0
 	hosts := make([]string, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
 	for _, p := range providers {
 		endpoint := p.Endpoint
-		if compute.DriverExa == strings.ToLower(strings.TrimSpace(p.Driver)) || p.Driver == "" {
+		if d := normaliseSearchDriver(p.Driver); d == "" || d == compute.DriverExa {
 			endpoint = compute.ExaEffectiveEndpoint(endpoint)
 		}
 		host := egress.HostOf(endpoint)
 		if host == "" {
 			continue
 		}
+		// A chain whose backends share a host would otherwise repeat it
+		// in the ACL and in the warning below.
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
 		hosts = append(hosts, host)
 		if !privateOK && isPrivateHost(host) {
 			n.log.Warn("egress: web_search provider is on a private address that smokescreen will refuse; "+

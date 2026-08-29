@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // DefaultExaEndpoint is Exa's search API. Overridable via EXA_API_URL —
@@ -145,9 +147,10 @@ type exaResult struct {
 
 // truncateBodyFor caps an error body. Local to the search drivers
 // because llmclient.go has its own with a different cap.
+//
+// Runes, via textutil, for the same reason the snippet cap is: this
+// string reaches a prompt and a Telegram message, and a search engine's
+// error page is exactly the sort of prose that is not ASCII.
 func truncateBodyFor(body []byte, max int) string {
-	if len(body) <= max {
-		return string(body)
-	}
-	return string(body[:max]) + "…[truncated]"
+	return textutil.Truncate(string(body), "…[truncated]", max)
 }

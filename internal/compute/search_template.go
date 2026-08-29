@@ -98,13 +98,35 @@ func TemplateSearchFactory(cfg SearchDriverConfig) (SearchDriver, error) {
 		}
 	}
 
+	countParam := option(cfg.Options, "count_param")
+	depthParam := option(cfg.Options, "depth_param")
+	// extra_params are merged into the same map as the query, so a key
+	// that collides silently overwrites what lobslaw put there —
+	// extra_params = { q = "..." } against query_param = "q" would
+	// replace the user's search with a constant and return plausible
+	// results for the wrong question. Refused at boot instead.
+	for _, reserved := range []struct{ name, key string }{
+		{"query_param", queryParam},
+		{"count_param", countParam},
+		{"depth_param", depthParam},
+	} {
+		if reserved.key == "" {
+			continue
+		}
+		if _, clash := cfg.ExtraParams[reserved.key]; clash {
+			return nil, fmt.Errorf(
+				"template search: extra_params sets %q, which is also %s; it would overwrite the value lobslaw supplies",
+				reserved.key, reserved.name)
+		}
+	}
+
 	return &templateSearchDriver{
 		endpoint:    cfg.Endpoint,
 		method:      method,
 		cred:        cred,
 		queryParam:  queryParam,
-		countParam:  option(cfg.Options, "count_param"),
-		depthParam:  option(cfg.Options, "depth_param"),
+		countParam:  countParam,
+		depthParam:  depthParam,
 		extraParams: cfg.ExtraParams,
 		fields:      fields,
 		client:      searchHTTPClient(cfg.HTTPClient),
@@ -131,7 +153,14 @@ func templateCredential(cfg SearchDriverConfig) (Credential, error) {
 	}
 	// The wiring layer hands over a bearer credential holding the
 	// resolved secret; every style re-wraps the same value.
-	secret := credentialSecret(cfg.Credential)
+	secret, ok := credentialSecret(cfg.Credential)
+	if style != "none" && !ok {
+		// Only reachable if a caller supplies a credential shape this
+		// cannot unwrap (a SigV4 signer, say). Failing at boot rather
+		// than re-wrapping an empty secret, which would authenticate
+		// with nothing and surface as a 401 from the search API.
+		return nil, fmt.Errorf("template search: credential of type %T cannot be re-wrapped as auth_style %q", cfg.Credential, style)
+	}
 
 	switch style {
 	case "none":
@@ -153,11 +182,17 @@ func templateCredential(cfg SearchDriverConfig) (Credential, error) {
 	}
 }
 
-func credentialSecret(c Credential) string {
-	if sc, ok := c.(*StaticCredential); ok {
-		return sc.Value
+// credentialSecret unwraps the resolved secret. The bool distinguishes
+// "no credential at all" (fine, auth_style none) from "a credential
+// this cannot read" (a configuration error worth failing on).
+func credentialSecret(c Credential) (string, bool) {
+	if c == nil {
+		return "", false
 	}
-	return ""
+	if sc, ok := c.(*StaticCredential); ok {
+		return sc.Value, true
+	}
+	return "", false
 }
 
 type templateSearchDriver struct {
