@@ -50,7 +50,10 @@ func TestAgentPromptCarriesConfiguredVaults(t *testing.T) {
 	if !strings.Contains(captured, "secret_vaults: bw, vault") {
 		t.Errorf("the configured vaults never reached the prompt:\n%s", captured)
 	}
-	if !strings.Contains(captured, "NEVER ask the user to paste") {
+	if !strings.Contains(captured, "offer it without being asked") {
+		t.Errorf("the instruction to volunteer the vault is missing:\n%s", captured)
+	}
+	if !strings.Contains(captured, "Never ask for the secret itself in chat") {
 		t.Errorf("the instruction that keeps a secret out of the transcript is missing:\n%s", captured)
 	}
 }
