@@ -132,6 +132,14 @@ Values are dot-paths into the decoded JSON. `results` is a path from the root; t
 
 A path that resolves to nothing is treated as an absent optional field. A `results` path that does not resolve to an array is an error naming the path you configured, because that is the one thing a hand-written mapping gets wrong.
 
+## Telling the agent which backend it has
+
+Two places name the configured backend, and they answer different questions.
+
+The **tool description** carries it — *"This deployment's search backend is `searxng`"* — so the agent knows before it calls anything. Each **response** repeats it in `provider`, with a per-result `engine` where the backend reports one, so the agent can say which backend served a particular search.
+
+Both exist because of a real failure. Asked whether a search had gone through the operator's self-hosted SearXNG, the agent checked the MCP registry, `debug_tools`, `/etc`, and `pgrep` — and answered that there was no SearXNG on the host, while holding results that had come from one. `shell_command` is sandboxed with no `/proc`, so the process table was never going to show it, and nothing else it could reach named the search backend. Adding `provider` to the response fixed the second question; only the description fixes the first, because configuration questions get asked before any search happens.
+
 ## Failover
 
 Naming more than one provider makes a chain, tried in order:

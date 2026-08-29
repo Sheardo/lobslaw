@@ -299,3 +299,34 @@ func TestServerToolsMergedIntoRequest(t *testing.T) {
 		t.Errorf("type = %v", entry["type"])
 	}
 }
+
+// Naming the backend only in the RESULT answers "which backend served
+// this search". It does not answer "is SearXNG available to you" —
+// a question about configuration, asked before any search happens.
+// That one sent the agent to pgrep. The description is what it has in
+// hand before it decides anything, so the answer lives there too.
+func TestWebSearchToolDefNamesConfiguredBackends(t *testing.T) {
+	t.Parallel()
+	single := WebSearchToolDef("searxng").Description
+	if !strings.Contains(single, `"searxng"`) {
+		t.Errorf("single-backend description does not name it: %s", single)
+	}
+	if !strings.Contains(single, "authoritative") {
+		t.Error("description should tell the model to trust it over inspecting the host")
+	}
+
+	chain := WebSearchToolDef("searxng", "exa").Description
+	if !strings.Contains(chain, "failover order") || !strings.Contains(chain, `"exa"`) {
+		t.Errorf("chain description = %s", chain)
+	}
+
+	// A deployment with nothing to say says nothing, rather than
+	// emitting "the search backend is: ." at every turn.
+	bare := WebSearchToolDef().Description
+	if strings.Contains(bare, "search backend is") {
+		t.Errorf("unlabelled deployment should add no sentence: %s", bare)
+	}
+	if strings.Contains(WebSearchToolDef("", "  ").Description, "search backend") {
+		t.Error("blank labels should be skipped, not quoted as empty")
+	}
+}

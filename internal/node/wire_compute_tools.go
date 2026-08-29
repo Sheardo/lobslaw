@@ -710,7 +710,11 @@ func (n *Node) wireWebSearchTools(builtins *compute.Builtins) error {
 	if err := compute.RegisterWebSearchBuiltin(builtins, cfgs...); err != nil {
 		return fmt.Errorf("register web_search: %w", err)
 	}
-	if err := n.toolRegistry.Register(compute.WebSearchToolDef()); err != nil {
+	labels := make([]string, 0, len(providers))
+	for _, p := range providers {
+		labels = append(labels, p.Label)
+	}
+	if err := n.toolRegistry.Register(compute.WebSearchToolDef(labels...)); err != nil {
 		return fmt.Errorf("register web_search tool def: %w", err)
 	}
 	n.log.Debug("compute: web_search registered",

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/jmylchreest/lobslaw/pkg/textutil"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -63,11 +64,21 @@ func RegisterWebSearchBuiltin(b *Builtins, cfgs ...WebSearchConfig) error {
 // WebSearchToolDef is the ToolDef to register alongside the
 // builtin. Separate so node.New can conditionally register both or
 // neither based on config.
-func WebSearchToolDef() *types.ToolDef {
+//
+// providers are the configured backend labels in failover order. They
+// go into the DESCRIPTION rather than only into the response, because
+// the description is the one thing the model has BEFORE it decides to
+// call anything. Reporting the backend only in the result answers
+// "which backend served this search"; it does not answer "is SearXNG
+// available to you", which is a question about configuration and the
+// model was previously reduced to guessing at from the process table.
+func WebSearchToolDef(providers ...string) *types.ToolDef {
 	return &types.ToolDef{
-		Name:        "web_search",
-		Path:        BuiltinScheme + "web_search",
-		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right). When summarising results for the user, CITE sources with markdown link syntax like [title](url) so the user can click through. The response also carries \"provider\" (which configured search backend answered) and, per result, \"engine\" where the backend reports it — use those if asked which search backend was used rather than inspecting the system.",
+		Name: "web_search",
+		Path: BuiltinScheme + "web_search",
+		Description: "Search the web for up-to-date information. Returns a list of results (title, url, snippet). Call this when the user asks about current events, recent changes, or facts you're not certain about. Pass query as the search string; optionally set num_results (default 5, max 10) and type (\"auto\", \"fast\", \"deep\" — \"auto\" is usually right). When summarising results for the user, CITE sources with markdown link syntax like [title](url) so the user can click through." +
+			searchBackendSentence(providers) +
+			" Each response repeats the backend in \"provider\", and per result in \"engine\" where the backend reports one.",
 		ParametersSchema: []byte(`{
 			"type": "object",
 			"properties": {
@@ -79,6 +90,31 @@ func WebSearchToolDef() *types.ToolDef {
 			"additionalProperties": false
 		}`),
 		RiskTier: types.RiskCommunicating,
+	}
+}
+
+// searchBackendSentence names the configured backends for the tool
+// description.
+//
+// Unlabelled providers are skipped rather than rendered as empty
+// quotes, and a deployment with nothing to say gets nothing added —
+// silence beats "This deployment's search backend is: .".
+func searchBackendSentence(providers []string) string {
+	named := make([]string, 0, len(providers))
+	for _, p := range providers {
+		if p = strings.TrimSpace(p); p != "" {
+			named = append(named, strconv.Quote(p))
+		}
+	}
+	switch len(named) {
+	case 0:
+		return ""
+	case 1:
+		return " This deployment's search backend is " + named[0] +
+			" — treat that as authoritative if asked which search backend is available, rather than inspecting the host."
+	default:
+		return " This deployment's search backends, in failover order, are " + strings.Join(named, ", ") +
+			" — treat that as authoritative if asked which search backends are available, rather than inspecting the host."
 	}
 }
 
