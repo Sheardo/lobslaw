@@ -31,6 +31,53 @@ Supported `options`, all optional and passed straight through: `engines`, `categ
 
 **Think twice before pinning `engines`.** Search engines block metasearch front-ends aggressively — CAPTCHAs and rate limits are routine, not exceptional. Pinning to a short list makes your search only as available as those engines, and a two-engine pin where one is blocked leaves you resting on one. In testing, `engines = "google,duckduckgo"` went to zero results once Google rate-limited, while the default set returned twenty in the same conditions with three of its engines down. Having spares is what a metasearch front-end is *for*.
 
+### Standing one up
+
+The supported route is the project's own container image:
+
+```bash
+docker run --rm -d --name searxng -p 8888:8080 \
+  -v "$PWD/searxng:/etc/searxng" \
+  searxng/searxng
+```
+
+Write `searxng/settings.yml` before the first run — the two keys that matter are covered below.
+
+Without a container runtime, SearXNG runs from a checkout. It is not on PyPI and its build backend needs `msgspec` present before `pip install -e .` will resolve, so install the runtime requirements and run the module directly rather than installing the package:
+
+```bash
+git clone --depth 1 https://github.com/searxng/searxng.git
+python3 -m venv venv
+./venv/bin/pip install msgspec -r searxng/requirements.txt
+cd searxng && SEARXNG_SETTINGS_PATH=/path/to/settings.yml \
+  ../venv/bin/python -m searx.webapp
+```
+
+A minimal `settings.yml` that inherits the shipped defaults:
+
+```yaml
+use_default_settings: true
+
+general:
+  instance_name: "lobslaw"
+  # Leave off. debug: true starts the werkzeug reloader, which does not
+  # survive being backgrounded.
+  debug: false
+
+server:
+  port: 8888
+  bind_address: "127.0.0.1"
+  secret_key: "change-me"
+  # The limiter blocks non-browser clients, which is exactly what
+  # lobslaw is.
+  limiter: false
+
+search:
+  formats:
+    - html
+    - json
+```
+
 ### Two things to get right
 
 **1 — Enable the JSON API.** It is off by default, and an instance serving only HTML answers lobslaw's request with a bare `403`. In the instance's `settings.yml`:
