@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -115,7 +116,15 @@ func (p *vendorProvider) Fetch(ctx context.Context, path string) (string, error)
 	if err == nil {
 		return v, nil
 	}
-	low := strings.ToLower(err.Error())
+	// Matched against the WHOLE stderr, not the displayed error. The
+	// identifying sentence is not reliably inside the part that
+	// survives truncation — see cmdError.
+	subject := err.Error()
+	var ce *cmdError
+	if errors.As(err, &ce) && ce.stderr != "" {
+		subject = ce.stderr
+	}
+	low := strings.ToLower(subject)
 	for _, h := range p.hints {
 		for _, m := range h.match {
 			if strings.Contains(low, m) {

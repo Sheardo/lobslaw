@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -433,5 +434,94 @@ func TestResolverRejectsAnEmptyPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "bw") {
 		t.Errorf("error should name the provider; got %v", err)
+	}
+}
+
+// Measured against the real Bitwarden CLI, which emits two Node
+// deprecation warnings — about 180 characters of "the punycode module
+// is deprecated" — BEFORE the sentence that matters. Keeping the head
+// would preserve the warnings, cut off "You are not logged in.", and
+// leave the hint unable to fire because the substring it matches on had
+// been thrown away.
+func TestExecKeepsTheTailOfNoisyStderr(t *testing.T) {
+	stubBin(t, "noisyvault", `
+		i=0; while [ $i -lt 30 ]; do echo "DeprecationWarning: something is deprecated" >&2; i=$((i+1)); done
+		echo "You are not logged in." >&2
+		exit 1`)
+
+	p := mustProvider(t, ExecFactory, ProviderConfig{Label: "v", Command: []string{"noisyvault"}})
+	_, err := p.Fetch(context.Background(), "x")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "You are not logged in") {
+		t.Errorf("the operative error was truncated away:\n%v", err)
+	}
+	if !utf8.ValidString(err.Error()) {
+		t.Error("truncation produced invalid UTF-8")
+	}
+}
+
+// The same noise must not stop a vendor hint firing, which is the whole
+// reason those drivers are compiled rather than exec blocks.
+func TestVendorHintSurvivesNoisyStderr(t *testing.T) {
+	stubBin(t, "bw", `
+		i=0; while [ $i -lt 30 ]; do echo "DeprecationWarning: punycode is deprecated" >&2; i=$((i+1)); done
+		echo "You are not logged in." >&2
+		exit 1`)
+
+	p := mustProvider(t, BitwardenFactory, ProviderConfig{Label: "bw"})
+	_, err := p.Fetch(context.Background(), "app/key")
+	if err == nil || !strings.Contains(err.Error(), "bw unlock") {
+		t.Errorf("hint should still fire through the noise; got %v", err)
+	}
+}
+
+// Recognition reads the WHOLE stderr; display reads a truncated copy.
+//
+// Both real CLIs settle this between them. Bitwarden puts its
+// identifying sentence last, after Node deprecation warnings;
+// 1Password puts its first, in an 800-character message that ends with
+// a generic "error initializing client:". Matching against the
+// displayed string would have broken one of them whichever end the cap
+// kept.
+func TestVendorHintMatchesUntruncatedStderr(t *testing.T) {
+	// The identifying line is buried in the middle, so neither end of a
+	// truncated copy contains it.
+	stubBin(t, "bw", `
+		i=0; while [ $i -lt 12 ]; do echo "warning: noise line to pad the head out a long way" >&2; i=$((i+1)); done
+		echo "You are not logged in." >&2
+		i=0; while [ $i -lt 12 ]; do echo "trailing noise to pad the tail out a long way too" >&2; i=$((i+1)); done
+		exit 1`)
+
+	p := mustProvider(t, BitwardenFactory, ProviderConfig{Label: "bw"})
+	_, err := p.Fetch(context.Background(), "app/key")
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if !strings.Contains(err.Error(), "bw unlock") {
+		t.Errorf("hint should fire on a sentence truncation removed from view:\n%v", err)
+	}
+	// And the displayed message is still bounded.
+	if len(err.Error()) > 1200 {
+		t.Errorf("displayed error is %d bytes; the cap is not holding", len(err.Error()))
+	}
+}
+
+// Both ends survive, because which end carries the meaning depends on
+// the CLI.
+func TestTruncateKeepsHeadAndTail(t *testing.T) {
+	t.Parallel()
+
+	s := "HEAD-MARKER" + strings.Repeat("x", 4000) + "TAIL-MARKER"
+	got := truncate(s, 700)
+	if !strings.Contains(got, "HEAD-MARKER") {
+		t.Error("head was dropped; 1Password leads with the useful line")
+	}
+	if !strings.Contains(got, "TAIL-MARKER") {
+		t.Error("tail was dropped; Bitwarden ends with the useful line")
+	}
+	if len(got) > 800 {
+		t.Errorf("result is %d bytes; the cap is not holding", len(got))
 	}
 }

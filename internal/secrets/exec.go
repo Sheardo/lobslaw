@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 // The declarative secret provider: a configured argv, its stdout.
@@ -126,10 +128,38 @@ func (p *execProvider) Fetch(ctx context.Context, path string) (string, error) {
 	return out, nil
 }
 
+// cmdError is a failed command, carrying its stderr WHOLE.
+//
+// The whole copy exists because two jobs read it and they want different
+// things. Display wants it short, since it lands in a boot log. Failure
+// RECOGNITION — the vendor drivers matching "not signed in" to decide
+// which fix to suggest — wants all of it, because the sentence that
+// identifies the failure is not reliably in the part that survives
+// truncation. Measured: 1Password puts it in the first line of an
+// 800-character message and Bitwarden puts it in the last line after
+// 180 characters of Node deprecation warnings. Truncating before
+// matching would have broken one or the other whichever end was kept.
+type cmdError struct {
+	label  string
+	bin    string
+	stderr string
+	err    error
+}
+
+func (e *cmdError) Error() string {
+	if e.stderr != "" {
+		return fmt.Sprintf("secrets: provider %q: %s: %s", e.label, e.bin, truncate(e.stderr, stderrDisplayCap))
+	}
+	return fmt.Sprintf("secrets: provider %q: %s: %v", e.label, e.bin, e.err)
+}
+
+func (e *cmdError) Unwrap() error { return e.err }
+
 // runError turns a failed command into something an operator can act
 // on. The secret PATH is named because it is not itself a secret and is
 // usually the thing that is wrong; the command's stderr is included
-// because it is where every CLI puts the real reason.
+// because it is where every CLI puts the real reason. stdout never is —
+// that is the secret.
 func (p *execProvider) runError(ctx context.Context, argv []string, stderr string, err error) error {
 	stderr = strings.TrimSpace(stderr)
 	switch {
@@ -138,10 +168,8 @@ func (p *execProvider) runError(ctx context.Context, argv []string, stderr strin
 			"a vault CLI that prompts interactively will do this", p.label, argv[0], p.timeout)
 	case errors.Is(err, exec.ErrNotFound):
 		return fmt.Errorf("secrets: provider %q: %q is not on PATH", p.label, argv[0])
-	case stderr != "":
-		return fmt.Errorf("secrets: provider %q: %s: %s", p.label, argv[0], truncate(stderr, 400))
 	default:
-		return fmt.Errorf("secrets: provider %q: %s: %w", p.label, argv[0], err)
+		return &cmdError{label: p.label, bin: argv[0], stderr: stderr, err: err}
 	}
 }
 
@@ -185,11 +213,29 @@ func mergedEnv(extra map[string]string) []string {
 	return out
 }
 
+// stderrDisplayCap bounds how much of a failed command's stderr reaches
+// the log. Generous, because a real one is bigger than it sounds:
+// 1Password's "no accounts configured" message is around 800 characters
+// of prose and links.
+const stderrDisplayCap = 700
+
+// truncate keeps BOTH ENDS of a long stderr.
+//
+// Neither end is reliably the useful one, which two real CLIs settle
+// between them. Bitwarden emits two Node deprecation warnings — about
+// 180 characters about the punycode module — and then "You are not
+// logged in.", so the tail is what matters. 1Password leads with "No
+// accounts configured for use with 1Password CLI." and ends with a
+// generic "error initializing client:", so the head is. Keeping one end
+// would have thrown away the operative sentence for one of them.
 func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "…"
+	half := max / 2
+	head := textutil.Sanitise(s[:half])
+	tail := textutil.Sanitise(s[len(s)-half:])
+	return head + "\n…\n" + tail
 }
 
 // sortStrings is a local helper so resolver.go does not need the sort
