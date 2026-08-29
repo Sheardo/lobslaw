@@ -52,6 +52,26 @@ func (h *SlackHandler) handleSlashCommand(ctx context.Context, sc slackSlashComm
 
 	name, args := splitSlashCommand(sc.Command, sc.Text, h.slashPrefix())
 
+	// A slash payload carries no thread_ts, and every channel turn is
+	// keyed "<channel>/<thread_ts>". So outside a DM this handler cannot
+	// name the conversation the user is looking at — only the bare
+	// channel, which is a different session and usually an empty one.
+	//
+	// Refused rather than run. /new against the wrong key deletes
+	// nothing, says "I've forgotten what we were talking about here",
+	// and revokes grants under a session id the user never used while
+	// the ones they did use survive — so they are told their privileges
+	// are gone and they are not. Nothing can be threaded through to fix
+	// this; Slack does not send it.
+	if !slackChannelIsDM(sc.ChannelID) && h.commands.IsSessionScoped(name) {
+		h.log.Info("slack: refusing a session-scoped command in a channel; no thread_ts in the payload",
+			"channel", sc.ChannelID, "user", sc.UserID, "command", name)
+		h.replyToCommand(ctx, sc,
+			"`"+name+"` acts on one conversation, and a slash command in a channel doesn't tell me "+
+				"which thread you're in. Send it to me in a DM, or mention me in the thread you mean.")
+		return
+	}
+
 	claims := &types.Claims{
 		UserID: h.principalFor(ctx, h.teamOr(sc.TeamID), sc.UserID),
 		Scope:  scope,

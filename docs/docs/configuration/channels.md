@@ -34,7 +34,7 @@ type          = "slack"
 bot_token_ref = "env:SLACK_BOT_TOKEN"   # xoxb-…
 app_token_ref = "env:SLACK_APP_TOKEN"   # xapp-…, needs connections:write
 
-allowed_channels = ["C0123ABC", "C0456DEF"]   # ["*"] = anywhere it is invited
+allowed_channels = ["dm", "C0123ABC"]         # "dm" = every DM; ["*"] = anywhere it is invited
 user_scopes      = { "U06DZJWNACV" = "owner" }
 ```
 
@@ -69,6 +69,26 @@ It is enforced in two places, and both matter:
 
 Enforcing only the first would govern what the agent *hears* while leaving what it can *go and read* wide open.
 
+Three forms of entry:
+
+| Entry | Matches |
+|---|---|
+| `"C0123ABC"` | that conversation, by id |
+| `"dm"` | every direct message |
+| `"*"` | every conversation |
+
+`"dm"` exists because a DM's id is minted per user on first contact, so there is nothing to write down in advance. Without it, the only configuration that let anyone DM the bot was `["*"]` — which also opened every channel it had been invited to. The shape most deployments want is:
+
+```toml
+allowed_channels = ["dm", "C0123ABC"]   # anyone may DM it; it speaks in one channel
+```
+
+### Slash commands
+
+A message matching `/<name>` is dispatched as a command **only when that command is registered**. Anything else — `/start`, which every Telegram client sends automatically on first contact, or `/help me pick a model` — falls through to the agent as an ordinary message.
+
+That fall-through is deliberate. Answering every unregistered `/word` with *"Unknown command"* means the first thing a new Telegram user hears from the bot is a complaint about something they never typed.
+
 ### Threads and DMs
 
 A thread is its own conversation, keyed `<channel>/<thread_ts>`, so each thread carries its own transcript and memory rather than interleaving into the channel's. Replies go into a thread in channels and inline in DMs.
@@ -81,9 +101,13 @@ Without that rule the speaker changes between turns and recall keyed on them alo
 
 An unknown channel type counts as shared. The two ways to be wrong are not symmetric: under-sharing costs some recall, over-sharing discloses one person's memories to a room.
 
+The rule is **not** limited to passive recall. `memory_search` and the other `memory_*` builtins go through the same audience filter, so an explicit search in a shared conversation returns records other people own if this conversation produced them. That is the consistent choice — a rule that applied to background recall but not to the tool the model can simply call would not be a rule — but it is worth knowing before you ask the bot to search in a busy channel.
+
 ### Reading Slack as a source
 
 `slack_read_channel` and `slack_search` let the agent read history. They are the only builtins with **no default-allow policy seed** — reading a workspace's conversations is an operator decision, so it takes an explicit rule:
+
+There is **no per-user membership check**. `allowed_channels` is operator-global, so anyone who gets past the tool policy can read any allowed channel from a DM, whether or not they are a member of it. That is a much coarser rule than the shared-conversation rule above, and it is the doorway to the same content that rule is careful about — so scope the policy by subject, and list conversations rather than reaching for `"*"`.
 
 ```toml
 [[policy.rules]]

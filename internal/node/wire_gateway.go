@@ -33,7 +33,6 @@ func (n *Node) wireGateway() error {
 				return fmt.Errorf("gateway.channels[%d] (slack): %w", i, err)
 			}
 			sl = h
-			n.slackHandler = h
 		case "telegram":
 			h, err := n.buildTelegramHandler(ch)
 			if err != nil {

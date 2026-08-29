@@ -1119,6 +1119,12 @@ type GatewayChannelConfig struct {
 	// in. ["*"] is wide open. EMPTY IS CLOSED: an operator who has not
 	// said where the bot may speak has not thereby said "anywhere".
 	//
+	// "dm" is a sentinel matching every direct message, because a D-id
+	// is minted per user on first contact and cannot be written down in
+	// advance. allowed_channels = ["dm", "C0123ABC"] is the shape most
+	// deployments want: anyone may DM the assistant, and it speaks in
+	// exactly one channel.
+	//
 	// It gates two different things and must be consulted for both —
 	// which conversations produce turns, and which conversations the
 	// slack_* read tools may fetch. Enforcing it only on inbound

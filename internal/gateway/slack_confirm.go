@@ -45,7 +45,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	})
 	if err != nil {
 		h.log.Error("slack: prompt registration failed", "err", err)
-		r.write(ctx, "Confirmation required: "+resp.ConfirmationReason, nil)
+		r.writeFinal(ctx, "Confirmation required: "+resp.ConfirmationReason, nil)
 		return
 	}
 
@@ -91,7 +91,7 @@ func (h *SlackHandler) sendConfirmationBlocks(ctx context.Context, r *slackRespo
 	// it" rather than appearing under it, so the user is not left
 	// deciding whether the bot is still thinking as well as asking.
 	fallback := "Confirmation required: " + resp.ConfirmationReason
-	r.write(ctx, fallback, blocks)
+	r.writeFinal(ctx, fallback, blocks)
 }
 
 func button(label, actionID, style string) map[string]any {
@@ -354,12 +354,24 @@ func (h *SlackHandler) takePendingScope(promptID string) (scopedOperation, bool)
 	return op, ok
 }
 
+// resumeSessionFor is the conversation a resumed leg runs in.
+//
+// UserID carries through, and that is the whole point of the function
+// existing: the resumed leg can raise a SECOND confirmation, and
+// sendConfirmationBlocks stamps RaisedFor from this field. Left empty,
+// that prompt is attributable to nobody, mayResolve refuses every tap
+// — including from the person it was asked of — and a turn that had
+// been approved once has no ending but its TTL.
+func resumeSessionFor(p *Prompt) SessionRef {
+	return SessionRef{Channel: ChannelSlack, ChannelID: p.SessionID, UserID: p.RaisedFor}
+}
+
 // resumeAfterApproval re-enters the agent loop with a relaxed budget
 // and delivers the result back to the thread the question was asked in.
 func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, thread string) {
 	cont := p.Continuation
 	channel := p.ChannelID
-	session := SessionRef{Channel: ChannelSlack, ChannelID: p.SessionID}
+	session := resumeSessionFor(p)
 
 	// Tools stay nil: fillDefaults repopulates them from the resuming
 	// node's own registry, so a serialised definition cannot outlive
@@ -379,7 +391,7 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	resp, err := h.agent.ResumeFromConfirmation(turnCtx, cont.Request, cont.Messages)
 	if err != nil {
 		h.log.Error("slack: resume failed", "turn_id", cont.Request.TurnID, "err", err)
-		r.write(ctx, classifyAgentError(err), nil)
+		r.writeFinal(ctx, classifyAgentError(err), nil)
 		return
 	}
 
@@ -391,9 +403,9 @@ func (h *SlackHandler) resumeAfterApproval(ctx context.Context, p *Prompt, threa
 	case resp.NeedsConfirmation:
 		h.sendConfirmationBlocks(ctx, r, cont.Request, resp, session)
 	case resp.Reply == "":
-		r.write(ctx, "(empty reply)", nil)
+		r.writeFinal(ctx, "(empty reply)", nil)
 	default:
-		r.write(ctx, resp.Reply, nil)
+		r.writeFinal(ctx, resp.Reply, nil)
 	}
 	// The resumed leg is where a confirmed generation actually
 	// produces its file, so this is the delivery point that matters

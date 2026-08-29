@@ -208,6 +208,32 @@ func (h *SlackHandler) sendAttachment(ctx context.Context, channel, thread strin
 	return nil
 }
 
+// slackFilePrefix returns a "F0123ABC-" prefix taken from a
+// url_private, or "" when the reference does not carry one.
+//
+// Read from the URL rather than plumbed through types.Attachment: the
+// id is already in the reference every inbound Slack file has, and one
+// channel's identifier does not belong in the shared attachment type.
+func slackFilePrefix(ref string) string {
+	for _, seg := range strings.Split(ref, "/") {
+		for _, part := range strings.Split(seg, "-") {
+			if len(part) > 1 && part[0] == 'F' && isSlackIDBody(part[1:]) {
+				return part + "-"
+			}
+		}
+	}
+	return ""
+}
+
+func isSlackIDBody(s string) bool {
+	for _, r := range s {
+		if !(r >= '0' && r <= '9') && !(r >= 'A' && r <= 'Z') {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *SlackHandler) downloadOne(ctx context.Context, turnDir string, a *types.Attachment) (string, error) {
 	getCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -240,16 +266,29 @@ func (h *SlackHandler) downloadOne(ctx context.Context, turnDir string, a *types
 	if name == "" {
 		name = sanitiseRef(a.Reference) + pickExtension(a)
 	}
-	dst := filepath.Join(turnDir, filepath.Base(name))
+	// Prefixed with the Slack file id, because two files sharing a name
+	// in one turn is ordinary — "screenshot.png" twice — and without it
+	// the second silently overwrote the first, so the agent read one
+	// image and was told about two.
+	dst := filepath.Join(turnDir, slackFilePrefix(a.Reference)+filepath.Base(name))
 
 	f, err := os.Create(dst)
 	if err != nil {
 		return "", fmt.Errorf("create %q: %w", dst, err)
 	}
 	defer func() { _ = f.Close() }()
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// Capped at the same ceiling as an outbound artifact, and for a
+	// stronger reason: the size here is chosen by whoever dropped the
+	// file into the channel, Slack's own per-file limit is 1GB, and the
+	// only bound before this was a request timeout.
+	n, err := io.Copy(f, io.LimitReader(resp.Body, slackMaxUploadBytes+1))
+	if err != nil {
 		_ = os.Remove(dst)
 		return "", fmt.Errorf("write %q: %w", dst, err)
+	}
+	if n > slackMaxUploadBytes {
+		_ = os.Remove(dst)
+		return "", fmt.Errorf("fetch %q: exceeds the %d MiB cap", a.Filename, slackMaxUploadBytes>>20)
 	}
 	// Closed explicitly: the final flush can fail after io.Copy has
 	// reported success, and swallowing that hands the caller a path to

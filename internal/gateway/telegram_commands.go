@@ -69,6 +69,19 @@ func (h *TelegramHandler) handleCommand(ctx context.Context, chatID int64, text 
 	if !ok {
 		return false
 	}
+	// An unregistered name falls through to the agent rather than being
+	// answered with "Unknown command".
+	//
+	// Intercepting every /word was a regression with a specific victim:
+	// /start is sent automatically by every Telegram client on first
+	// contact, so the first thing a new user got from the bot was a
+	// complaint about a command they had not typed. /deploy, /status
+	// against somebody else's tool, "/help me pick a model" — all of
+	// them are ordinary things to say to an assistant, and none of them
+	// is this bot's command.
+	if !h.commands.Has(name) {
+		return false
+	}
 	req.Name, req.Args = name, args
 	h.sendText(chatID, h.commands.Dispatch(ctx, req))
 	return true

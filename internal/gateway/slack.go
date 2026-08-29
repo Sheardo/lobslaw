@@ -26,6 +26,15 @@ const ChannelSlack = "slack"
 // slackWildcard opens AllowedChannels to every conversation.
 const slackWildcard = "*"
 
+// slackDMSentinel matches every direct message in AllowedChannels.
+const slackDMSentinel = "dm"
+
+// slackReadIdleTimeout bounds one socket read.
+//
+// Slack pings this connection every few seconds, so silence past this
+// is a socket that died without saying so.
+const slackReadIdleTimeout = 60 * time.Second
+
 // SlackConfig wires the Slack channel. Mirrors TelegramConfig field
 // for field wherever the two channels genuinely share a concern, so
 // that the responsiveness timers, queue policy, session store and
@@ -38,10 +47,16 @@ type SlackConfig struct {
 	BotToken string
 	AppToken string
 
-	// AllowedChannels lists conversation ids this bot will act in, or
-	// ["*"] for all. EMPTY IS CLOSED — see the config field's comment.
-	// DMs are matched by their own id (a "D…" channel), so a
-	// deployment that wants DMs only can list them and nothing else.
+	// AllowedChannels lists conversation ids this bot will act in.
+	// EMPTY IS CLOSED — see the config field's comment. "*" opens every
+	// conversation; "dm" opens every direct message.
+	//
+	// The "dm" sentinel exists because D-ids are minted per user on
+	// first contact, so a DM cannot be listed in advance. Without it
+	// the only config that let anyone DM the bot was ["*"], which also
+	// opened every channel it had been invited to — so an operator
+	// wanting a DM-only assistant had to choose between that and a bot
+	// nobody could talk to.
 	AllowedChannels []string
 
 	// UserScopes maps a Slack user id to a lobslaw scope. Unmapped
@@ -136,9 +151,14 @@ type SlackHandler struct {
 	log   *slog.Logger
 	api   *slackAPI
 
-	// botUserID is this bot's own Slack user id, learned at boot from
-	// auth.test. Without it the bot answers its own messages, which in
-	// a channel is an unbounded loop rather than a cosmetic bug.
+	// identityMu guards botUserID and teamID. They are rewritten every
+	// time socketLoop re-authenticates, which singleton.Run does on
+	// every regain of ownership — while event goroutines from the
+	// previous term may still be reading them.
+	identityMu sync.RWMutex
+	// botUserID is this bot's own Slack user id, learned from auth.test.
+	// Without it the bot answers its own messages, which in a channel is
+	// an unbounded loop rather than a cosmetic bug.
 	botUserID string
 	// teamID is the workspace this bot is installed in, from auth.test.
 	// Used only as a fallback: an event carries its own team id, and
@@ -248,21 +268,37 @@ func (h *SlackHandler) RunSocketMode(ctx context.Context) error {
 }
 
 func (h *SlackHandler) socketLoop(ctx context.Context) error {
-	// Learn our own identity once. A failure here is fatal to the
-	// channel rather than survivable: without botUserID the loop
-	// cannot tell its own messages from a user's.
-	userID, teamID, err := h.api.authTest(ctx)
-	if err != nil {
-		return fmt.Errorf("slack: auth.test: %w", err)
-	}
-	h.botUserID, h.teamID = userID, teamID
-	h.log.Info("slack: authenticated", "bot_user_id", userID, "team_id", teamID)
-
+	// Identity is learned INSIDE the loop, so a failure takes the same
+	// backoff a dropped socket does.
+	//
+	// It used to be a single call above the loop whose error was
+	// returned. singleton.Run returns on any non-context error and
+	// never re-invokes fn, and the caller logs one Warn — so a network
+	// blip or a rate-limited auth.test at boot left Slack silently dead
+	// until the process was restarted, while the reconnect path
+	// directly below was careful about exactly that.
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		userID, teamID, authErr := h.api.authTest(ctx)
+		if authErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			h.log.Warn("slack: auth.test failed; retrying", "err", authErr, "in", backoff)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		h.setIdentity(userID, teamID)
+		h.log.Info("slack: authenticated", "bot_user_id", userID, "team_id", teamID)
+
 		err := h.runOneConnection(ctx)
 		switch {
 		case ctx.Err() != nil:
@@ -302,8 +338,20 @@ func (h *SlackHandler) runOneConnection(ctx context.Context) error {
 	h.log.Info("slack: socket connected")
 
 	for {
-		env, err := sock.read(ctx)
+		// A read deadline, because coder/websocket answers pings inside
+		// Read: a live socket is fine without one, but a silent
+		// partition blocks Read forever and the reconnect logic below
+		// never runs. The bot goes deaf and logs nothing.
+		readCtx, cancel := context.WithTimeout(ctx, slackReadIdleTimeout)
+		env, err := sock.read(readCtx)
+		cancel()
 		if err != nil {
+			// A timeout is a dead socket, not a fatal error: returning
+			// it takes the same reconnect-with-backoff path everything
+			// else here does.
+			if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+				return fmt.Errorf("slack: no traffic for %s; treating the socket as dead", slackReadIdleTimeout)
+			}
 			return err
 		}
 		switch env.Type {
@@ -337,7 +385,11 @@ func (h *SlackHandler) dispatchEnvelope(ctx context.Context, env *slackEnvelope)
 			h.log.Warn("slack: malformed events payload", "err", err)
 			return
 		}
-		go h.handleEvent(context.WithoutCancel(ctx), p)
+		// runCtx, not context.WithoutCancel(ctx): a turn started under
+		// this node's leadership must stop when that leadership goes,
+		// or the old leader keeps answering into channels the new one
+		// is already serving.
+		go h.handleEvent(ctx, p)
 	case "interactive":
 		var in slackInteraction
 		if err := json.Unmarshal(env.Payload, &in); err != nil {
@@ -392,7 +444,7 @@ func (h *SlackHandler) wantsEvent(ev slackEvent) bool {
 	}
 	// Our own messages, and any other bot's. Without this the bot
 	// answers itself, which in a channel does not terminate.
-	if ev.BotID != "" || ev.User == "" || ev.User == h.botUserID {
+	if ev.BotID != "" || ev.User == "" || ev.User == h.selfUserID() {
 		return false
 	}
 	// Text OR files. A file shared with no comment is a real message —
@@ -441,10 +493,23 @@ func (h *SlackHandler) firstSeen(key string) bool {
 // that answers in every conversation it was ever invited to.
 func (h *SlackHandler) isAllowedChannel(channelID string) bool {
 	for _, c := range h.cfg.AllowedChannels {
+		c = strings.TrimSpace(c)
 		if c == slackWildcard {
 			return true
 		}
-		if strings.EqualFold(strings.TrimSpace(c), channelID) {
+		// "dm" covers every 1:1 conversation, because those cannot be
+		// enumerated: Slack mints a D-id per user on first contact, so
+		// there is nothing for an operator to write down in advance.
+		// Without it the only working config for a DM-capable bot was
+		// ["*"], which also opens every channel the bot is in — the
+		// opposite of what somebody listing conversations intends.
+		if strings.EqualFold(c, slackDMSentinel) {
+			if slackChannelIsDM(channelID) {
+				return true
+			}
+			continue
+		}
+		if strings.EqualFold(c, channelID) {
 			return true
 		}
 	}
@@ -509,13 +574,37 @@ func slackChannelSubject(teamID, userID string) string {
 }
 
 // teamOr resolves the workspace for an event, preferring the one the
-// event carried. Written once at connect, before any event goroutine
-// exists, so no lock is needed to read it.
+// event carried.
+//
+// Read under the lock. The old comment here said these were "written
+// once at connect, before any event goroutine exists, so no lock is
+// needed" — true on the first acquire and false afterwards.
+// singleton.Run re-invokes socketLoop on every ownership regain, which
+// rewrites both fields, while event goroutines spawned from a previous
+// term are still reading them.
 func (h *SlackHandler) teamOr(eventTeam string) string {
 	if eventTeam != "" {
 		return eventTeam
 	}
+	h.identityMu.RLock()
+	defer h.identityMu.RUnlock()
 	return h.teamID
+}
+
+// setIdentity records who this bot is on the workspace it just
+// authenticated against.
+func (h *SlackHandler) setIdentity(userID, teamID string) {
+	h.identityMu.Lock()
+	h.botUserID, h.teamID = userID, teamID
+	h.identityMu.Unlock()
+}
+
+// selfUserID is this bot's own user id, used to drop its own messages
+// and to strip its mention out of a body.
+func (h *SlackHandler) selfUserID() string {
+	h.identityMu.RLock()
+	defer h.identityMu.RUnlock()
+	return h.botUserID
 }
 
 func (h *SlackHandler) rolesFor(userID string) []string {

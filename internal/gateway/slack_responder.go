@@ -44,12 +44,30 @@ type slackResponder struct {
 	// native records that Slack's own assistant status is carrying the
 	// progress signal, so no placeholder was posted and none is wanted.
 	native bool
+	// final latches once the answer has been written.
+	//
+	// The interim timer runs on its own goroutine and is stopped by a
+	// deferred cleanup() that fires AFTER the reply is written, so a
+	// turn finishing near the 30s threshold can have its answer
+	// overwritten by the message that only ever existed to fill the
+	// wait — Slack rewrites one message in place, so the user is left
+	// looking at "Still working on this…" as the terminal state of a
+	// finished turn. -race sees nothing wrong: mu is held correctly,
+	// the ORDER is what is wrong.
+	final bool
 }
 
 // slackStatusText is the native status line. Slack renders it as
 // "<Bot> is <status>", so this reads as a continuation rather than a
 // sentence — "is working on it…", not "Working on it…".
 const slackStatusText = "working on it…"
+
+// slackStatusInterimText is the same idea for a turn that has been
+// going a while. The shared defaultInterimText ("Still working on this
+// — a few tools are running…") is a sentence, and Slack renders the
+// status as "<Bot> is <status>", so it arrives as "Bot is Still
+// working on this…". begin got this right; Interim did not.
+const slackStatusInterimText = "still working — a few tools are running…"
 
 // begin posts the placeholder. Called once, synchronously, before the
 // agent runs: the whole point is that it lands immediately rather than
@@ -142,8 +160,18 @@ func (r *slackResponder) Typing(context.Context) error { return nil }
 // leaves the thread with one reply and no scaffolding. Falling back, it
 // rewrites the placeholder, which is the same idea done with a message.
 func (r *slackResponder) Interim(ctx context.Context, text string) error {
+	r.mu.Lock()
+	done := r.final
+	r.mu.Unlock()
+	if done {
+		// The answer is already on screen. Anything this would write
+		// replaces it with a progress note about work that finished.
+		return nil
+	}
 	if r.usingNative() {
-		if err := r.h.api.setAssistantStatus(ctx, r.channel, r.status, text); err == nil {
+		// The caller's sentence is written for a message; the native
+		// status needs the continuation form.
+		if err := r.h.api.setAssistantStatus(ctx, r.channel, r.status, slackStatusInterimText); err == nil {
 			return nil
 		}
 		// The status worked once and has stopped; say it as a message
@@ -154,8 +182,30 @@ func (r *slackResponder) Interim(ctx context.Context, text string) error {
 }
 
 func (r *slackResponder) Final(ctx context.Context, text string) error {
-	r.write(ctx, text, nil)
+	r.writeFinal(ctx, text, nil)
 	return nil
+}
+
+// writeFinal writes a turn's terminal message and latches the responder
+// against any later interim.
+//
+// Separate from write() because write() is also the interim's fallback
+// path, so latching inside it would make the first progress note the
+// last thing the turn could say. Separate from Final() because nothing
+// on the Slack path calls Final — every terminal branch writes
+// directly, so a latch that only lived there would never fire.
+//
+// It covers the confirmation blocks too, where the stake is higher than
+// a stale progress line: an interim landing on that message replaces
+// the Approve and Deny buttons with text, and the turn can then only
+// end at its TTL.
+func (r *slackResponder) writeFinal(ctx context.Context, text string, blocks []any) {
+	// Latched BEFORE the write, so an interim that wins the race to the
+	// lock still sees the turn as finished and declines.
+	r.mu.Lock()
+	r.final = true
+	r.mu.Unlock()
+	r.write(ctx, text, blocks)
 }
 
 // startResponsivenessGuards adapts the handler's config onto the shared

@@ -74,6 +74,20 @@ type Command struct {
 	// having its output quietly trimmed — a half-answer in a channel
 	// is how somebody learns the wrong thing about what the bot knows.
 	SharedSafe bool
+	// SessionScoped marks a command that acts on ONE conversation's
+	// stored state. A channel that cannot address the conversation the
+	// user is looking at must refuse it rather than act on the wrong
+	// one.
+	//
+	// The case that forced this: a Slack slash payload carries no
+	// thread_ts, while every channel turn is keyed "C1/<thread_ts>".
+	// /new therefore forgot the bare "C1" — an empty session — and
+	// reported success, and the revoke that rides along with it cleared
+	// grants under "slack:C1" while the ones the user had actually
+	// given under "slack:C1/1.1" survived. Acting on the wrong
+	// conversation while claiming to have acted on theirs is worse than
+	// declining, because it also tells them their privileges are gone.
+	SessionScoped bool
 }
 
 // CommandSet is the registry and dispatcher.
@@ -97,6 +111,28 @@ func (cs *CommandSet) Register(c *Command) {
 		return
 	}
 	cs.cmds[strings.ToLower(c.Name)] = c
+}
+
+// IsSessionScoped reports whether the named command acts on one
+// conversation's stored state, so a channel that cannot address the
+// conversation in front of the user can decline instead of guessing.
+func (cs *CommandSet) IsSessionScoped(name string) bool {
+	if cs == nil {
+		return false
+	}
+	c, ok := cs.cmds[strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "/"))]
+	return ok && c.SessionScoped
+}
+
+// Has reports whether a command is registered. Channels use it to tell
+// "the user typed one of our commands" from "the user typed a message
+// that happens to start with a slash".
+func (cs *CommandSet) Has(name string) bool {
+	if cs == nil {
+		return false
+	}
+	_, ok := cs.cmds[strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "/"))]
+	return ok
 }
 
 // Names returns the registered commands, sorted, for help and for the
@@ -233,9 +269,10 @@ func RegisterBuiltinCommands(cs *CommandSet, conv ConversationResetter) {
 	}
 
 	cs.Register(&Command{
-		Name:       "status",
-		Summary:    "show what this conversation is carrying",
-		SharedSafe: true,
+		Name:          "status",
+		Summary:       "show what this conversation is carrying",
+		SharedSafe:    true,
+		SessionScoped: true,
 		Handler: func(ctx context.Context, req CommandRequest) (string, error) {
 			t := conv.Load(ctx, req.Session)
 			var b strings.Builder
@@ -251,9 +288,10 @@ func RegisterBuiltinCommands(cs *CommandSet, conv ConversationResetter) {
 	})
 
 	cs.Register(&Command{
-		Name:       "new",
-		Summary:    "forget this conversation and start fresh",
-		SharedSafe: true,
+		Name:          "new",
+		Summary:       "forget this conversation and start fresh",
+		SharedSafe:    true,
+		SessionScoped: true,
 		Handler: func(ctx context.Context, req CommandRequest) (string, error) {
 			if err := conv.Forget(ctx, req.Session); err != nil {
 				return "", err

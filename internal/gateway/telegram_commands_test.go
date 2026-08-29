@@ -1,6 +1,9 @@
 package gateway
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -72,5 +75,62 @@ func TestTelegramHandleCommandConsumesOnlyCommands(t *testing.T) {
 	bare := &TelegramHandler{cfg: TelegramConfig{}, log: discardLogger()}
 	if bare.handleCommand(t.Context(), 1, "/new", CommandRequest{}) {
 		t.Error("a handler with no command set consumed a command")
+	}
+}
+
+// /start is sent automatically by every Telegram client on first
+// contact. Intercepting it meant the first thing a new user heard from
+// the bot was a complaint about a command they never typed.
+func TestTelegramUnregisteredCommandReachesTheAgent(t *testing.T) {
+	t.Parallel()
+
+	cs := NewCommandSet(fakeAuthz{allow: true}, discardLogger())
+	cs.Register(&Command{
+		Name:       "new",
+		SharedSafe: true,
+		Handler:    func(context.Context, CommandRequest) (string, error) { return "ok", nil },
+	})
+	h := &TelegramHandler{commands: cs, log: discardLogger()}
+
+	for _, text := range []string{"/start", "/deploy the thing", "/help me pick a model"} {
+		if h.handleCommand(context.Background(), 1, text, CommandRequest{}) {
+			t.Errorf("%q was swallowed as a command; it should reach the agent", text)
+		}
+	}
+}
+
+// A registered one is still intercepted, or the fall-through has simply
+// disabled commands.
+func TestTelegramRegisteredCommandIsStillHandled(t *testing.T) {
+	t.Parallel()
+
+	cs := NewCommandSet(fakeAuthz{allow: true}, discardLogger())
+	ran := false
+	cs.Register(&Command{
+		Name:       "new",
+		SharedSafe: true,
+		Handler: func(context.Context, CommandRequest) (string, error) {
+			ran = true
+			return "ok", nil
+		},
+	})
+	// An httptest Bot API, because handling a command ends in a reply
+	// and the point of the assertion is that it got that far.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+	h := &TelegramHandler{
+		commands: cs,
+		log:      discardLogger(),
+		base:     srv.URL,
+		client:   srv.Client(),
+	}
+
+	if !h.handleCommand(context.Background(), 1, "/new", CommandRequest{}) {
+		t.Fatal("a registered command should be handled, not passed to the agent")
+	}
+	if !ran {
+		t.Error("the command's handler never ran")
 	}
 }

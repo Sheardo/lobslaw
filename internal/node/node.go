@@ -403,7 +403,6 @@ type Node struct {
 	// misconfigures itself.
 	gatewaySrv      *gateway.Server
 	telegramHandler *gateway.TelegramHandler
-	slackHandler    *gateway.SlackHandler
 	promptRegistry  gateway.Prompts
 
 	// enrolments queues operator certificate requests; enrolmentSvc

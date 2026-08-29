@@ -89,7 +89,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 	if body == "" {
 		body = ev.Text
 	}
-	body = stripBotMention(body, h.botUserID)
+	body = stripBotMention(body, h.selfUserID())
 
 	// Materialise any shared files so the vision/audio/pdf builtins can
 	// open them by path. Best-effort: a download failure costs that
@@ -132,7 +132,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		h.log.Error("slack: agent error", "turn_id", turnID, "err", err)
 		// Into the placeholder: an error left beside a stale "working
 		// on it" reads as two separate things having gone wrong.
-		responder.write(ctx, classifyAgentError(err), nil)
+		responder.writeFinal(ctx, classifyAgentError(err), nil)
 		return
 	}
 
@@ -148,9 +148,9 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		}
 		// No registry wired — render the reason as text. The turn
 		// pauses safely either way; it just cannot be resumed by a tap.
-		responder.write(ctx, "Confirmation required: "+resp.ConfirmationReason, nil)
+		responder.writeFinal(ctx, "Confirmation required: "+resp.ConfirmationReason, nil)
 	case resp.Reply == "":
-		responder.write(ctx, "(empty reply)", nil)
+		responder.writeFinal(ctx, "(empty reply)", nil)
 	case shared:
 		// No notice in a room. The nudge says how many proposals the
 		// OPERATOR has waiting — their queue, not the channel's, and
@@ -159,7 +159,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		// that a channel allowlist alone "would tell a group chat what
 		// the operator has pending"; in Slack a group chat is the
 		// normal case rather than the exception.
-		responder.write(ctx, resp.Reply, nil)
+		responder.writeFinal(ctx, resp.Reply, nil)
 	default:
 		// Three subject spellings, because the operator's list could
 		// hold any of them and matching only one is how a nudge ends up
@@ -168,7 +168,7 @@ func (h *SlackHandler) handleMessage(ctx context.Context, teamID string, ev slac
 		//   - the channel-derived id, when they did not;
 		//   - the bare Slack id, which is what ownerSubjects defaults
 		//     to and the only one written in a config file by hand.
-		responder.write(ctx, h.cfg.Notices.Append(ctx,
+		responder.writeFinal(ctx, h.cfg.Notices.Append(ctx,
 			ChannelSlack, convID, grantSubject(claims), resp.Reply,
 			slackChannelSubject(teamID, ev.User), "user:"+ev.User), nil)
 	}

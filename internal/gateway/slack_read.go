@@ -36,6 +36,11 @@ const (
 	// every tool call.
 	slackSearchMaxPages = 3
 
+	// slackReadMaxPages bounds a single conversation read the same way.
+	// Higher than the search cap because this walks one conversation
+	// the caller named rather than fanning out across many.
+	slackReadMaxPages = 10
+
 	// slackSearchMaxHits caps what comes back across all channels.
 	slackSearchMaxHits = 25
 
@@ -85,9 +90,14 @@ func (h *SlackHandler) ReadConversation(ctx context.Context, ref string, limit i
 
 	var out []SlackTranscriptMessage
 	cursor := ""
-	for len(out) < limit {
-		page := min(slackReadPageSize, limit-len(out))
-		msgs, next, err := h.api.history(ctx, id, cursor, page)
+	// Page-bounded as well as result-bounded, for the same reason
+	// SearchConversations is. isReadableMessage drops joins, leaves and
+	// bot noise, so a channel made mostly of those satisfies neither
+	// len(out) < limit nor an empty cursor, and the loop walks the
+	// entire history one API page at a time.
+	for page := 0; page < slackReadMaxPages && len(out) < limit; page++ {
+		size := min(slackReadPageSize, limit-len(out))
+		msgs, next, err := h.api.history(ctx, id, cursor, size)
 		if err != nil {
 			return nil, err
 		}
