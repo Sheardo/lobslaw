@@ -169,6 +169,18 @@ The gate sits on the tool registry, which is the only place builtins, skill mani
 
 `disabled_tools = ["[unclosed"]` disables nothing at all. The failure directions are not symmetric: a typo that matches nothing leaves you with a tool still visible and a pattern to fix, while a typo that matched everything would be a node with no tools and no obvious cause.
 
+## Path guards
+
+Every builtin that takes a filesystem path asks the same three questions, in this order:
+
+1. **mount resolver** — does this path exist to the agent, in this mode? Declared by `[[storage.mounts]]`. Absoluteness falls out of this step, because the mount-label form (`workspace/notes.md`) is legitimately relative until it expands.
+2. **hardline floor** — `policy.CheckPath`. Three verdicts: allow, **confirm**, deny. No configuration reaches it.
+3. **`policy.d/<tool>.toml`** — may *this tool* touch it? Narrowing only.
+
+Step 1 grants, step 2 refuses, step 3 subtracts. That `policy.d` can never widen is load-bearing rather than stylistic — see [the sandbox notes](https://github.com/jmylchreest/lobslaw/blob/main/docs/dev/SANDBOX.md).
+
+`list_files` and `glob` return names rather than content: they run steps 1 and 2 on the directory, then filter individual entries against the floor rather than failing. `shell_command` has a command string rather than a path and tokenises it through `policy.CheckCommandPaths`, which refuses a *confirm* verdict outright because a shell has nowhere to ask.
+
 ## Naming convention
 
 `<noun>_<verb>` — `commitment_create`, `memory_recall`, `schedule_cancel`. Skill tools follow `<skill>.<tool>` (`gws-workspace.gmail.send`). MCP tools follow `<server>.<tool>` (`minimax.text_to_image`).
