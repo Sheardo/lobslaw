@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -167,7 +168,12 @@ func (t *Tracker) pollLoop(ctx context.Context, flow *Flow, da *DeviceAuthRespon
 		return
 	}
 	// Success path — invoke the callback to persist the credential.
-	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// WithoutCancel: the poll context may already be cancelled — the
+	// tracker shutting down, the flow's own deadline passing — and the
+	// user has by then completed the authorisation. Persisting has to
+	// outlive the loop that was waiting for it, or somebody approves a
+	// credential the node never stores.
+	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer persistCancel()
 	if err := onComplete(persistCtx, flow, tok); err != nil {
 		t.markOutcome(flow, "error", fmt.Errorf("persist: %w", err))
@@ -240,9 +246,7 @@ func (t *Tracker) List() []FlowSnapshot {
 	}
 	// Newest first — flow IDs are ULIDs which sort by time so a
 	// reverse string sort reads as "newest first."
-	for i := 0; i < len(out)/2; i++ {
-		out[i], out[len(out)-1-i] = out[len(out)-1-i], out[i]
-	}
+	slices.Reverse(out)
 	return out
 }
 

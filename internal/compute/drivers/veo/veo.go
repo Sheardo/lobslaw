@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/pkg/textutil"
 )
 
 const (
@@ -238,8 +239,8 @@ func (d *Driver) Poll(ctx context.Context, h compute.JobHandle) (compute.JobStat
 // resolve time as "unknown mount", which names the problem exactly.
 func splitGCSURI(uri string) (mount, path string) {
 	trimmed := strings.TrimPrefix(uri, "gs://")
-	if i := strings.Index(trimmed, "/"); i >= 0 {
-		return trimmed[:i], trimmed[i+1:]
+	if before, after, ok := strings.Cut(trimmed, "/"); ok {
+		return before, after
 	}
 	return trimmed, ""
 }
@@ -268,16 +269,8 @@ func (d *Driver) post(ctx context.Context, url string, body []byte, what string)
 	if resp.StatusCode >= 400 {
 		return nil, &compute.DriverError{
 			Class: compute.ClassifyHTTPStatus(resp.StatusCode, string(raw)),
-			Err:   fmt.Errorf("veo: %s: HTTP %d: %s", what, resp.StatusCode, truncate(raw)),
+			Err:   fmt.Errorf("veo: %s: HTTP %d: %s", what, resp.StatusCode, textutil.Truncate(string(raw), "…[truncated]", 512)),
 		}
 	}
 	return raw, nil
-}
-
-func truncate(b []byte) string {
-	const max = 512
-	if len(b) <= max {
-		return string(b)
-	}
-	return string(b[:max]) + "…[truncated]"
 }
