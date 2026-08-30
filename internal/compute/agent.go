@@ -1571,8 +1571,9 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 			if err := a.cfg.Executor.CheckPolicy(ctx, req.Claims, "tool:exec", tc.Name); err != nil {
 				inv.Error = err.Error()
 				if errors.Is(err, ErrRequireConfirm) {
+					action, resource := confirmationOperation(err, tc.Name)
 					return inv, &pendingConfirmation{
-						Reason: confirmationReason(err), Action: "tool:exec", Resource: tc.Name,
+						Reason: confirmationReason(err), Action: action, Resource: resource,
 					}, nil
 				}
 				return inv, nil, nil
@@ -1620,8 +1621,9 @@ func (a *Agent) runToolCall(ctx context.Context, req ProcessMessageRequest, tc T
 		// path implemented it.
 		if errors.Is(err, ErrRequireConfirm) {
 			inv.Error = err.Error()
+			action, resource := confirmationOperation(err, tc.Name)
 			return inv, &pendingConfirmation{
-				Reason: confirmationReason(err), Action: "tool:exec", Resource: tc.Name,
+				Reason: confirmationReason(err), Action: action, Resource: resource,
 			}, nil
 		}
 		inv.Error = err.Error()
@@ -1760,9 +1762,33 @@ func scopeOfClaims(c *types.Claims) string {
 // operator nothing they did not already know, and the part after the
 // colon is the rule's own reason, which is what they wrote it for.
 func confirmationReason(err error) string {
+	var cr *ConfirmationRequest
+	if errors.As(err, &cr) && cr.Summary != "" {
+		// A gate that summarised the call said something better than
+		// the rule's own reason: the rule explains why an approval is
+		// wanted, the summary says what is about to happen, and only
+		// the second is answerable.
+		return cr.Summary
+	}
 	msg := err.Error()
 	if _, rest, found := strings.Cut(msg, ErrRequireConfirm.Error()+": "); found {
 		return rest
 	}
 	return msg
+}
+
+// confirmationOperation is the (action, resource) the answer gets
+// recorded against.
+//
+// A gate that asked under its own action says so, and is believed. The
+// fallback is the tool itself, which is right for the other case: the
+// tool:exec check returned require_confirmation because an operator
+// wrote a rule about this tool, and a grant about the tool is what they
+// were asking to be able to give.
+func confirmationOperation(err error, toolName string) (action, resource string) {
+	var cr *ConfirmationRequest
+	if errors.As(err, &cr) && cr.Action != "" {
+		return cr.Action, cr.Resource
+	}
+	return "tool:exec", toolName
 }

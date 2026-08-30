@@ -78,7 +78,9 @@ func (e *Executor) approvalFor(tool string) (gatedTool, bool) {
 //
 // Returns ErrRequireConfirm carrying a summary of WHAT is being
 // written, because the decision is about the content and a prompt that
-// withholds it cannot be answered.
+// withholds it cannot be answered — and carrying the gate's own action
+// and resource, because the channel has to record the answer against
+// the operation that was actually asked about.
 func (e *Executor) checkWriteApproval(ctx context.Context, claims *types.Claims, tool string, params map[string]string) error {
 	gate, ok := e.approvalFor(tool)
 	if !ok {
@@ -95,25 +97,41 @@ func (e *Executor) checkWriteApproval(ctx context.Context, claims *types.Claims,
 	if !errors.Is(err, ErrRequireConfirm) {
 		return err
 	}
-	if gate.summarise == nil {
-		return err
+	req := &ConfirmationRequest{inner: err, Action: gate.action, Resource: gate.resource}
+	if gate.summarise != nil {
+		req.Summary = gate.summarise(params)
 	}
-	summary := gate.summarise(params)
-	if summary == "" {
-		return err
-	}
-	return &confirmWithSummary{inner: err, summary: summary}
+	return req
 }
 
-// confirmWithSummary carries the human-facing description alongside
-// the sentinel, so errors.Is still finds ErrRequireConfirm.
-type confirmWithSummary struct {
-	inner   error
-	summary string
+// ConfirmationRequest is a confirmation that knows what it is about.
+//
+// The gate asks under its OWN action — memory:write, not the tool:exec
+// the executor asked first — so the channel has to be told that action.
+// Without it the answer is recorded against the wrong operation: an
+// "approve for this chat" grants tool:exec/memory_write, which the gate
+// never consults, and an "always" mints an allow rule for tool:exec
+// that wire_seeds.go already seeded on every node. Both look like they
+// worked, and the same prompt returns forever.
+//
+// Action empty means the caller keeps whatever it was already going to
+// report. Resource empty means confirmable but not grantable — there is
+// no class a grant could name, so the channel offers no scope button.
+type ConfirmationRequest struct {
+	inner    error
+	Action   string
+	Resource string
+	Summary  string
 }
 
-func (c *confirmWithSummary) Error() string { return c.inner.Error() + ": " + c.summary }
-func (c *confirmWithSummary) Unwrap() error { return c.inner }
+func (c *ConfirmationRequest) Error() string {
+	if c.Summary == "" {
+		return c.inner.Error()
+	}
+	return c.inner.Error() + ": " + c.Summary
+}
+
+func (c *ConfirmationRequest) Unwrap() error { return c.inner }
 
 // MemoryWriteSummary renders a memory_write call for a confirmation
 // prompt.
