@@ -39,6 +39,15 @@ const ApprovalAction = "memory:write"
 type gatedTool struct {
 	action   string
 	resource string
+	// resolve derives the resource THIS CALL is about from its
+	// parameters, for a gate whose question is about the arguments
+	// rather than the tool name. Nil means the fixed resource above is
+	// the whole answer.
+	//
+	// grantable=false means confirmable but not generalisable: there
+	// is no class a grant could name, so the channel is told the
+	// resource is empty and offers no scope button.
+	resolve func(map[string]string) (string, bool)
 	// summarise turns the call's parameters into something a person
 	// can decide about. A confirmation that says only "the agent wants
 	// to write a memory" is one nobody can answer usefully, so they
@@ -66,6 +75,23 @@ func (e *Executor) RequireApproval(tool, resource string, summarise func(map[str
 	e.gated[tool] = gatedTool{action: ApprovalAction, resource: resource, summarise: summarise}
 }
 
+// RequireCommandApproval marks a tool whose approval is about its
+// PARAMETERS rather than its name.
+//
+// The ACTION is not a parameter here for the same reason it is not one
+// on RequireApproval: a caller could pass "tool:exec", which every
+// deployment already allows for this tool from the wire_seeds.go
+// default, and the gate would be satisfied by a rule that has nothing
+// to do with it.
+func (e *Executor) RequireCommandApproval(tool string, resolve func(map[string]string) (string, bool), summarise func(map[string]string) string) {
+	e.gateMu.Lock()
+	defer e.gateMu.Unlock()
+	if e.gated == nil {
+		e.gated = map[string]gatedTool{}
+	}
+	e.gated[tool] = gatedTool{action: ShellAction, resolve: resolve, summarise: summarise}
+}
+
 // approvalFor returns the gate for a tool, if it has one.
 func (e *Executor) approvalFor(tool string) (gatedTool, bool) {
 	e.gateMu.RLock()
@@ -74,30 +100,37 @@ func (e *Executor) approvalFor(tool string) (gatedTool, bool) {
 	return g, ok
 }
 
-// checkWriteApproval runs the extra gate, if the tool has one.
+// checkGate runs the extra gate, if the tool has one.
 //
-// Returns ErrRequireConfirm carrying a summary of WHAT is being
-// written, because the decision is about the content and a prompt that
+// Returns ErrRequireConfirm carrying a summary of WHAT is about to
+// happen, because the decision is about the content and a prompt that
 // withholds it cannot be answered — and carrying the gate's own action
 // and resource, because the channel has to record the answer against
 // the operation that was actually asked about.
-func (e *Executor) checkWriteApproval(ctx context.Context, claims *types.Claims, tool string, params map[string]string) error {
+func (e *Executor) checkGate(ctx context.Context, claims *types.Claims, tool string, params map[string]string) error {
 	gate, ok := e.approvalFor(tool)
 	if !ok {
 		return nil
 	}
-	err := e.policyAllow(ctx, claims, gate.action, gate.resource)
+	resource, grantable := gate.resource, true
+	if gate.resolve != nil {
+		resource, grantable = gate.resolve(params)
+	}
+	err := e.policyAllow(ctx, claims, gate.action, resource)
 	if err == nil {
 		return nil
 	}
 	// A confirmation gets the summary appended so the prompt says what
-	// is being written. Any other outcome — a deny, an engine failure
-	// — passes through untouched: adding content to a denial would put
-	// it in front of somebody who is not being asked to decide.
+	// is being asked about. Any other outcome — a deny, an engine
+	// failure — passes through untouched: adding content to a denial
+	// would put it in front of somebody who is not being asked to
+	// decide.
 	if !errors.Is(err, ErrRequireConfirm) {
 		return err
 	}
-	req := &ConfirmationRequest{inner: err, Action: gate.action, Resource: gate.resource}
+	req := &ConfirmationRequest{
+		inner: err, Action: gate.action, Resource: resource, Grantable: grantable,
+	}
 	if gate.summarise != nil {
 		req.Summary = gate.summarise(params)
 	}
@@ -122,6 +155,16 @@ type ConfirmationRequest struct {
 	Action   string
 	Resource string
 	Summary  string
+	// Grantable reports whether an answer to this may be REMEMBERED.
+	//
+	// Separate from Resource because the two questions are different,
+	// and conflating them cost a bug: a shell command with no stable
+	// form was reported with a blank resource so the channels would
+	// hide the scope buttons, and then the turn approval had nothing to
+	// match on, so approving it once resumed straight back into the
+	// same prompt. The resource is what policy evaluates and what the
+	// turn approval keys on; this is what the channel offers.
+	Grantable bool
 }
 
 func (c *ConfirmationRequest) Error() string {

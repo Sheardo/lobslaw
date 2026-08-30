@@ -116,7 +116,12 @@ sequenceDiagram
         else within
           Budget-->>Agent: Within
           Agent->>Exec: Invoke(ToolCall)
+          Exec->>Exec: hardlineCheck(params)
+          Note over Exec: compiled-in floor, before policy<br/>so it cannot be configured away
           Exec->>Policy: Evaluate(claims, tool:exec, tool)
+          Policy-->>Exec: allow
+          Exec->>Policy: Evaluate(claims, gate action, per-call resource)
+          Note over Exec,Policy: the per-tool gate: memory:write for<br/>memory_write, shell:run for the command
           Policy-->>Exec: allow
           Exec->>Hooks: PreToolUse
           Hooks-->>Exec: allow

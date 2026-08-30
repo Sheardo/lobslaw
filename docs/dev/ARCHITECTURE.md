@@ -175,12 +175,20 @@ sequenceDiagram
   Exec->>Reg: Get(tool)
   Reg-->>Exec: ToolDef
   Exec->>Exec: resolveToolPath (EvalSymlinks, root-contain)
+  Exec->>Exec: hardlineCheck(params)
+  Note over Exec: compiled-in floor, evaluated BEFORE policy<br/>so no configuration can reach past it
   Exec->>Pol: Evaluate(claims, "tool:exec", tool)
   alt decision = deny / require_confirmation
     Pol-->>Exec: deny / require_confirmation
     Exec-->>Agent: error (ErrPolicyDenied / ErrRequireConfirm)
   else allow
     Pol-->>Exec: allow
+    Exec->>Pol: Evaluate(claims, gate action, per-call resource)
+    Note over Exec,Pol: per-tool gate, own action so the<br/>tool:exec allow cannot satisfy it
+    alt gate asks
+      Pol-->>Exec: require_confirmation
+      Exec-->>Agent: ConfirmationRequest{action, resource, summary}
+    end
     Exec->>Hook: PreToolUse(payload)
     alt hook blocks
       Hook-->>Exec: ErrHookBlocked

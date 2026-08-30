@@ -26,6 +26,14 @@ whoever is tired of tapping Approve.
 The hardline floor is the set of things that stay refused anyway. It is compiled into the binary,
 reads no configuration, and has no override flag.
 
+It is now the **only** compiled-in refusal on the shell path. `shell_command` used to carry a
+substring denylist of its own — `sudo`, `ssh`, `curl`, `wget`, `dd` and others — which refused
+outright with no way to say yes, so the only recourse was editing the source. Those commands go to
+the [per-command approval gate](/security/policy-engine#per-command-shell-approval) instead, where
+a human can answer. The floor did not move: it is checked before policy and before that gate, and
+`ApprovalRules.Mint` refuses to write a rule for anything it denies, so no approval at any scope
+reaches past it.
+
 ## What it refuses
 
 **Commands** (`internal/policy/hardline.go`, `CheckCommand`):

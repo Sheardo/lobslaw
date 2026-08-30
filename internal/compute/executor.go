@@ -188,14 +188,28 @@ func (e *Executor) Invoke(ctx context.Context, req InvokeRequest) (*InvokeResult
 	// A sensitive-but-not-secret path escalates a policy allow to a
 	// confirmation. After policyAllow, so a path the operator's rules
 	// already deny is refused rather than prompted about.
+	// Honours the turn approval for the same reason policy does: this
+	// is an escalate-to-human verdict, and the human just answered it.
+	// Without the check the resumed call meets it again, raises another
+	// prompt, and every tap produces a new one — a loop the resume
+	// re-execution would drive indefinitely. PathDenied is a different
+	// verdict on a different path and is not reachable from here.
 	if err := hardlineConfirm(req.Params); err != nil {
-		return nil, err
+		if !turnApproved(ctx, "tool:exec", tool.Name) {
+			return nil, err
+		}
 	}
-	// The write gate, for the same reason and in the same place: a
+	// The per-tool gate — the memory write staging, the per-command
+	// shell approval — for the same reason and in the same place: a
 	// tool the operator's rules already deny is refused rather than
 	// prompted about. Only tools explicitly marked have one, so a
 	// deployment that never opted in pays a map lookup.
-	if err := e.checkWriteApproval(ctx, req.Claims, tool.Name, req.Params); err != nil {
+	//
+	// Before dispatch, and it has to be: runBuiltin folds a builtin's
+	// error into an InvokeResult and returns nil, so a confirmation
+	// raised inside the builtin would become tool output the model
+	// reads and the user never sees.
+	if err := e.checkGate(ctx, req.Claims, tool.Name, req.Params); err != nil {
 		return nil, err
 	}
 	if e.hooks != nil {
@@ -457,6 +471,16 @@ func (e *Executor) policyAllow(ctx context.Context, claims *types.Claims, action
 		// Only session grants are consulted here. "always" is a
 		// policy allow rule, so it is already handled above by
 		// Evaluate returning allow — there is nothing to check.
+		// The answer the user just gave, for the turn they gave it in.
+		// Without this "Approve" resolves the prompt, the turn resumes,
+		// and the very same call meets the very same rule — so tapping
+		// it produces another keyboard rather than the thing the user
+		// approved.
+		if turnApproved(ctx, action, resource) {
+			e.logger.Debug("policy: approved for this turn",
+				"action", action, "resource", resource)
+			return nil
+		}
 		if e.approvals.Granted(ctx, action, resource) {
 			e.logger.Debug("policy: confirmation already approved for this conversation",
 				"action", action, "resource", resource)

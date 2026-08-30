@@ -72,10 +72,56 @@ Constraints on minting, all enforced in `internal/policy/approval_rules.go`:
 | Rule | Why |
 |---|---|
 | Priority 1 | Below any operator-authored deny. An approval is one tap; it should not outrank a rule somebody wrote deliberately. |
-| No wildcards in action or resource | The button offered the operation the user saw, not a class of them. |
+| No wildcards in action or resource | The button offered the operation the user saw, not a class of them. This is about meaning, not syntax — a resource transformed to drop part of what the user read (approving `git status --short` and minting `git status`) is the refused thing wearing a disguise, and is not done anywhere. |
 | Subject must be `user:` / `role:` / `scope:` | Anything else fails closed in `subjectMatches`, so the rule would look like a grant in a listing and grant nothing. |
 | Refused if the [hardline floor](/security/hardline-floor) denies the resource | Checked at mint time as well as at invoke time, so a listing never shows a grant that reads as though it works. |
 | Id derived from the prompt id | Re-tapping is idempotent rather than piling up duplicates. |
+
+## Per-command shell approval
+
+`shell_command` is asked about twice: once as a tool (`tool:exec` / `shell_command`, which every
+node allows by default seed) and once as a command (`shell:run` / the command itself). The second
+question is the one that matters, and it uses its own action deliberately — reusing `tool:exec`
+would mean the default seed satisfied the gate before it was asked.
+
+The resource is **the exact command**, canonicalised for whitespace and quoting only. Nothing is
+dropped, so `git status --short` and `git push --force` are different grants. Tapping *Always
+allow* therefore stops one command from being asked about, not the shell.
+
+Some commands have no stable identity and are asked about **every time**, with no scope button
+offered: anything containing a pipe, `&&`, `;`, a redirect, `$`, backticks, a backslash, a glob, a
+`#`, a `!`, a `VAR=` prefix, or a shell reserved word in front position. What runs depends on the
+environment, or on more than one program, or on shell syntax the key cannot preserve — so no grant
+could honestly name it. Those are evaluated under the reserved resource `!unclassified`, and an
+approval for one is spent on that single call rather than covering the class for the rest of the
+turn.
+
+`#` and `!` are refused rather than quoted because quoting them changes what runs: `ls #foo`
+executes `ls`, while the rendered key `ls '#foo'` executes `ls` against a file named `#foo`. A key
+that names a longer command than the one that actually runs is the one failure this design cannot
+absorb — an approval for `git clean -fdx '#-n'` (which deletes nothing) would otherwise be matched
+by `git clean -fdx #-n` (which deletes everything untracked).
+
+To stop being asked about a family of commands, write a rule. This is the deliberate,
+visible, revocable form of "generalise", and it is the answer to *"I don't want to approve every
+git command"*:
+
+```toml
+[[policy.rules]]
+id       = "james-git-is-fine"
+priority = 20
+effect   = "allow"
+subject  = "user:tg-@james"
+action   = "shell:run"
+resource = "git *"          # prefix glob
+```
+
+An `allow` on `!unclassified` is the explicit "stop asking me about compound commands". No real
+command can reach that resource, so it cannot be hit by accident.
+
+The [hardline floor](/security/hardline-floor) still applies first and is not reachable by any of
+this: `rm -rf /`, fork bombs, `mkfs`, `curl | sh` are refused before a prompt is ever raised, and
+`Mint` refuses to write a rule for them even if one were somehow requested.
 
 ## Inputs
 
@@ -93,6 +139,8 @@ The action+resource shape is the matching key. Conventions:
 | Action | Resource shape | Used for |
 |---|---|---|
 | `tool:exec` | tool name (`current_time`, `notify`, `gws-workspace.gmail.send`) | Every agent tool call |
+| `shell:run` | the exact command (`git status --short`) | Every `shell_command` call, asked separately from `tool:exec` |
+| `memory:write` | record kind (`episodic`) | Staging agent-initiated memory writes |
 | `credentials:read` | credential ID | `credentials_grant` invoker side |
 | `credentials:grant` | role / skill name | granting a skill access |
 | `oauth:start` | provider name | starting a device flow |

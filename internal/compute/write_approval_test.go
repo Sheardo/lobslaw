@@ -75,7 +75,7 @@ func TestAnUnapprovedWriteIsStaged(t *testing.T) {
 	t.Parallel()
 	e, _ := gatedExecutor(t)
 
-	err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams())
 	if !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("err = %v, want ErrRequireConfirm", err)
@@ -89,7 +89,7 @@ func TestThePromptSaysWhatIsBeingWritten(t *testing.T) {
 	t.Parallel()
 	e, _ := gatedExecutor(t)
 
-	err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams())
 	if err == nil {
 		t.Fatal("expected a confirmation")
@@ -111,7 +111,7 @@ func TestADeniedWriteCarriesNoContent(t *testing.T) {
 		Effect: "deny", Priority: 0,
 	})
 
-	err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams())
 	if !errors.Is(err, ErrPolicyDenied) {
 		t.Fatalf("err = %v, want ErrPolicyDenied", err)
@@ -132,7 +132,7 @@ func TestAnAlwaysAllowRulePassesTheGate(t *testing.T) {
 		Effect: "allow", Priority: 1,
 	})
 
-	if err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	if err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); err != nil {
 		t.Errorf("an always-approved write was staged again: %v", err)
 	}
@@ -147,12 +147,12 @@ func TestASessionGrantSatisfiesTheGate(t *testing.T) {
 		Principal: identity.Principal("user:alice"), Channel: "telegram", ChannelID: "42",
 	})
 
-	if err := e.checkWriteApproval(ctx, &types.Claims{UserID: "alice"},
+	if err := e.checkGate(ctx, &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); !errors.Is(err, ErrRequireConfirm) {
 		t.Fatalf("the first write was not staged: %v", err)
 	}
 	approvals.Grant(ctx, ApprovalAction, "episodic")
-	if err := e.checkWriteApproval(ctx, &types.Claims{UserID: "alice"},
+	if err := e.checkGate(ctx, &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); err != nil {
 		t.Errorf("a granted conversation was asked again: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestAGrantDoesNotCoverAnotherConversation(t *testing.T) {
 	})
 	approvals.Grant(granted, ApprovalAction, "episodic")
 
-	if err := e.checkWriteApproval(other, &types.Claims{UserID: "alice"},
+	if err := e.checkGate(other, &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); !errors.Is(err, ErrRequireConfirm) {
 		t.Errorf("a grant leaked to another conversation: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestAnUngatedToolIsNotChecked(t *testing.T) {
 	// than passing, which is a sharper assertion than counting calls.
 	e := NewExecutor(NewRegistry(), nil, nil, ExecutorConfig{}, slog.New(slog.DiscardHandler))
 
-	if err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	if err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams()); err != nil {
 		t.Fatalf("an ungated tool was checked: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestAnUngatedToolIsNotChecked(t *testing.T) {
 func TestOnlyTheMarkedToolIsGated(t *testing.T) {
 	t.Parallel()
 	e, _ := gatedExecutor(t)
-	if err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	if err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_search", map[string]string{"query": "x"}); err != nil {
 		t.Errorf("an unmarked tool was gated: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestTheGateUsesItsOwnAction(t *testing.T) {
 		Effect: "allow", Priority: 0,
 	})
 
-	err := e.checkWriteApproval(context.Background(), &types.Claims{UserID: "alice"},
+	err := e.checkGate(context.Background(), &types.Claims{UserID: "alice"},
 		"memory_write", writeParams())
 	if !errors.Is(err, ErrRequireConfirm) {
 		t.Errorf("err = %v; the tool:exec allow satisfied the write gate", err)

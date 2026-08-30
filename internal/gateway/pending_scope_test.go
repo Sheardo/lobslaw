@@ -48,10 +48,10 @@ func TestTelegramGrantWithoutStoreStillConsumesTheScope(t *testing.T) {
 	}
 	q := &tgCallbackQuery{Message: &tgMessage{Chat: tgChat{ID: 1, Type: "private"}}}
 
-	if h.grantForSession(t.Context(), "p1", q) {
+	if h.grantForSession(t.Context(), "p1", q) != "" {
 		t.Error("a session grant was reported with no approvals store")
 	}
-	if h.grantAlways(t.Context(), "p2", q) {
+	if h.grantAlways(t.Context(), "p2", q) != "" {
 		t.Error("a permanent grant was reported with no rules store")
 	}
 	if len(h.pendingScope) != 0 {

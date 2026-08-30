@@ -309,3 +309,78 @@ func TestMintedRuleLosesToAnOperatorDeny(t *testing.T) {
 		t.Errorf("effect = %q, want the operator's deny to stand", dec.Effect)
 	}
 }
+
+// Resources are commands now, not just tool names, which changes what
+// the mint-time floor check has to look at.
+//
+// It used to call CheckPath and CheckCommand only. A command naming a
+// protected file — "cat /etc/shadow" — reads as an unremarkable word to
+// the first and passes the second, so it would have minted a rule the
+// executor then refused on every use. The rule listing would have shown
+// an operator a grant that reads as though it works.
+
+func TestACommandResourceWithFlagsIsMintable(t *testing.T) {
+	t.Parallel()
+	rules, _ := newApprovalRules(t)
+
+	rule, err := rules.Mint(context.Background(), MintRequest{
+		PromptID: "p-flags", Subject: "user:alice",
+		Action: "shell:run", Resource: "git log --oneline -5",
+	})
+	if err != nil {
+		t.Fatalf("an ordinary command was refused: %v", err)
+	}
+	if rule.Resource != "git log --oneline -5" {
+		t.Errorf("resource = %q, want the command verbatim", rule.Resource)
+	}
+}
+
+// The floor's filesystem-wipe pattern must not swallow an ordinary
+// scoped rm. If it did, the refusal would be silent and confusing —
+// the user taps Always on something reasonable and is told the floor
+// denied it.
+func TestAnOrdinaryScopedRmIsMintable(t *testing.T) {
+	t.Parallel()
+	rules, _ := newApprovalRules(t)
+
+	if _, err := rules.Mint(context.Background(), MintRequest{
+		PromptID: "p-rm", Subject: "user:alice",
+		Action: "shell:run", Resource: "rm -rf /tmp/build",
+	}); err != nil {
+		t.Fatalf("a scoped rm was caught by the wipe pattern: %v", err)
+	}
+}
+
+func TestACommandNamingAProtectedPathIsRefused(t *testing.T) {
+	t.Parallel()
+	rules, _ := newApprovalRules(t)
+
+	for _, resource := range []string{
+		"cat /etc/shadow",
+		"rm -rf /",
+	} {
+		if _, err := rules.Mint(context.Background(), MintRequest{
+			PromptID: "p-floor", Subject: "user:alice",
+			Action: "shell:run", Resource: resource,
+		}); !errors.Is(err, ErrHardlineRule) {
+			t.Errorf("Mint(%q) err = %v, want ErrHardlineRule", resource, err)
+		}
+	}
+}
+
+// The invariant this whole design was built around rather than
+// relaxed: an approval covers the operation the user saw, never a
+// class of them. Generalisation is an operator rule.
+func TestTheWildcardRefusalStillHolds(t *testing.T) {
+	t.Parallel()
+	rules, _ := newApprovalRules(t)
+
+	for _, resource := range []string{"git *", "*", "ssh host *"} {
+		if _, err := rules.Mint(context.Background(), MintRequest{
+			PromptID: "p-wild", Subject: "user:alice",
+			Action: "shell:run", Resource: resource,
+		}); err == nil {
+			t.Errorf("Mint(%q) succeeded; a tap must not widen into a class", resource)
+		}
+	}
+}

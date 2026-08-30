@@ -222,10 +222,34 @@ sequenceDiagram
     else ErrPromptResolved
       Handler->>TG: sendMessage("That prompt was already resolved.")
     else ok
-      Handler->>TG: sendMessage("Approved." / "Denied.")
+      Handler->>TG: sendMessage("Approved <what>." / "Denied.")
+      opt approved with a paused turn
+        Handler->>Agent: ResumeFromConfirmation(ctx + turn approval, continuation)
+        Note over Agent: re-runs the APPROVED tool call and replaces<br/>the refusal in the transcript with its result
+        Agent-->>Handler: reply (or a further confirmation)
+        Handler->>TG: sendMessage(reply)
+      end
     end
   end
 ```
+
+### Approving has to run the thing
+
+A paused turn's transcript ends with the assistant's tool call and a
+tool-role result reading `tool invocation requires confirmation`.
+Resuming used to replay exactly that, so the first thing the model saw
+was its own call having been refused — and a model just told it was
+refused does not retry, it explains the refusal. The approval was
+recorded, the policy gate would have passed, and the command still never
+ran.
+
+So the resume re-executes the call the user approved (`pendingToolCall`
+finds it by tool-call id at the tail of the transcript) and overwrites
+the refusal with the real result, in place, before the loop continues.
+Two things ride the resumed context to make that pass: `Budget.Relax()`
+for the spend cap, and `compute.WithTurnApproval` for the policy gate —
+the latter keyed on the operation from the PROMPT RECORD, never from the
+callback payload.
 
 ### Update dedup
 
@@ -283,7 +307,20 @@ The atomicity of Resolve matters: a split lock would let multiple concurrent cal
 | `session` | A `SessionApprovals` grant, keyed by conversation, living only in the process — a restart ends the continuity the user was reasoning about. |
 | `always` | Mints a policy allow rule with `created_by = "approval:<prompt_id>"`. See [Policy Engine](/security/policy-engine) for the constraints on minting and `lobslaw policy approvals` / `revoke-approvals` for listing and undoing them. |
 
-Telegram renders one button per available scope; REST takes `{"approve": true, "scope": "session"}`. An unrecognised scope narrows to `once` — a typo must never widen a grant.
+Telegram and Slack render one button per **available** scope; REST takes `{"approve": true, "scope": "session"}`. An unrecognised scope narrows to `once` — a typo must never widen a grant.
+
+Availability is decided by the confirmation itself. A prompt whose `ConfirmationAction` /
+`ConfirmationResource` are empty gets **Approve and Deny only**, and that is load-bearing in two
+places: a budget confirmation is about spend rather than an operation, so there is nothing a
+channel could offer to remember; and a shell command with no stable form — a pipeline, a compound
+command, anything with a glob or `$` in it — is reported with an empty resource precisely so no
+scope button appears. A button that minted nothing would be worse than no button, because it would
+look like it worked.
+
+Both channels name what they granted in the reply (`Approved — I won't ask about \`git status
+--short\` again`). With a grant covering one command rather than a whole tool, a reply that only
+said "this" would be asking the user to take the narrow reading on trust. Shared by both channels
+via `alwaysGrantReply` / `sessionGrantReply` so the two cannot drift.
 
 No scope can reach past the [hardline floor](/security/hardline-floor).
 

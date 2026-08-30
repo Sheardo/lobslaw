@@ -28,9 +28,9 @@ import (
 // node. Both reported success and neither changed anything, so the
 // same prompt came back on the very next write, forever.
 //
-// The unit tests missed it because they called checkWriteApproval
-// directly and did the granting by hand. Nothing walked the path the
-// channel actually takes: Invoke → runToolCall → pendingConfirmation.
+// The unit tests missed it because they called the gate directly and
+// did the granting by hand. Nothing walked the path the channel
+// actually takes: Invoke → runToolCall → pendingConfirmation.
 
 func gatedAgent(t *testing.T, rules ...*lobslawv1.PolicyRule) (*Agent, *Executor, *SessionApprovals) {
 	t.Helper()

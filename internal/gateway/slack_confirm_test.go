@@ -135,7 +135,7 @@ func TestSlackSessionGrantIsScopedToTheThread(t *testing.T) {
 	}
 	// With no approvals store the grant must report failure rather
 	// than claiming success — the reply promises what happened.
-	if h.grantForSession(context.Background(), "p1", "C1/1.1") {
+	if h.grantForSession(context.Background(), "p1", "C1/1.1") != "" {
 		t.Fatal("a grant was reported without an approvals store")
 	}
 	// And the pending scope is consumed either way, so a second tap
@@ -175,7 +175,7 @@ func TestSlackSessionGrantUsesThePromptsConversation(t *testing.T) {
 		log:          discardLogger(),
 		pendingScope: map[string]scopedOperation{"p1": {action: "tool:exec", resource: "x"}},
 	}
-	if h.grantForSession(context.Background(), "p1", "") {
+	if h.grantForSession(context.Background(), "p1", "") != "" {
 		t.Fatal("a grant with no conversation was recorded")
 	}
 }
