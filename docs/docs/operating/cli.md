@@ -46,6 +46,7 @@ lobslaw grants             # see and undo per-conversation approvals
   policy approvals         # list the rules an approval minted
   policy revoke-approvals  # delete them, all or by id
 lobslaw memory             # read + edit the memory store
+lobslaw archive            # export and verify portable knowledge archives
   memory show <id>         # one record in full
   memory list              # list vector + episodic records
   memory forget            # delete records and their consolidations
@@ -237,6 +238,9 @@ LOBSLAW_CONTEXT=prod lobslaw memory list    # for a shell that lives in one clus
 `default` is optional. Leaving it out is reasonable when you have both a
 staging and a production cluster: a bare command then refuses rather than
 picking one.
+
+For a localhost tunnel, pass `--server-name` with the hostname on the node's
+certificate. TLS still verifies the certificate chain and that hostname.
 
 **Precedence**, highest first:
 
@@ -431,7 +435,83 @@ fails partway. It is not atomic across records, so a failure reports **how many
 landed** before it stopped; "rebind failed" without a number leaves you unable
 to tell a no-op from a half-done move.
 
+## `lobslaw archive`
+
+Export a stopped node or consistent database snapshot into a versioned archive:
+
+```sh
+lobslaw archive export --offline --state-db ./state.db \
+  --memory-key-ref env:LOBSLAW_MEMORY_KEY \
+  --recipient age1... --out knowledge.lobarchive.age
+lobslaw archive verify knowledge.lobarchive.age --identity ./backup-key.txt
+lobslaw archive inspect knowledge.lobarchive.age --identity ./backup-key.txt
+```
+
+The age X25519 recipient encrypts the archive independently of the memory key.
+Use `--plaintext` explicitly to omit encryption. Export never overwrites an
+existing output file. Inspection verifies the complete archive and prints only
+its manifest.
+
+Includes stored memories and summaries, skills and their signed bytes, learned
+history, pinned/soul settings, sessions, preferences, schedules and commitments.
+Excludes embeddings, credentials, Raft state, worker claims, audit logs and
+filesystem attachments. Import rebuilds embeddings with the destination model and writes through Raft.
+Live export uses a consistent store transaction. Both live operations require an
+operator certificate, a configured operator data role and an explicit policy
+grant for `archive:export` or `archive:import` on `memory:*`.
+
+```sh
+lobslaw archive import knowledge.lobarchive.age --context homelab \
+  --identity ./backup-key.txt --owner user:alice=user:alice \
+  --source-timezone Europe/London
+# Add --apply to write. Repeat the same command to resume an interrupted import.
+```
+
+Exact duplicates are skipped; conflicts block writes unless `--keep-existing` is
+explicitly selected. Schedules and pending reminders restore paused. Skills and
+learned artefacts restore inactive; signed skill bytes remain unchanged.
+
+## `lobslaw backup`
+
+```sh
+lobslaw backup create --context homelab --repository ./backups --recipient age1...
+lobslaw backup list --repository ./backups
+lobslaw backup pin SNAPSHOT_ID --repository ./backups
+lobslaw backup restore SNAPSHOT_ID --repository ./backups \
+  --identity ./backup-key.txt --context recovered --owner user:alice=user:alice
+lobslaw backup prune --repository ./backups --keep-last 10 --keep-within 30d
+```
+
+Restore and prune preview by default; `--apply` performs writes or deletion.
+Start the recovery node with `[memory] restore_mode = true` to suppress
+gateways, scheduling and knowledge seeds. Restore requires an empty knowledge
+store, or its own partial restore. Each generation is independently
+encrypted and immutable. Retention preserves pinned generations and the union
+of the count and age rules. `backup unpin` removes a pin. Use `backup create
+--offline` with the same source flags as offline archive export.
+
+The local repository uses a `.lock` directory. After a crash, check that no backup
+process remains before removing a stale lock. Incomplete generations without a
+completion manifest are ignored. Filesystem attachments and deployment secrets
+remain outside this knowledge backup.
+
 ## `lobslaw memory` and `lobslaw session`
+
+### Stable archive sources and conflict selections
+
+`archive export` and `backup create` accept `--source-id` (or the
+`LOBSLAW_ARCHIVE_SOURCE_ID` environment variable) to label generations from the
+same source. Choose one unique label per stack and keep it stable. Import uses the
+archive's label; older archives need an explicit `archive import --source-id` for
+alongside behavior. Relabelling an archive with a conflicting source ID is refused.
+
+`archive import --alongside kind/id` creates a separate copy with a durable mapping;
+repeat imports reuse it across backup generations. Sessions include their whole
+transcript. `--skip kind/id` keeps the destination and omits that source group.
+Both flags are repeatable. They are unavailable on `backup restore`, which preserves
+existing provenance in an empty destination. Neither flag overwrites data. Changed
+or deleted mapped copies remain explicit conflicts; alongside cannot create another
+copy to avoid one. Interactive prompts and replacement are not implemented.
 
 ### `memory reembed` needs the node UP, unlike the rest
 

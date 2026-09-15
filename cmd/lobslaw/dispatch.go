@@ -130,6 +130,8 @@ type topLevelCommand struct {
 // list that grows holes.
 func topLevelDispatchers() []topLevelCommand {
 	return []topLevelCommand{
+		{name: "archive", dispatch: dispatchArchive},
+		{name: "backup", dispatch: dispatchBackup},
 		{name: "cluster", dispatch: dispatchCluster},
 		{name: "plugin", dispatch: dispatchPlugin},
 		{name: "audit", dispatch: dispatchAudit},
