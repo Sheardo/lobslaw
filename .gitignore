@@ -52,3 +52,11 @@ certs/*.key
 # second copy of the tree, ~12MB, one `git add -A` from nesting the repository
 # inside itself.
 .claude/
+
+# The web console's build output. Produced by `make web` into the
+# go:embed directory; the .gitkeep beside it is what keeps a clean
+# checkout building without npm.
+internal/gateway/ui/dist/*
+!internal/gateway/ui/dist/.gitkeep
+web/node_modules/
+web/.aide/
