@@ -349,6 +349,7 @@ type Node struct {
 	soul         atomic.Pointer[soul.Soul]
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
+	botSvc       *memory.BotService
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -780,6 +781,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
 				n.log.Warn("user_prefs: seed from config failed", "err", err)
+			}
+			if err := n.seedChiefBot(ctx); err != nil {
+				n.log.Warn("bots: seed chief of staff failed", "err", err)
 			}
 		}
 	}

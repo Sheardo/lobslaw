@@ -145,6 +145,16 @@ func (n *Node) wireSoulRaft() error {
 	return nil
 }
 
+// wireBots constructs the raft-backed registry of named agents.
+//
+// The chief is NOT seeded here — seeding needs a raft leader, which a
+// node does not reliably have while it is still wiring. It happens in
+// Start beside the other leader-gated seeds.
+func (n *Node) wireBots() error {
+	n.botSvc = memory.NewBotService(n.raft, n.store)
+	return nil
+}
+
 // wirePlanService registers the gRPC PlanService for commitment +
 // task management. Reads hit the local store; writes propagate via
 // raft.

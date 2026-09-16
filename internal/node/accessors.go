@@ -36,6 +36,7 @@ func (n *Node) Scheduler() *scheduler.Scheduler  { return n.scheduler }
 func (n *Node) Storage() *storage.Manager        { return n.storageMgr }
 func (n *Node) StorageService() *storage.Service { return n.storageSvc }
 func (n *Node) SkillRegistry() *skills.Registry  { return n.skillRegistry }
+func (n *Node) Bots() *memory.BotService         { return n.botSvc }
 func (n *Node) Soul() *soul.Soul {
 	if n.soulAdjuster != nil {
 		snapshot := n.soulAdjuster.Soul()

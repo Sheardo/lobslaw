@@ -1,5 +1,7 @@
 package memory
 
+import "strings"
+
 // Bucket names inside state.db. Each record type lives in its own
 // top-level bbolt bucket, keyed by record ID.
 const (
@@ -155,10 +157,30 @@ const (
 	// that from "still waiting". It also lets the node that ANSWERS an
 	// enrolment be a different one from the node that received it.
 	BucketEnrolments = "enrolments"
+
+	// BucketBots holds the named agents — the chief of staff and the
+	// specialists it creates — keyed by the bot's immutable slug,
+	// which is also its principal's identifier.
+	BucketBots = "bots"
 )
 
-// SoulTuneRecordID is the constant key under BucketSoulTune. There
-// is one tune record per cluster — the agent has one identity.
+// ChiefBotID names the bot that owns the human-facing channels: the
+// one a Telegram or Slack message reaches when it names nobody.
+//
+// A fixed id rather than a lookup for is_chief, because the key it
+// derives (see SoulTuneRecordIDFor) has to be stable across an upgrade
+// on a cluster whose bots bucket is still empty.
+const ChiefBotID = "chief"
+
+// SoulTuneRecordID is the constant key under BucketSoulTune for the
+// CHIEF's personality overlay.
+//
+// It is spelled out rather than derived because it predates there
+// being more than one bot, and every existing cluster already has a
+// record under exactly these bytes. Keeping it verbatim is what makes
+// the upgrade a no-op: the chief keeps the personality the deployment
+// already had, and only the bots created afterwards get keys of their
+// own. See SoulTuneRecordIDFor.
 const SoulTuneRecordID = "soul:tune"
 
 // allBuckets lists every bucket the store ensures exists on open.
@@ -192,4 +214,18 @@ var allBuckets = []string{
 	BucketSkillBlobs,
 	BucketSelfTaughtHistory,
 	BucketEnrolments,
+	BucketBots,
+}
+
+// SoulTuneRecordIDFor returns the personality-overlay key for one bot.
+//
+// The chief's key is SoulTuneRecordID unchanged, so an upgraded
+// cluster finds the overlay it already had rather than waking up with
+// a default personality. Every other bot gets a suffixed key.
+func SoulTuneRecordIDFor(botID string) string {
+	botID = strings.TrimSpace(botID)
+	if botID == "" || botID == ChiefBotID {
+		return SoulTuneRecordID
+	}
+	return SoulTuneRecordID + ":" + botID
 }

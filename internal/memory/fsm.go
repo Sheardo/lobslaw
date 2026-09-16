@@ -84,6 +84,13 @@ type FSM struct {
 	// materialises here when its entry replicates rather than whenever
 	// a poll next happens to run.
 	selfTaughtChange func()
+
+	// botChange fires after every successful apply that touches the
+	// bots bucket, so a bot created or re-instructed on another node
+	// reaches this node's resolver on replication. Without it a
+	// two-node cluster answers "who is the engineering bot" with
+	// whichever node you happened to ask.
+	botChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
@@ -121,6 +128,15 @@ func (f *FSM) SetSoulTuneChangeCallback(cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.soulTuneChange = cb
+}
+
+// SetBotChangeCallback registers a callback that fires after each
+// FSM.Apply that touches BucketBots. Same nil-safety and
+// non-blocking rules as SetSchedulerChangeCallback.
+func (f *FSM) SetBotChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.botChange = cb
 }
 
 // SetSelfTaughtChangeCallback registers a callback that fires after
@@ -236,6 +252,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 				if f.soulTuneChange != nil {
 					f.soulTuneChange()
 				}
+			case BucketBots:
+				if f.botChange != nil {
+					f.botChange()
+				}
 			case BucketSelfTaught, BucketSelfTaughtArchive:
 				// Archive too: deactivating a skill moves it out of the
 				// live bucket, and un-materialising it is as much a
@@ -338,6 +358,8 @@ func (f *FSM) bumpRevision(bucket, id string, payload proto.Message) error {
 // interface because protoc-gen-go emits getters but no setters.
 func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
+	case *lobslawv1.BotRecord:
+		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
 		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
@@ -365,6 +387,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
+	case *lobslawv1.BotRecord:
+		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
 		p.Revision = rev
 	case *lobslawv1.ScheduledTaskRecord:
@@ -601,6 +625,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketBots:
+		var r lobslawv1.BotRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
@@ -674,7 +704,8 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
-		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune:
+		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
+		BucketBots:
 		return true
 	default:
 		return false
@@ -713,6 +744,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketChannelState, p.ChannelState, nil
 	case *lobslawv1.LogEntry_SoulTune:
 		return BucketSoulTune, p.SoulTune, nil
+	case *lobslawv1.LogEntry_Bot:
+		return BucketBots, p.Bot, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:

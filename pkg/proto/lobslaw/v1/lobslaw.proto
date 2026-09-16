@@ -1235,6 +1235,74 @@ message EmotiveStyleTune {
   optional string emoji_usage = 6;
 }
 
+// BotRecord is one named agent: the chief of staff a user talks to on
+// Telegram or Slack, or a specialist it created and instructed.
+//
+// A bot's AUTHORITY is deliberately not in this message. It runs its
+// turns as the principal "bot:<id>", and what that principal may do is
+// decided by policy rules like every other subject. A tools allowlist
+// here would be a second authorisation system sitting beside the
+// policy engine, and two of those is how they come to disagree — the
+// same reasoning the sandbox section gives for refusing two
+// authorities over one sandbox. The allowlist below is a REGISTRY
+// filter: it decides what the model is even shown, so an absent tool
+// is unexpressible rather than merely denied. Policy is still the
+// thing that says no.
+message BotRecord {
+  // id is an immutable slug — "engineering". It is the principal's
+  // identifier, so renaming one would orphan every record it owns.
+  string id = 1;
+  string display_name = 2;
+  // description is one line, shown in the GUI and to the chief when it
+  // is deciding who to hand a question to.
+  string description = 3;
+  // instructions is the bot's standing brief: "You are the engineer
+  // for XYZ, you do this". Rendered as soul guidance, which means it
+  // is standing configuration and never the current task.
+  string instructions = 4;
+  // is_chief marks the single bot that owns the human-facing channels.
+  // Exactly one exists, it is seeded at first boot from the node's
+  // existing soul, and it cannot be deleted — deleting it would leave
+  // inbound Telegram messages with nobody to answer them.
+  bool is_chief = 5;
+  // tools is the registry filter described above. Empty means the node
+  // default set, NOT "no tools": a bot created without a stated
+  // allowlist should be as capable as the assistant was before it
+  // existed, and silently muting one would look like a broken bot
+  // rather than a policy decision.
+  repeated string tools = 6;
+  // may_message is the explicit edge list for ask_bot / tell_bot.
+  // Explicit because it makes cycle detection a static check over a
+  // small declared graph rather than a depth counter enforced at
+  // runtime on every call.
+  repeated string may_message = 7;
+  // model_role optionally points this bot at a different entry in the
+  // compute RoleMap, so a cheap bot can run on a cheap model.
+  string model_role = 8;
+  BotBudget budget = 9;
+  bool enabled = 10;
+  // revision is FSM-assigned and bumped on every write, making a
+  // read-modify-write safe against a stale reader. Same contract as
+  // SoulTuneRecord.
+  uint64 revision = 11;
+  string claimed_by = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  // created_by is a principal — the chief that proposed this bot, or
+  // the operator who added it in the GUI.
+  string created_by = 15;
+}
+
+// BotBudget caps one of this bot's turns. Zero on a field takes the
+// node's configured default rather than meaning "unlimited", because a
+// bot record written without thinking about budgets should inherit the
+// operator's limits and not escape them.
+message BotBudget {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
 // CredentialRecord holds an OAuth (or other-provider) credential
 // the operator has connected to lobslaw. Tokens are encrypted at
 // rest with the cluster MemoryKey — the bytes on the wire and on
@@ -1961,6 +2029,7 @@ message LogEntry {
     EnrolmentRecord enrolment = 35;
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
+    BotRecord bot = 37;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

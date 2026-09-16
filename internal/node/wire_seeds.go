@@ -17,6 +17,37 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
+// seedChiefBot writes the chief-of-staff record if the registry is
+// empty. Leader-only and idempotent, like every other seed here.
+//
+// This is the entire upgrade path for an existing deployment. The
+// chief's personality overlay key is memory.SoulTuneRecordID
+// unchanged, so the cluster's existing soul becomes the chief's soul
+// and the first turn after upgrading is the same turn it would have
+// been before. A seed that minted a new key instead would look like a
+// personality regression, and the operator would have no reason to
+// connect it to an upgrade.
+//
+// Display name comes from the soul's name when it has one: the
+// operator already said what to call the assistant, and asking them
+// again in a second place is how the two come to disagree.
+func (n *Node) seedChiefBot(ctx context.Context) error {
+	if n.botSvc == nil || n.raft == nil || !n.raft.IsLeader() {
+		return nil
+	}
+	var displayName string
+	if s := n.soul.Load(); s != nil {
+		displayName = strings.TrimSpace(s.Config.Name)
+	}
+	rec, err := n.botSvc.EnsureChief(ctx, displayName)
+	if err != nil {
+		return err
+	}
+	n.log.Info("bots: chief of staff ready",
+		"id", rec.GetId(), "display_name", rec.GetDisplayName(), "revision", rec.GetRevision())
+	return nil
+}
+
 func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 	if n.raft == nil || n.store == nil || n.policySvc == nil {
 		return nil

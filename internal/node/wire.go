@@ -150,6 +150,10 @@ func nodeWireStages() []WireStage {
 		{Name: "notices", Gate: gateRaft, Wire: (*Node).wireNotices},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
+		// After soul-raft: the chief's personality overlay is the one
+		// key the soul service already owns, and reading that
+		// adjacency in the wiring order is the point.
+		{Name: "bots", Gate: gateRaft, Wire: (*Node).wireBots},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},
 		{Name: "scheduler", Gate: gateScheduler, Wire: (*Node).wireScheduler},
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},
