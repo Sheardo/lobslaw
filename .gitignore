@@ -59,4 +59,6 @@ certs/*.key
 internal/gateway/ui/dist/*
 !internal/gateway/ui/dist/.gitkeep
 web/node_modules/
-web/.aide/
+
+# aide writes this wherever it is invoked from.
+.aide/
