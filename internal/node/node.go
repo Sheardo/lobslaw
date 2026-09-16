@@ -359,6 +359,9 @@ type Node struct {
 	resolver     *compute.Resolver
 	llmProvider  compute.LLMProvider
 	executor     *compute.Executor
+	// turnRunner is the single entry point for a headless turn — one
+	// with no human waiting on a channel. See compute.TurnRunner.
+	turnRunner *compute.TurnRunner
 	// approvals is shared between the executor (which spends session
 	// approvals) and the channels (which record them).
 	approvals *compute.SessionApprovals

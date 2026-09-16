@@ -24,6 +24,11 @@ import (
 // greedyAgent is a worker that keeps calling tools until its budget
 // refuses. Real workers stop when they have an answer; a worker that
 // never stops is what the reservation exists to survive.
+//
+// It stands in for the agent LOOP, not for the turn runner. The runner
+// under test is the real one, because the budget a worker gets is
+// something it derives — a fake runner would make every assertion here
+// a statement about the fake.
 type greedyAgent struct {
 	mu        sync.Mutex
 	callsMade int
@@ -53,6 +58,15 @@ func (g *greedyAgent) total() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.callsMade
+}
+
+func (g *greedyAgent) runner(t *testing.T) *compute.TurnRunner {
+	t.Helper()
+	r, err := compute.NewTurnRunner(g, nil, compute.BudgetCaps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+	return r
 }
 
 // scriptedProvider answers the planner with a JSON array sized to the
@@ -91,10 +105,10 @@ func (nopMemory) WriteEpisodic(context.Context, string, []string) (string, error
 	return "mem-1", nil
 }
 
-func quietCoordinator(t *testing.T, agent ResearchAgent, provider compute.LLMProvider, maxToolCalls int) *Coordinator {
+func quietCoordinator(t *testing.T, agent *greedyAgent, provider compute.LLMProvider, maxToolCalls int) *Coordinator {
 	t.Helper()
 	return NewCoordinator(Config{
-		Agent:        agent,
+		Agent:        agent.runner(t),
 		LLMProvider:  provider,
 		Memory:       nopMemory{},
 		WorkerTools:  []compute.Tool{{Name: "web_search"}},

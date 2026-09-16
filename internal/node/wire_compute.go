@@ -567,6 +567,20 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		return fmt.Errorf("agent: %w", err)
 	}
 	n.agent = a
+
+	// The one place a headless turn starts. Scheduled tasks,
+	// commitments, research workers and the inbox drain are all
+	// callers here; none of them is a second copy of "run a turn".
+	runner, err := compute.NewTurnRunner(
+		a,
+		botResolverOrNil(n.botSvc),
+		compute.FromComputeConfig(n.cfg.Compute),
+		n.log,
+	)
+	if err != nil {
+		return fmt.Errorf("turn runner: %w", err)
+	}
+	n.turnRunner = runner
 	return nil
 }
 
@@ -1144,7 +1158,7 @@ func (n *Node) runResearchCommitment(ctx context.Context, c *lobslawv1.AgentComm
 	}
 	tools := buildResearchToolList(n.toolRegistry)
 	coord := research.NewCoordinator(research.Config{
-		Agent:       n.agent,
+		Agent:       n.turnRunner,
 		LLMProvider: n.llmProvider,
 		Memory:      &researchMemoryAdapter{svc: n.memorySvc},
 		Notify:      &researchNotifyAdapter{tg: n.telegramHandler, log: n.log},
@@ -1243,38 +1257,29 @@ func schedulerClaims() *types.Claims {
 }
 
 // runTaskAsAgentTurn dispatches a scheduled task's Params["prompt"]
-// through the agent loop with synthetic "scheduler" claims and a
-// fresh TurnBudget. A missing prompt is a config error — we log +
-// return instead of running an empty turn (which would waste a
-// provider call).
+// through the shared turn runner. A missing prompt is a config error —
+// return instead of running an empty turn, which would waste a
+// provider call asking the model to answer its own system prompt.
+//
+// Params["bot"] names which bot runs it, so "check the cluster every
+// morning" belongs to the devops bot rather than to the assistant at
+// large. Absent, it runs as the node default — which is what every
+// existing scheduled task does, unchanged.
 func (n *Node) runTaskAsAgentTurn(ctx context.Context, task *lobslawv1.ScheduledTaskRecord) error {
 	prompt := task.Params["prompt"]
 	if prompt == "" {
 		return fmt.Errorf("scheduled task %q: params.prompt missing", task.Id)
 	}
-	budget, err := compute.NewTurnBudget(compute.FromComputeConfig(n.cfg.Compute))
-	if err != nil {
-		return fmt.Errorf("budget: %w", err)
-	}
-	req := compute.ProcessMessageRequest{
-		Message:   prompt,
+	_, err := n.turnRunner.Run(ctx, compute.TurnRequest{
+		BotID:     task.Params["bot"],
+		Prompt:    prompt,
+		Origin:    "task",
+		OriginID:  task.Id,
 		Claims:    n.schedulerClaims(task.CreatedBy),
-		TurnID:    fmt.Sprintf("task-%s-%d", task.Id, time.Now().UnixNano()),
-		Budget:    budget,
 		Channel:   task.Params["channel"],
 		ChannelID: task.Params["chat_id"],
-	}
-	resp, err := n.agent.RunToolCallLoop(ctx, req)
-	if err != nil {
-		return fmt.Errorf("agent loop: %w", err)
-	}
-	n.log.Info("scheduler: agent task completed",
-		"task_id", task.Id,
-		"turn_id", req.TurnID,
-		"tool_calls", len(resp.ToolCalls),
-		"needs_confirm", resp.NeedsConfirmation,
-	)
-	return nil
+	})
+	return err
 }
 
 // runCommitmentAsAgentTurn is the one-shot equivalent. Prefers
@@ -1289,29 +1294,16 @@ func (n *Node) runCommitmentAsAgentTurn(ctx context.Context, c *lobslawv1.AgentC
 	if prompt == "" {
 		return fmt.Errorf("commitment %q: no prompt or reason", c.Id)
 	}
-	budget, err := compute.NewTurnBudget(compute.FromComputeConfig(n.cfg.Compute))
-	if err != nil {
-		return fmt.Errorf("budget: %w", err)
-	}
-	req := compute.ProcessMessageRequest{
-		Message:   prompt,
+	_, err := n.turnRunner.Run(ctx, compute.TurnRequest{
+		BotID:     c.Params["bot"],
+		Prompt:    prompt,
+		Origin:    "commitment",
+		OriginID:  c.Id,
 		Claims:    n.schedulerClaims(c.CreatedFor),
-		TurnID:    fmt.Sprintf("commitment-%s-%d", c.Id, time.Now().UnixNano()),
-		Budget:    budget,
 		Channel:   c.Params["channel"],
 		ChannelID: c.Params["chat_id"],
-	}
-	resp, err := n.agent.RunToolCallLoop(ctx, req)
-	if err != nil {
-		return fmt.Errorf("agent loop: %w", err)
-	}
-	n.log.Info("scheduler: agent commitment completed",
-		"commitment_id", c.Id,
-		"turn_id", req.TurnID,
-		"tool_calls", len(resp.ToolCalls),
-		"needs_confirm", resp.NeedsConfirmation,
-	)
-	return nil
+	})
+	return err
 }
 
 // schedulerClaims builds the synthetic claims attached to a

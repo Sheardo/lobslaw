@@ -391,6 +391,21 @@ type ProcessMessageRequest struct {
 	// through request IDs in logs + audit.
 	TurnID string
 
+	// BotID names which bot is taking this turn. Empty runs as the
+	// node's default assistant, which is what every turn did before
+	// bots existed and what a channel that has not been taught about
+	// them still does.
+	BotID string
+
+	// Bot is the resolved profile for BotID, when the caller has one.
+	//
+	// Carried on the request rather than looked up inside the loop
+	// because delegation hands a child a profile it has already
+	// NARROWED — a child reached via ask_bot has ask_bot removed from
+	// it — and a fresh lookup here would undo that narrowing and
+	// restore the fork bomb it exists to prevent.
+	Bot *BotProfile
+
 	// Channel + ChannelID identify the gateway origin of the turn.
 	// Threaded into the assembled system prompt so the agent can
 	// address proactive replies via the channel-agnostic notify
@@ -626,6 +641,14 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
+	// The bot's registry filter runs HERE, before the turn starts and
+	// before the tool list reaches promptgen — so the model is never
+	// shown a tool this bot may not use, and the restriction is a
+	// property of what exists rather than of what gets checked. See
+	// BotProfile.FilterTools.
+	if req.Bot != nil {
+		req.Tools = req.Bot.FilterTools(req.Tools)
+	}
 	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil) {
 		var config *types.SoulConfig
 		var body string
@@ -640,6 +663,13 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		} else {
 			config = a.cfg.Soul()
 		}
+		// A bot's standing brief rides after the node's soul body, not
+		// instead of it. The operator's baseline carries house style
+		// and safety guidance that every bot should still obey; the
+		// brief says which job this one has. Replacing rather than
+		// appending would let creating a bot silently opt out of
+		// whatever the operator wrote for all of them.
+		body = appendBotBrief(body, req.Bot)
 		if config != nil {
 			// Language choice is turn-local. Never mutate a shared baseline or
 			// classify configuration, recalled context, or the previous reply.

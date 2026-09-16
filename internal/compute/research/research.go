@@ -56,12 +56,15 @@ type Coordinator struct {
 	log          *slog.Logger
 }
 
-// ResearchAgent is the slice of compute.Agent the coordinator uses
-// for the worker LLM calls (which need tool dispatch). Planner and
-// synth use llmProvider directly. Matches the live
-// Agent.RunToolCallLoop signature (returns a pointer + error).
+// ResearchAgent is how the coordinator starts a worker turn.
+//
+// It is compute.TurnRunner's shape rather than the agent's, because a
+// research worker is one of several things in this codebase that runs
+// a headless turn and there is exactly one implementation of that. An
+// interface rather than the concrete runner only so tests can count
+// what a worker was handed without booting a provider.
 type ResearchAgent interface {
-	RunToolCallLoop(ctx context.Context, req compute.ProcessMessageRequest) (*compute.ProcessMessageResponse, error)
+	Run(ctx context.Context, req compute.TurnRequest) (*compute.ProcessMessageResponse, error)
 }
 
 // MemoryWriter persists the research findings + final report. The
@@ -354,23 +357,20 @@ func (c *Coordinator) runWorkers(ctx context.Context, req Request, subqs []strin
 	reservation := mustBudget(c.maxToolCalls)
 	share := workerShare(c.maxToolCalls, len(subqs))
 	for i, q := range subqs {
-		// A worker that cannot get a budget is a construction bug, not
-		// a run-time condition; fall back to the reservation directly
-		// so the run stays bounded rather than unbounded.
-		workerBudget, err := reservation.Sub(compute.BudgetCaps{MaxToolCalls: share})
-		if err != nil {
-			c.log.Warn("research: worker budget construction failed; drawing on the reservation directly",
-				"task_id", req.TaskID, "sub", i, "err", err)
-			workerBudget = reservation
-		}
 		wctx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		resp, err := c.agent.RunToolCallLoop(wctx, compute.ProcessMessageRequest{
-			Message:      q,
-			Claims:       req.Claims,
-			TurnID:       fmt.Sprintf("%s/worker/%d", req.TaskID, i),
-			SystemPrompt: workerPrompt,
-			Tools:        tools,
-			Budget:       workerBudget,
+		resp, err := c.agent.Run(wctx, compute.TurnRequest{
+			Prompt:         q,
+			Origin:         "worker",
+			OriginID:       req.TaskID,
+			TurnIDOverride: fmt.Sprintf("%s/worker/%d", req.TaskID, i),
+			Claims:         req.Claims,
+			SystemPrompt:   workerPrompt,
+			Tools:          tools,
+			// The runner makes this a child of the reservation, so the
+			// share bounds one worker and the reservation bounds the
+			// run.
+			Reservation: reservation,
+			Caps:        compute.BudgetCaps{MaxToolCalls: share},
 		})
 		cancel()
 		if err != nil {
