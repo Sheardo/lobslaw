@@ -7,9 +7,9 @@
 //
 // Async dispatch is via the existing scheduler commitment pipeline:
 // `research_start` builtin creates a commitment with HandlerRef
-// "compute:research" + Params{question, depth, originator_chat_id};
-// the commitment fires (leader-only) into the Coordinator's Run
-// method.
+// "research:run" (ResearchHandlerRef) + Params{question, depth,
+// originator_chat_id}; the commitment fires (leader-only) into the
+// Coordinator's Run method.
 package research
 
 import (
@@ -52,6 +52,7 @@ type Coordinator struct {
 	memory       MemoryWriter
 	notify       Notifier
 	tools        []compute.Tool // worker tool list — provided at construction
+	maxToolCalls int            // reservation for a whole run, shared by its workers
 	log          *slog.Logger
 }
 
@@ -101,14 +102,43 @@ type Config struct {
 	// understanding, transcription, etc.). Planner + synth turns
 	// run with empty Tools regardless.
 	WorkerTools []compute.Tool
-	Logger      *slog.Logger
+	// MaxToolCalls is the tool-call reservation for a WHOLE run, not
+	// per worker. Zero takes DefaultRunToolCalls.
+	//
+	// Depth spreads this budget; it does not multiply it. That is the
+	// honest reading of what "ask ten sub-questions" requests, and it
+	// is what research_start's description has always claimed
+	// happened — before this field existed every worker got its own
+	// fresh cap and no object anywhere knew the run's total.
+	MaxToolCalls int
+	Logger       *slog.Logger
 }
+
+// Run-level tool budgeting.
+//
+// DefaultRunToolCalls is deliberately the old per-worker cap (8)
+// times the default depth (3), so a default-depth run behaves exactly
+// as it did before the reservation existed and only the deep runs —
+// the ones that were quietly authorising eighty tool calls — change.
+//
+// minWorkerToolCalls is the floor on one worker's share. Below about
+// four calls a worker cannot search, read two pages and write a
+// finding, so dividing the reservation into ever-thinner slices would
+// buy an arithmetic guarantee by making every worker useless.
+const (
+	DefaultRunToolCalls = 24
+	minWorkerToolCalls  = 4
+)
 
 // NewCoordinator constructs a coordinator from injected deps.
 func NewCoordinator(cfg Config) *Coordinator {
 	log := cfg.Logger
 	if log == nil {
 		log = slog.Default()
+	}
+	maxToolCalls := cfg.MaxToolCalls
+	if maxToolCalls <= 0 {
+		maxToolCalls = DefaultRunToolCalls
 	}
 	return &Coordinator{
 		agent:        cfg.Agent,
@@ -118,6 +148,7 @@ func NewCoordinator(cfg Config) *Coordinator {
 		memory:       cfg.Memory,
 		notify:       cfg.Notify,
 		tools:        cfg.WorkerTools,
+		maxToolCalls: maxToolCalls,
 		log:          log,
 	}
 }
@@ -307,13 +338,31 @@ func (c *Coordinator) planOnce(ctx context.Context, req Request, prompt string) 
 
 // runWorkers fires one agent turn per sub-question, sequentially
 // (parallel later). Each worker has the stdlib tools (web_search,
-// fetch_url, memory_search/write) and a tight per-worker budget so
-// a single bad worker can't eat the whole spend cap. Returns the
-// list of worker findings text, in sub-question order.
+// fetch_url, memory_search/write).
+//
+// All workers draw from ONE reservation sized for the run, so the
+// depth the user asked for changes how the work is shaped and not how
+// much it may cost. Each worker additionally carries a share of that
+// reservation as its own cap — the reservation stops the run, the
+// share stops one bad worker consuming it before its siblings run at
+// all. Two bounds, two different jobs.
+//
+// Returns the list of worker findings text, in sub-question order.
 func (c *Coordinator) runWorkers(ctx context.Context, req Request, subqs []string) ([]string, error) {
 	tools := c.tools
 	findings := make([]string, len(subqs))
+	reservation := mustBudget(c.maxToolCalls)
+	share := workerShare(c.maxToolCalls, len(subqs))
 	for i, q := range subqs {
+		// A worker that cannot get a budget is a construction bug, not
+		// a run-time condition; fall back to the reservation directly
+		// so the run stays bounded rather than unbounded.
+		workerBudget, err := reservation.Sub(compute.BudgetCaps{MaxToolCalls: share})
+		if err != nil {
+			c.log.Warn("research: worker budget construction failed; drawing on the reservation directly",
+				"task_id", req.TaskID, "sub", i, "err", err)
+			workerBudget = reservation
+		}
 		wctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		resp, err := c.agent.RunToolCallLoop(wctx, compute.ProcessMessageRequest{
 			Message:      q,
@@ -321,7 +370,7 @@ func (c *Coordinator) runWorkers(ctx context.Context, req Request, subqs []strin
 			TurnID:       fmt.Sprintf("%s/worker/%d", req.TaskID, i),
 			SystemPrompt: workerPrompt,
 			Tools:        tools,
-			Budget:       mustBudget(8),
+			Budget:       workerBudget,
 		})
 		cancel()
 		if err != nil {
@@ -396,6 +445,25 @@ func (c *Coordinator) synth(ctx context.Context, req Request, subqs, findings []
 func mustBudget(maxToolCalls int) *compute.TurnBudget {
 	b, _ := compute.NewTurnBudget(compute.BudgetCaps{MaxToolCalls: maxToolCalls})
 	return b
+}
+
+// workerShare divides a run's reservation into one worker's fairness
+// cap, floored at minWorkerToolCalls.
+//
+// The floor means the shares can sum to more than the reservation at
+// high depth, and that is intended: they are not a second way to
+// enforce the total. The reservation enforces the total. Shares only
+// decide who gets to spend it first, and a share too small to finish
+// one search would make every worker fail equally.
+func workerShare(reservation, workers int) int {
+	if workers <= 0 {
+		return reservation
+	}
+	share := reservation / workers
+	if share < minWorkerToolCalls {
+		return minWorkerToolCalls
+	}
+	return share
 }
 
 func buildNotification(question, report, memID string) string {

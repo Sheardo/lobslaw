@@ -26,6 +26,18 @@ type TurnBudget struct {
 	// budget semantics for in-flight turns.
 	caps BudgetCaps
 
+	// parent is the reservation this budget draws from, set by Sub
+	// and nil for a top-level turn. Immutable after construction, so
+	// it is read without the mutex.
+	//
+	// It exists because a fan-out that hands every child its own
+	// fresh TurnBudget bounds each child and bounds the RUN not at
+	// all: N children times a per-child cap is a spend multiplier
+	// wearing a limit's clothing, and no single object knows the
+	// total. A child that reports to a parent makes the aggregate
+	// the thing that is actually enforced.
+	parent *TurnBudget
+
 	mu          sync.Mutex
 	toolCalls   int
 	spendUSD    float64
@@ -112,11 +124,62 @@ func NewTurnBudget(caps BudgetCaps) (*TurnBudget, error) {
 	return &TurnBudget{caps: caps}, nil
 }
 
+// Sub returns a child budget that draws from b.
+//
+// Every Record on the child is also recorded against b, so however
+// many children a fan-out creates they cannot collectively exceed the
+// parent's caps. The child's own caps bound ONE child's share — that
+// is what stops a single bad worker starving its siblings — but they
+// are a fairness bound, not the spend bound. The parent is the spend
+// bound, and it is the one that adds up.
+//
+// A child's caps are not clamped to the parent's. They do not need to
+// be: a child asking for more than the reservation holds still gets
+// Exceeded from the parent on the call that crosses it, and clamping
+// would silently rewrite a caller's stated share into something it
+// did not ask for.
+func (b *TurnBudget) Sub(caps BudgetCaps) (*TurnBudget, error) {
+	child, err := NewTurnBudget(caps)
+	if err != nil {
+		return nil, err
+	}
+	child.parent = b
+	return child, nil
+}
+
+// drawOn folds a parent's decision into the child's own.
+//
+// A child that has already refused does not draw on the reservation.
+// Callers check the budget BEFORE dispatching and skip the call when
+// it says Exceeded, so a refused call never happens and must not cost
+// the run — charging for it leaks the reservation to workers that did
+// no work, and the deeper the fan-out the more it leaks.
+//
+// Otherwise the parent decides. Its verdict wins, because it is the
+// real bound and a child reporting its own comfortable "within" would
+// hide it; the child's counters stay in Current because a caller wants
+// to know what IT spent, not what the whole fan-out did.
+func (b *TurnBudget) drawOn(own BudgetDecision, record func(*TurnBudget) BudgetDecision) BudgetDecision {
+	if b.parent == nil || own.Exceeded {
+		return own
+	}
+	parent := record(b.parent)
+	if parent.Exceeded {
+		parent.Current = own.Current
+		return parent
+	}
+	return own
+}
+
 // RecordToolCall increments the tool-call counter and returns a
 // decision. Called by the agent loop BEFORE dispatching a tool
 // invocation; if Exceeded, the loop returns require_confirmation
 // without invoking the tool.
 func (b *TurnBudget) RecordToolCall() BudgetDecision {
+	return b.drawOn(b.recordToolCallLocal(), (*TurnBudget).RecordToolCall)
+}
+
+func (b *TurnBudget) recordToolCallLocal() BudgetDecision {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.toolCalls++
@@ -131,6 +194,12 @@ func (b *TurnBudget) RecordToolCall() BudgetDecision {
 // to the audit list so the caller can retrieve the full trail at
 // turn end.
 func (b *TurnBudget) RecordCostUSD(rec CostRecord) BudgetDecision {
+	return b.drawOn(b.recordCostUSDLocal(rec), func(p *TurnBudget) BudgetDecision {
+		return p.RecordCostUSD(rec)
+	})
+}
+
+func (b *TurnBudget) recordCostUSDLocal(rec CostRecord) BudgetDecision {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spendUSD += rec.CostUSD
@@ -146,6 +215,12 @@ func (b *TurnBudget) RecordCostUSD(rec CostRecord) BudgetDecision {
 // (network tool output, file uploads). For purely-local tools it's
 // a no-op; callers pass 0 when not applicable.
 func (b *TurnBudget) RecordEgressBytes(n int64) BudgetDecision {
+	return b.drawOn(b.recordEgressBytesLocal(n), func(p *TurnBudget) BudgetDecision {
+		return p.RecordEgressBytes(n)
+	})
+}
+
+func (b *TurnBudget) recordEgressBytesLocal(n int64) BudgetDecision {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.egressBytes += n
@@ -159,6 +234,10 @@ func (b *TurnBudget) RecordEgressBytes(n int64) BudgetDecision {
 // Agent loop uses this to peek at state mid-turn for the user-
 // facing "you've spent $0.42 of your $1.00 budget" display.
 func (b *TurnBudget) Check() BudgetDecision {
+	return b.drawOn(b.checkLocal(), (*TurnBudget).Check)
+}
+
+func (b *TurnBudget) checkLocal() BudgetDecision {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.caps.MaxToolCalls > 0 && b.toolCalls > b.caps.MaxToolCalls {
@@ -229,6 +308,11 @@ func (b *TurnBudget) Restore(state BudgetState) {
 // Existing counters are preserved (and visible via State) so audit
 // still reflects what was spent before + after the approval. Only
 // the caps change.
+//
+// On a child from Sub this lifts that child's fairness share and
+// nothing else — the reservation it draws from is untouched. Relaxing
+// your way out of a shared bound by approving one worker would defeat
+// the reservation for every sibling that had not asked.
 func (b *TurnBudget) Relax() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
