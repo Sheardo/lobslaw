@@ -1,7 +1,6 @@
-import { Box, Button, Center, Field, HStack, Input, Stack, Text } from "@chakra-ui/react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type Whoami } from "../api";
-import { ErrorPanel, Loading, Panel } from "./ui";
+import { Err, Spinner } from "./ui";
 
 /** Decides whether to show the console or a way in.
  *
@@ -17,78 +16,63 @@ export function LoginGate({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<Error | null>(null);
 
   const refresh = useCallback(() => {
-    api.whoami().then(setWho).catch((err: Error) => setError(err));
+    api.whoami().then(setWho).catch((e: Error) => setError(e));
   }, []);
   useEffect(refresh, [refresh]);
 
-  if (error) {
-    return <Center h="100vh" px={6}><Box maxW="440px" w="full"><ErrorPanel error={error} /></Box></Center>;
-  }
-  if (!who) return <Center h="100vh"><Loading /></Center>;
+  if (error) return <div className="center"><div style={{ maxWidth: 420 }}><Err error={error} /></div></div>;
+  if (!who) return <div className="center"><Spinner /></div>;
   if (who.authenticated) return <>{children}</>;
-  return <SignIn who={who} onSignedIn={refresh} />;
+  return <SignIn who={who} onIn={refresh} />;
 }
 
-function SignIn({ who, onSignedIn }: { who: Whoami; onSignedIn: () => void }) {
+function SignIn({ who, onIn }: { who: Whoami; onIn: () => void }) {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   async function submit() {
     setBusy(true); setError(null);
-    try { await api.login(token); setToken(""); onSignedIn(); }
-    catch (err) { setError(err as Error); }
+    try { await api.login(token); setToken(""); onIn(); }
+    catch (e) { setError(e as Error); }
     finally { setBusy(false); }
   }
 
   return (
-    <Center h="100vh" px={6}>
-      <Panel p={7} maxW="400px" w="full">
-        <HStack gap={2.5} mb={5}>
-          <Box w="9px" h="9px" rounded="full" bg="brand.solid" />
-          <Text fontWeight="600" letterSpacing="-0.02em">lobslaw</Text>
-        </HStack>
-
+    <div className="center">
+      <div className="card pad" style={{ width: 380 }}>
+        <div className="brand" style={{ padding: "0 0 20px" }}><i />lobslaw</div>
         {who.login_available ? (
-          <Stack gap={4}>
-            <Field.Root>
-              <Field.Label fontSize="13px">Console token</Field.Label>
-              <Input
-                type="password" value={token} autoFocus
+          <div className="col gap">
+            <div className="field">
+              <label>Console token</label>
+              <input className="in" type="password" value={token} autoFocus
                 onChange={(e) => setToken(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
-                bg="bg.s2" borderColor="edge.mid" rounded="control"
-              />
-              <Field.HelperText fontSize="xs" color="fg.low">
-                The value behind [gateway.ui] token_ref.
-              </Field.HelperText>
-            </Field.Root>
-            {error && <ErrorPanel error={error} />}
-            <Button onClick={submit} loading={busy} disabled={!token}
-              bg="brand.solid" color="#16100C" fontWeight="600" _hover={{ bg: "brand.hover" }} rounded="control">
-              Sign in
-            </Button>
-          </Stack>
+                onKeyDown={(e) => { if (e.key === "Enter") void submit(); }} />
+              <div className="hint">The value behind [gateway.ui] token_ref.</div>
+            </div>
+            {error && <Err error={error} />}
+            <button className="btn primary" onClick={submit} disabled={busy || !token}>Sign in</button>
+          </div>
         ) : (
           /* No token configured. "Wrong password" here would send
              somebody hunting for one that does not exist. */
-          <Stack gap={3}>
-            <Text fontSize="sm" color="fg.mid">
-              This node requires authentication but has no console token configured, so
-              there is nothing to sign in with.
-            </Text>
-            <Box bg="bg.s2" borderWidth="1px" borderColor="edge.mid" rounded="control"
-              p={3} fontFamily="mono" fontSize="12px" color="fg.mid">
-              [gateway.ui]<br />
-              token_ref = &quot;env:LOBSLAW_CONSOLE_TOKEN&quot;
-            </Box>
-            <Text fontSize="sm" color="fg.low">
+          <div className="col gap-sm">
+            <p style={{ color: "var(--mid)", fontSize: 13.5, lineHeight: 1.6 }}>
+              This node requires authentication but has no console token configured,
+              so there is nothing to sign in with.
+            </p>
+            <pre className="card" style={{ padding: 12, fontFamily: "var(--mono)", fontSize: 12, color: "var(--mid)" }}>
+{`[gateway.ui]
+token_ref = "env:LOBSLAW_CONSOLE_TOKEN"`}
+            </pre>
+            <p style={{ color: "var(--low)", fontSize: 13, lineHeight: 1.6 }}>
               Set that and restart, or bind the gateway to 127.0.0.1 where the console
               needs no token at all.
-            </Text>
-          </Stack>
+            </p>
+          </div>
         )}
-      </Panel>
-    </Center>
+      </div>
+    </div>
   );
 }
