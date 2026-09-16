@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, streamBotChat } from "../api";
-import { Avatar, Err, Spinner, useLoad } from "../components/ui";
+import { Err, Spinner, useLoad } from "../components/ui";
+import { Mascot } from "../components/Mascot";
 import { botVars } from "../theme";
 
 interface Line { from: "me" | string; text: string; notice?: boolean }
@@ -76,7 +77,7 @@ export function Chat() {
               // talking to has never seen.
               setLines([]); setSendErr(null);
             }}>
-            <Avatar id={b.id} name={b.display_name} size={22} dim={!b.enabled} />
+            <Mascot id={b.id} size={22} dim={!b.enabled} />
             {b.display_name || b.id}
           </button>
         ))}
@@ -86,7 +87,7 @@ export function Chat() {
         <div className="thread-in">
           {lines.length === 0 && !working && (
             <div className="opening">
-              <Avatar id={sel || "coordinator"} name={bot?.display_name} size={54} />
+              <Mascot id={sel || "coordinator"} size={54} />
               <div className="nm">{bot?.display_name || sel}</div>
               <div className="desc">{bot?.description || "Ask it something."}</div>
             </div>
@@ -94,7 +95,7 @@ export function Chat() {
           {lines.map((l, i) => <Msg key={i} line={l} name={bots?.find((b) => b.id === l.from)?.display_name} />)}
           {working && (
             <div className="msg" style={botVars(sel)}>
-              <Avatar id={sel} size={30} />
+              <Mascot id={sel} size={30} />
               <div className="dots"><i /><i /><i /></div>
             </div>
           )}
@@ -125,7 +126,7 @@ function Msg({ line, name }: { line: Line; name?: string }) {
   }
   return (
     <div className="msg" style={botVars(line.from)}>
-      <Avatar id={line.from} name={name} size={30} />
+      <Mascot id={line.from} size={30} />
       <div className="grow">
         <div className="from">{name || line.from}</div>
         <div className={line.notice ? "txt notice" : "txt"}>{line.text}</div>

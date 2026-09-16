@@ -2,7 +2,8 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import { api, type InboxItem } from "../api";
 import { Page } from "../App";
-import { Avatar, Empty, Err, Spinner, Status, useLoad, when } from "../components/ui";
+import { Empty, Err, Spinner, Status, useLoad, when } from "../components/ui";
+import { Mascot } from "../components/Mascot";
 import { botVars } from "../theme";
 
 /** What the team is doing, newest first.
@@ -52,7 +53,7 @@ function Row({ item }: { item: InboxItem }) {
       {/* The bot's colour runs down the left edge. Cheaper to scan than
           any badge: you find the devops rows without reading a word. */}
       <div className="item" style={botVars(item.recipient)}>
-        <Avatar id={item.recipient} size={30} />
+        <Mascot id={item.recipient} size={30} />
         <div className="grow">
           <div className="who">
             <b>{item.recipient}</b>

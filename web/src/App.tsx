@@ -1,7 +1,8 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api } from "./api";
+import { api, type InboxItem } from "./api";
 import { LoginGate } from "./components/LoginGate";
-import { Avatar, useLoad } from "./components/ui";
+import { Mascot } from "./components/Mascot";
+import { useLoad, when } from "./components/ui";
 import { Activity } from "./routes/Activity";
 import { BotDetail } from "./routes/BotDetail";
 import { Chat } from "./routes/Chat";
@@ -12,16 +13,26 @@ export function App() {
   return <LoginGate><Shell /></LoginGate>;
 }
 
-/** The roster is the frame, not a page.
+/** The sidebar is a conversation list, not a roster.
  *
- * A console about a TEAM should show the team at all times. Putting
- * the bots behind a nav link made "who works here" a click away and
- * every other screen anonymous, which is most of why the first version
- * read as a CRUD admin panel rather than something with people in it.
+ * Every row carries the bot's most recent line. That is what makes a
+ * sidebar feel populated rather than like a nav menu, and it answers
+ * "what is everyone up to" before you click anything — the first
+ * version listed five names and left the question to a separate page.
  */
 function Shell() {
   const { data: bots, reload } = useLoad(() => api.listBots());
+  // One activity call feeds every preview. Per-bot requests would be
+  // N round-trips for a sidebar that is not the point of the page.
+  const { data: feed, reload: reloadFeed } = useLoad(() => api.activity(120));
   const { pathname } = useLocation();
+
+  const latest = new Map<string, InboxItem>();
+  for (const item of feed ?? []) {
+    if (!latest.has(item.recipient)) latest.set(item.recipient, item);
+  }
+
+  const refresh = () => { reload(); reloadFeed(); };
 
   return (
     <div className="shell">
@@ -31,26 +42,41 @@ function Shell() {
         <nav className="nav">
           <NavLink to="/activity" className={({ isActive }) => (isActive ? "on" : "")}>Activity</NavLink>
           <NavLink to="/chat" className={({ isActive }) => (isActive ? "on" : "")}>Chat</NavLink>
-          <NavLink to="/config" className={({ isActive }) => (isActive ? "on" : "")}>Config</NavLink>
         </nav>
 
         <h6>Team</h6>
         <div className="roster">
           {(bots ?? []).map((b) => {
             const on = pathname === `/bots/${b.id}`;
+            const item = latest.get(b.id);
             return (
               <NavLink key={b.id} to={`/bots/${b.id}`}
                 className={`${on ? "on" : ""} ${b.enabled ? "" : "off"}`}>
-                <Avatar id={b.id} name={b.display_name} size={26} dim={!b.enabled} />
-                <span className="nm">{b.display_name || b.id}</span>
-                {b.is_coordinator && <i className="lead" title="coordinator" />}
+                <Mascot id={b.id} size={30} dim={!b.enabled} />
+                <div className="txt">
+                  <div className="nm">
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {b.display_name || b.id}
+                    </span>
+                    {b.is_coordinator && <i className="lead" title="coordinator" />}
+                  </div>
+                  <div className="last">
+                    {item
+                      ? `${item.result || item.error || item.subject}`
+                      : b.description || "Nothing yet"}
+                  </div>
+                </div>
               </NavLink>
             );
           })}
           <NavLink to="/bots/new" className="newbot">
             <span className="plus">+</span>
-            <span className="nm">New bot</span>
+            <div className="txt"><div className="nm">New bot</div></div>
           </NavLink>
+        </div>
+
+        <div className="side-foot">
+          <NavLink to="/config">⚙ Config</NavLink>
         </div>
       </aside>
 
@@ -63,8 +89,8 @@ function Shell() {
           <Route path="/activity" element={<Activity />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/config" element={<Config />} />
-          <Route path="/bots/new" element={<NewBot onCreated={reload} />} />
-          <Route path="/bots/:botId" element={<BotDetail onChanged={reload} />} />
+          <Route path="/bots/new" element={<NewBot onCreated={refresh} />} />
+          <Route path="/bots/:botId" element={<BotDetail onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />
         </Routes>
       </main>
@@ -92,3 +118,5 @@ export function Page({ title, sub, action, children }: {
     </div>
   );
 }
+
+export { when };

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, type Bot, type InboxItem, type InboxKind, type TranscriptMessage } from "../api";
 import { Page } from "../App";
-import { Avatar, Empty, Err, Spinner, Status, useLoad, when } from "../components/ui";
+import { Empty, Err, Spinner, Status, useLoad, when } from "../components/ui";
+import { Mascot } from "../components/Mascot";
 import { botVars } from "../theme";
 
 export function BotDetail({ onChanged }: { onChanged: () => void }) {
@@ -19,7 +20,7 @@ export function BotDetail({ onChanged }: { onChanged: () => void }) {
       <Page
         title={
           <span className="row">
-            <Avatar id={bot.id} name={bot.display_name} size={34} dim={!bot.enabled} />
+            <Mascot id={bot.id} size={34} dim={!bot.enabled} />
             <span style={{ color: "var(--bot-fg)" }}>{bot.display_name || bot.id}</span>
             {bot.is_coordinator && <span className="tag" style={{ color: "var(--brand)" }}>coordinator</span>}
             {!bot.enabled && <span className="tag" style={{ color: "var(--warn)" }}>disabled</span>}

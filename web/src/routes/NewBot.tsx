@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { Page } from "../App";
-import { Avatar, Err } from "../components/ui";
+import { Err } from "../components/ui";
+import { Mascot } from "../components/Mascot";
 import { botVars } from "../theme";
 
 export function NewBot({ onCreated }: { onCreated: () => void }) {
@@ -29,7 +30,7 @@ export function NewBot({ onCreated }: { onCreated: () => void }) {
         {/* The avatar updates as they type. It is the fastest way to
             convey that a bot is an identity rather than a row. */}
         <div className="row gap">
-          <Avatar id={f.id || "new"} name={f.display_name || f.id} size={46} />
+          <Mascot id={f.id || "new"} size={46} />
           <div>
             <div style={{ fontWeight: 600, fontSize: 16 }}>{f.display_name || f.id || "Unnamed"}</div>
             <div className="meta mono">bot:{f.id || "…"}</div>

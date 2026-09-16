@@ -13,10 +13,10 @@
   /* Surfaces climb in very small steps. Dark UI reads as depth through
      highlight and shadow, not through lightness jumps — a big step
      between card and canvas looks like a cut-out, not a card. */
-  --canvas: #08080a;
-  --s1: #101014;
-  --s2: #16161c;
-  --s3: #1f1f27;
+  --canvas: #000000;
+  --s1: #0c0c0e;
+  --s2: #141417;
+  --s3: #1e1e23;
 
   /* The 1px inner top highlight is what makes a dark card look lit
      rather than painted. It does more for depth than any shadow. */
@@ -84,18 +84,18 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .shell { display: flex; height: 100%; overflow: hidden; }
 
 .side {
-  width: 236px;
-  min-width: 236px;
+  width: 250px;
+  min-width: 250px;
   background: var(--s1);
   border-right: 1px solid var(--edge);
   display: flex;
   flex-direction: column;
-  padding: 14px 0;
+  padding: 10px 0 0;
 }
 
 .brand {
   display: flex; align-items: center; gap: 9px;
-  padding: 4px 18px 18px;
+  padding: 6px 15px 14px;
   font-weight: 650; font-size: 15px; letter-spacing: -0.02em;
 }
 .brand i {
@@ -104,9 +104,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
   box-shadow: 0 0 12px var(--brand);
 }
 
-.nav { padding: 0 10px; display: flex; flex-direction: column; gap: 1px; }
+.nav { padding: 0 6px; display: flex; flex-direction: column; gap: 1px; }
 .nav a {
-  padding: 7px 10px; border-radius: var(--r-sm);
+  padding: 6px 9px; border-radius: 8px;
   font-size: 13.5px; font-weight: 500; color: var(--mid);
   transition: background 120ms, color 120ms;
 }
@@ -114,23 +114,35 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .nav a.on { background: var(--s3); color: var(--hi); font-weight: 600; box-shadow: var(--lift); }
 
 .side h6 {
-  padding: 22px 18px 8px;
+  padding: 16px 15px 6px;
   font-size: 10px; font-weight: 700; letter-spacing: 0.1em;
   color: var(--low); text-transform: uppercase;
 }
 
-.roster { padding: 0 10px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; flex: 1; }
+/* A conversation list, not a roster. Each row carries the bot's most
+   recent line, which is what makes a sidebar feel populated rather
+   than like a nav menu — and it answers "what is everyone up to"
+   before you click anything. */
+.roster { padding: 0 6px; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; flex: 1; }
 .roster a {
   display: flex; align-items: center; gap: 10px;
-  padding: 6px 10px 6px 8px; border-radius: var(--r-sm);
+  padding: 7px 9px; border-radius: 8px;
   transition: background 120ms;
 }
 .roster a:hover { background: var(--s2); }
-.roster a.on { background: var(--s3); box-shadow: var(--lift); }
-.roster .nm { font-size: 13.5px; font-weight: 500; color: var(--hi); flex: 1; min-width: 0;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster a.on { background: var(--s3); }
+.roster .txt { flex: 1; min-width: 0; }
+.roster .nm {
+  font-size: 13px; font-weight: 550; color: var(--hi);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
+}
+.roster .last {
+  font-size: 11.5px; color: var(--low); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .roster a.off .nm { color: var(--low); }
-.roster .lead { width: 5px; height: 5px; border-radius: 99px; background: var(--brand); }
+.roster .lead { width: 5px; height: 5px; border-radius: 99px; background: var(--brand); flex-shrink: 0; }
 
 .newbot { color: var(--low) !important; }
 .newbot .plus {
@@ -361,3 +373,17 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
 .gap-sm { gap: 8px } .gap { gap: 14px } .gap-lg { gap: 22px }
 .grow { flex: 1; min-width: 0 }
 .center { display: grid; place-items: center; height: 100% }
+
+/* ---------- sidebar footer ---------- */
+
+.side-foot {
+  border-top: 1px solid var(--edge);
+  padding: 8px 6px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.side-foot a {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 8px;
+  font-size: 12.5px; color: var(--mid); transition: background 120ms;
+}
+.side-foot a:hover { background: var(--s2); color: var(--hi); }
