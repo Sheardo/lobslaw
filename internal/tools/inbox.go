@@ -296,7 +296,7 @@ func checkMayMessage(ctx context.Context, bots compute.BotResolver, me, target s
 		return fmt.Errorf("resolve %q: %w", me, err)
 	}
 	if !profile.MayMessageBot(target) {
-		return fmt.Errorf("%q is not in your may_message list, so you cannot reach it; ask the chief of staff to grant the edge", target)
+		return fmt.Errorf("%q is not in your may_message list, so you cannot reach it; ask the coordinator to grant the edge", target)
 	}
 	if _, err := bots.ResolveBot(ctx, target); err != nil {
 		return fmt.Errorf("resolve %q: %w", target, err)

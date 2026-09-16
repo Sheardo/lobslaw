@@ -12,7 +12,7 @@ export interface Bot {
   display_name: string;
   description: string;
   instructions: string;
-  is_chief: boolean;
+  is_coordinator: boolean;
   enabled: boolean;
   tools: string[];
   may_message: string[];

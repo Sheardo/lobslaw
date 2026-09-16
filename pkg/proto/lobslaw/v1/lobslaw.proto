@@ -1260,11 +1260,11 @@ message BotRecord {
   // for XYZ, you do this". Rendered as soul guidance, which means it
   // is standing configuration and never the current task.
   string instructions = 4;
-  // is_chief marks the single bot that owns the human-facing channels.
-  // Exactly one exists, it is seeded at first boot from the node's
-  // existing soul, and it cannot be deleted — deleting it would leave
-  // inbound Telegram messages with nobody to answer them.
-  bool is_chief = 5;
+  // is_coordinator marks the single bot that owns the human-facing
+  // channels. Exactly one exists, it is seeded at first boot from the
+  // node's existing soul, and it cannot be deleted — deleting it would
+  // leave inbound Telegram messages with nobody to answer them.
+  bool is_coordinator = 5;
   // tools is the registry filter described above. Empty means the node
   // default set, NOT "no tools": a bot created without a stated
   // allowlist should be as capable as the assistant was before it
@@ -1288,8 +1288,8 @@ message BotRecord {
   string claimed_by = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
-  // created_by is a principal — the chief that proposed this bot, or
-  // the operator who added it in the GUI.
+  // created_by is a principal — the coordinator that proposed this
+  // bot, or the operator who added it in the GUI.
   string created_by = 15;
 }
 

@@ -214,7 +214,7 @@ func TestExplicitClaimsOverrideTheBotPrincipal(t *testing.T) {
 
 // A bot may tighten the operator's caps and must not escape them. The
 // operator's number is the one chosen deliberately; a bot record the
-// chief wrote is not the place to overrule it.
+// coordinator wrote is not the place to overrule it.
 func TestBotCapsTightenButDoNotEscapeTheNodeCaps(t *testing.T) {
 	t.Parallel()
 	loop := &recordingLoop{}

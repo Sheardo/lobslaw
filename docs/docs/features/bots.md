@@ -6,7 +6,7 @@ sidebar_position: 1
 
 lobslaw starts as one assistant. You can give it colleagues.
 
-The one you already talk to becomes the **chief of staff**, keeping the
+The one you already talk to becomes the **coordinator**, keeping the
 personality and memory it already had — nothing about your first
 conversation after upgrading is different. What changes is that it can
 create specialists, hand them work, and tell you what they did.
@@ -109,7 +109,7 @@ enabled = true
 Then open `http://127.0.0.1:8080/`. It shows the whole team on one
 page: what each bot is working on, what it finished, what failed and
 why. Assign work, retry something, edit a brief, or chat to **any**
-bot — not just the chief.
+bot — not just the coordinator.
 
 Open a finished item and you can read the turn that produced it, not
 only its result.
@@ -154,7 +154,7 @@ else normally.
 
 ## Limits
 
-- **The chief cannot be deleted.** It is what answers your messages.
+- **The coordinator cannot be deleted.** It is what answers your messages.
   You can re-brief it.
 - **A bot cannot ask you to approve something mid-delegation.** A task
   needing a confirmation fails and says so; ask the bot directly and

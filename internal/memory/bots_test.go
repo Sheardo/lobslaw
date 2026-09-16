@@ -133,8 +133,8 @@ func TestBotMayNotMessageItself(t *testing.T) {
 	}
 }
 
-// An update must not be able to promote a bot to chief. There is one
-// chief, it owns the human-facing channels, and a second would mean
+// An update must not be able to promote a bot to coordinator. There is one
+// coordinator, it owns the human-facing channels, and a second would mean
 // two agents answering the same Telegram message.
 func TestBotUpdateCannotClaimTheChiefFlag(t *testing.T) {
 	t.Parallel()
@@ -144,12 +144,12 @@ func TestBotUpdateCannotClaimTheChiefFlag(t *testing.T) {
 	if _, err := svc.Put(ctx, &lobslawv1.BotRecord{Id: "pretender"}, 0); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	got, err := svc.Put(ctx, &lobslawv1.BotRecord{Id: "pretender", IsChief: true}, 1)
+	got, err := svc.Put(ctx, &lobslawv1.BotRecord{Id: "pretender", IsCoordinator: true}, 1)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if got.GetIsChief() {
-		t.Error("an update promoted a bot to chief")
+	if got.GetIsCoordinator() {
+		t.Error("an update promoted a bot to coordinator")
 	}
 }
 
@@ -158,12 +158,12 @@ func TestChiefCannotBeDeleted(t *testing.T) {
 	svc := newTestBots(t)
 	ctx := context.Background()
 
-	if _, err := svc.EnsureChief(ctx, "Chief"); err != nil {
-		t.Fatalf("EnsureChief: %v", err)
+	if _, err := svc.EnsureCoordinator(ctx, "Coordinator"); err != nil {
+		t.Fatalf("EnsureCoordinator: %v", err)
 	}
-	err := svc.Delete(ctx, ChiefBotID)
+	err := svc.Delete(ctx, CoordinatorBotID)
 	if err == nil {
-		t.Fatal("Delete removed the chief")
+		t.Fatal("Delete removed the coordinator")
 	}
 	if !strings.Contains(err.Error(), "answers your messages") {
 		t.Errorf("error does not say what would break: %v", err)
@@ -186,48 +186,48 @@ func TestBotDeleteRemovesIt(t *testing.T) {
 	}
 }
 
-// The upgrade story: EnsureChief is idempotent and must never
+// The upgrade story: EnsureCoordinator is idempotent and must never
 // overwrite instructions an operator has since edited.
-func TestEnsureChiefIsIdempotent(t *testing.T) {
+func TestEnsureCoordinatorIsIdempotent(t *testing.T) {
 	t.Parallel()
 	svc := newTestBots(t)
 	ctx := context.Background()
 
-	first, err := svc.EnsureChief(ctx, "Chief")
+	first, err := svc.EnsureCoordinator(ctx, "Coordinator")
 	if err != nil {
-		t.Fatalf("EnsureChief: %v", err)
+		t.Fatalf("EnsureCoordinator: %v", err)
 	}
-	if !first.GetIsChief() {
-		t.Error("seeded chief is not marked chief")
+	if !first.GetIsCoordinator() {
+		t.Error("seeded coordinator is not marked coordinator")
 	}
 	if _, err := svc.Put(ctx, &lobslawv1.BotRecord{
-		Id:           ChiefBotID,
-		DisplayName:  "Chief",
+		Id:           CoordinatorBotID,
+		DisplayName:  "Coordinator",
 		Instructions: "operator wrote this",
 		Enabled:      true,
 	}, first.GetRevision()); err != nil {
 		t.Fatalf("operator edit: %v", err)
 	}
 
-	again, err := svc.EnsureChief(ctx, "Chief")
+	again, err := svc.EnsureCoordinator(ctx, "Coordinator")
 	if err != nil {
-		t.Fatalf("second EnsureChief: %v", err)
+		t.Fatalf("second EnsureCoordinator: %v", err)
 	}
 	if again.GetInstructions() != "operator wrote this" {
-		t.Errorf("EnsureChief overwrote an operator's edit: %q", again.GetInstructions())
+		t.Errorf("EnsureCoordinator overwrote an operator's edit: %q", again.GetInstructions())
 	}
 }
 
-// The chief's soul-overlay key must be the pre-existing constant, or
+// The coordinator's soul-overlay key must be the pre-existing constant, or
 // an upgraded cluster wakes up with a default personality — a silent
 // regression that lands on the user, not the operator.
 func TestChiefKeepsThePreExistingSoulKey(t *testing.T) {
 	t.Parallel()
-	if got := SoulTuneRecordIDFor(ChiefBotID); got != SoulTuneRecordID {
-		t.Errorf("chief overlay key = %q, want the pre-existing %q", got, SoulTuneRecordID)
+	if got := SoulTuneRecordIDFor(CoordinatorBotID); got != SoulTuneRecordID {
+		t.Errorf("coordinator overlay key = %q, want the pre-existing %q", got, SoulTuneRecordID)
 	}
 	if got := SoulTuneRecordIDFor(""); got != SoulTuneRecordID {
-		t.Errorf("unnamed bot overlay key = %q, want the chief's %q", got, SoulTuneRecordID)
+		t.Errorf("unnamed bot overlay key = %q, want the coordinator's %q", got, SoulTuneRecordID)
 	}
 	if got, want := SoulTuneRecordIDFor("engineering"), SoulTuneRecordID+":engineering"; got != want {
 		t.Errorf("bot overlay key = %q, want %q", got, want)
@@ -244,8 +244,8 @@ func TestBotListPutsChiefFirst(t *testing.T) {
 			t.Fatalf("create %q: %v", id, err)
 		}
 	}
-	if _, err := svc.EnsureChief(ctx, "Chief"); err != nil {
-		t.Fatalf("EnsureChief: %v", err)
+	if _, err := svc.EnsureCoordinator(ctx, "Coordinator"); err != nil {
+		t.Fatalf("EnsureCoordinator: %v", err)
 	}
 
 	list, err := svc.List(ctx)
@@ -256,7 +256,7 @@ func TestBotListPutsChiefFirst(t *testing.T) {
 	for i, b := range list {
 		got[i] = b.GetId()
 	}
-	want := []string{ChiefBotID, "alpha", "zulu"}
+	want := []string{CoordinatorBotID, "alpha", "zulu"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("List order = %v, want %v", got, want)
 	}
@@ -320,7 +320,7 @@ func TestBotEdgeToAnUnknownBotIsAccepted(t *testing.T) {
 	t.Parallel()
 	svc := newTestBots(t)
 	if _, err := svc.Put(context.Background(), &lobslawv1.BotRecord{
-		Id: "chief", MayMessage: []string{"not-created-yet"},
+		Id: "coordinator", MayMessage: []string{"not-created-yet"},
 	}, 0); err != nil {
 		t.Errorf("an edge to a future bot was refused: %v", err)
 	}

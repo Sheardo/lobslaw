@@ -2,7 +2,7 @@
 
 lobslaw starts as one assistant. You can give it colleagues.
 
-The one you already talk to becomes the **chief of staff**. It keeps
+The one you already talk to becomes the **coordinator**. It keeps
 the personality and the memory it already had — nothing about your
 first conversation after upgrading is different. What changes is that
 it can now create specialists, hand them work, and tell you what they
@@ -107,7 +107,7 @@ Then open `http://127.0.0.1:8080/`.
 
 It gives you the whole team on one page: what each bot is working on,
 what it finished, what failed and why. You can assign work, retry
-something, edit a brief, or chat to the chief of staff.
+something, edit a brief, or chat to the coordinator.
 
 ### Signing in from anywhere but this machine
 
@@ -167,7 +167,7 @@ else normally. Nothing else breaks.
 - **A bot cannot ask you to approve something mid-delegation.** If a
   task needs a confirmation, it fails and says so; ask the bot directly
   and approve it there.
-- **The chief cannot be deleted.** It is what answers your messages.
+- **The coordinator cannot be deleted.** It is what answers your messages.
   You can re-brief it.
 - **A queue has a depth limit** (200 unworked items by default). Past
   it, whoever is loading the bot gets told — rather than the work being

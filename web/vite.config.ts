@@ -6,12 +6,17 @@ import react from "@vitejs/plugin-react";
 // a local dist/ that a Makefile step would then have to copy. One
 // artefact, one location, and nothing to forget.
 //
-// base is relative because the console is served from the gateway's
-// root but an operator may put a reverse proxy in front of it at a
-// subpath; absolute asset URLs would 404 there with no obvious cause.
+// base is ABSOLUTE. It was "./" for a reverse proxy at a subpath, and
+// that broke every deep link: on /bots/engineering the browser
+// resolves "./assets/x.js" to /bots/assets/x.js, the SPA fallback
+// answers it with index.html, and the module fails MIME checking —
+// a blank white page with one console line.
+//
+// The integration test passed throughout, because it only checked the
+// SHELL came back 200 and never loaded the bundle.
 export default defineConfig({
   plugins: [react()],
-  base: "./",
+  base: "/",
   build: {
     outDir: "../internal/gateway/ui/dist",
     // NOT emptied by Vite. That directory holds a committed .gitkeep,

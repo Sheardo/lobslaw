@@ -16,7 +16,7 @@ Four things follow from that, and one thing does not:
 | Piece | Where | Shape |
 |---|---|---|
 | Registry | `internal/memory/bots.go` | Raft record, revision-checked CAS |
-| Personality | `internal/soul` | One overlay per bot, chief keeps the pre-existing key |
+| Personality | `internal/soul` | One overlay per bot, coordinator keeps the pre-existing key |
 | Turns | `internal/compute/turnrunner.go` | One runner, N callers |
 | Queue | `internal/memory/bot_inbox.go` | Durable work queue, `LOG_OP_CLAIM` |
 
@@ -119,7 +119,7 @@ Three rules enforced on write:
 - **The id is a slug.** It becomes a principal, a soul-overlay key
   suffix and a policy subject, so a colon or a space silently changes
   what a rule matches.
-- **An update cannot claim the chief flag.** There is one chief, it
+- **An update cannot claim the coordinator flag.** There is one coordinator, it
   owns the human-facing channels, and a second would mean two agents
   answering the same Telegram message.
 - **`may_message` must stay acyclic.** See §5.
@@ -128,7 +128,7 @@ Three rules enforced on write:
 so an unbounded brief is an unbounded per-turn tax nothing else would
 report as the cause.
 
-### The chief, and the upgrade
+### The coordinator, and the upgrade
 
 `EnsureChief` seeds one record at first boot, leader-gated and
 idempotent. Its display name comes from the soul's `name` when it has
@@ -141,26 +141,26 @@ again in a second place is how the two come to disagree.
 
 ## 3 · Personality, per bot
 
-`SoulTuneRecordID` became a prefix. The chief's key is those exact
+`SoulTuneRecordID` became a prefix. The coordinator's key is those exact
 bytes unchanged; every other bot gets `soul:tune:<id>`.
 
 ```mermaid
 flowchart LR
   Baseline["Operator SOUL.md<br/>house style, safety guidance"]
-  Chief["soul:tune<br/>(chief's overlay)"]
+  Coordinator["soul:tune<br/>(coordinator's overlay)"]
   BotO["soul:tune:engineering"]
   Brief["BotRecord.instructions"]
 
-  Baseline --> ChiefSnap["Chief's turn"]
-  Chief --> ChiefSnap
+  Baseline --> ChiefSnap["Coordinator's turn"]
+  Coordinator --> ChiefSnap
   Baseline --> BotSnap["Engineering's turn"]
   BotO --> BotSnap
   Brief --> BotSnap
 ```
 
-Note what is **absent**: the chief's overlay does not sit under a
-bot's. *"Be less sarcastic with me"*, said to the chief in Telegram, is
-about the chief; having it silently re-tune the devops bot would be
+Note what is **absent**: the coordinator's overlay does not sit under a
+bot's. *"Be less sarcastic with me"*, said to the coordinator in Telegram, is
+about the coordinator; having it silently re-tune the devops bot would be
 action-at-a-distance nobody would connect back to the sentence that
 caused it. A bot with no overlay of its own serves the operator's
 baseline — which is right, because `SOUL.md` is the house style every
@@ -168,15 +168,15 @@ bot should share.
 
 Both paths merge through one function (`mergeOnBaselineLocked`), so
 the ±3 drift clamp cannot come to be enforced differently for a bot
-than for the chief.
+than for the coordinator.
 
 `soul.BotTuneStore` is an **optional** interface rather than more
 methods on `TuneStore`: a store that does not implement it serves the
-chief's overlay to everyone, which is what a single-assistant
+coordinator's overlay to everyone, which is what a single-assistant
 deployment already has.
 
-**Why the chief's key had to stay byte-identical:** an existing cluster
-has an overlay under `soul:tune` and no bots bucket. If the chief got a
+**Why the coordinator's key had to stay byte-identical:** an existing cluster
+has an overlay under `soul:tune` and no bots bucket. If the coordinator got a
 key of its own, every deployment would wake up after an upgrade with a
 default personality — silent, landing on the user rather than the
 operator, with no obvious connection to the upgrade. There is a test
@@ -363,7 +363,7 @@ Every queued item is replicated on every voter.
 ## 7 · Reaching you
 
 One Telegram token, one Slack app. A bot's message is relayed through
-the chief's identity with a sender label, stamped from turn identity
+the coordinator's identity with a sender label, stamped from turn identity
 and **never** from a tool argument — a bot that could name its own
 sender could send you something that looks like it came from another.
 
@@ -452,7 +452,7 @@ it: without that a clean checkout has no `dist/` at all, which makes
   was in exactly that machinery.
 - **No per-bot notification rate limiting.** Routing routine output to
   the inbox is the mitigation; revisit the first time somebody mutes
-  the chief.
+  the coordinator.
 - **No multi-turn history in the console's chat.** Each message is its
   own turn; the bot does not see the previous one. Conversations filed
   under the `bot` channel are readable through

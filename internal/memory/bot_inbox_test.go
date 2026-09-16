@@ -24,7 +24,7 @@ func post(t *testing.T, svc *InboxService, recipient, body string, priority int3
 	t.Helper()
 	item, err := svc.Post(context.Background(), &lobslawv1.BotInboxItem{
 		Recipient: recipient,
-		Sender:    "bot:chief",
+		Sender:    "bot:coordinator",
 		Body:      body,
 		Priority:  priority,
 	})

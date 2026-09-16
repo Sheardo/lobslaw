@@ -40,17 +40,17 @@ func NewSoulTuneService(raft *RaftNode, store *Store) *SoulTuneService {
 	return &SoulTuneService{raft: raft, store: store}
 }
 
-// Get returns the chief's SoulTuneRecord. Returns (nil, nil) when
+// Get returns the coordinator's SoulTuneRecord. Returns (nil, nil) when
 // nothing has been written yet — the Adjuster treats this as "no
 // overlay; serve baseline". Errors are reserved for unmarshal /
 // store failures.
 func (s *SoulTuneService) Get(ctx context.Context) (*lobslawv1.SoulTuneRecord, error) {
-	return s.GetFor(ctx, ChiefBotID)
+	return s.GetFor(ctx, CoordinatorBotID)
 }
 
 // GetFor returns one bot's overlay.
 //
-// The chief's key is SoulTuneRecordID unchanged, so a cluster that
+// The coordinator's key is SoulTuneRecordID unchanged, so a cluster that
 // upgraded into having bots reads back the personality it already had
 // rather than a default one. See SoulTuneRecordIDFor.
 func (s *SoulTuneService) GetFor(_ context.Context, botID string) (*lobslawv1.SoulTuneRecord, error) {
@@ -76,7 +76,7 @@ func (s *SoulTuneService) GetFor(_ context.Context, botID string) (*lobslawv1.So
 // MaxSoulTuneHistory), and the supplied state becomes the new current.
 // updated_at is stamped before proposal and replicated with the state.
 func (s *SoulTuneService) Put(ctx context.Context, state *lobslawv1.SoulTuneState, expectedRevision uint64) (*lobslawv1.SoulTuneRecord, error) {
-	return s.PutFor(ctx, ChiefBotID, state, expectedRevision)
+	return s.PutFor(ctx, CoordinatorBotID, state, expectedRevision)
 }
 
 // PutFor writes one bot's overlay. Each bot's record carries its own
@@ -137,7 +137,7 @@ func (s *SoulTuneService) put(ctx context.Context, botID string, state *lobslawv
 // Rollback appends a restoration as a new revision. The CAS covers the
 // history selection too, so a concurrent edit cannot silently be discarded.
 func (s *SoulTuneService) Rollback(ctx context.Context, steps int) (*lobslawv1.SoulTuneRecord, error) {
-	return s.RollbackFor(ctx, ChiefBotID, steps)
+	return s.RollbackFor(ctx, CoordinatorBotID, steps)
 }
 
 // RollbackFor is the per-bot equivalent.

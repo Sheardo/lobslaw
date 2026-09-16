@@ -8,7 +8,7 @@ import (
 )
 
 // botTuneStore is a TuneStore that also serves per-bot overlays. The
-// chief's overlay is the one the plain Get path returns, matching how
+// coordinator's overlay is the one the plain Get path returns, matching how
 // the raft store keys them.
 type botTuneStore struct {
 	*MemoryTuneStore
@@ -98,15 +98,15 @@ func TestBotWithNoOverlayServesTheOperatorBaseline(t *testing.T) {
 	}
 }
 
-// "Be less sarcastic with me", said to the chief in Telegram, is about
-// the chief. Having it silently re-tune the devops bot would be
+// "Be less sarcastic with me", said to the coordinator in Telegram, is about
+// the coordinator. Having it silently re-tune the devops bot would be
 // action-at-a-distance nobody would connect to the sentence that
 // caused it.
 func TestTuningTheChiefDoesNotRetuneOtherBots(t *testing.T) {
 	t.Parallel()
 	chiefOverlay := &MemoryTuneStore{}
 	if err := chiefOverlay.Put(context.Background(), &TuneState{Sarcasm: ptr(0)}); err != nil {
-		t.Fatalf("seed chief overlay: %v", err)
+		t.Fatalf("seed coordinator overlay: %v", err)
 	}
 	store := &botTuneStore{
 		MemoryTuneStore: chiefOverlay,
@@ -119,7 +119,7 @@ func TestTuningTheChiefDoesNotRetuneOtherBots(t *testing.T) {
 		t.Fatalf("SnapshotFor: %v", err)
 	}
 	if got := devops.Config.EmotiveStyle.Sarcasm; got != 5 {
-		t.Errorf("devops sarcasm = %d, want the baseline 5 — the chief's tune leaked", got)
+		t.Errorf("devops sarcasm = %d, want the baseline 5 — the coordinator's tune leaked", got)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestEmptyBotIDTakesTheDefaultPath(t *testing.T) {
 }
 
 // The drift clamp must apply identically however the overlay arrived.
-// A bot whose cap was enforced differently from the chief's would be a
+// A bot whose cap was enforced differently from the coordinator's would be a
 // difference nobody finds by reading either one.
 func TestBotOverlayIsClampedLikeTheChiefs(t *testing.T) {
 	t.Parallel()

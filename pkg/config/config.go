@@ -50,7 +50,7 @@ type Config struct {
 	// existing config keeps working.
 	Notify NotifyConfig `koanf:"notify"`
 
-	// Bots is the team: the chief of staff and the specialists it
+	// Bots is the team: the coordinator and the specialists it
 	// creates. Bots themselves are RECORDS, not configuration — they
 	// are created at runtime and replicated — so this block holds only
 	// the operator bounds that apply to all of them.

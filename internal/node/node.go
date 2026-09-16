@@ -800,8 +800,8 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			if err := n.seedUserPrefsFromConfig(ctx); err != nil {
 				n.log.Warn("user_prefs: seed from config failed", "err", err)
 			}
-			if err := n.seedChiefBot(ctx); err != nil {
-				n.log.Warn("bots: seed chief of staff failed", "err", err)
+			if err := n.seedCoordinatorBot(ctx); err != nil {
+				n.log.Warn("bots: seed coordinator failed", "err", err)
 			}
 		}
 	}

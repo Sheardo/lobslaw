@@ -54,10 +54,10 @@ func TestPostedInboxItemIsDrainedAfterBoot(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- n.Start(ctx) }()
 
-	waitForChief(ctx, t, n)
+	waitForCoordinator(ctx, t, n)
 
 	item, err := n.Inbox().Post(ctx, &lobslawv1.BotInboxItem{
-		Recipient: memory.ChiefBotID,
+		Recipient: memory.CoordinatorBotID,
 		Sender:    "user:alice",
 		Body:      "summarise what happened today",
 	})
@@ -65,7 +65,7 @@ func TestPostedInboxItemIsDrainedAfterBoot(t *testing.T) {
 		t.Fatalf("Post: %v", err)
 	}
 
-	worked := waitForTerminal(ctx, t, n, memory.ChiefBotID, item.GetId())
+	worked := waitForTerminal(ctx, t, n, memory.CoordinatorBotID, item.GetId())
 
 	if worked.GetStatus() != lobslawv1.InboxStatus_INBOX_STATUS_DONE {
 		t.Fatalf("status = %v (error %q), want done", worked.GetStatus(), worked.GetError())

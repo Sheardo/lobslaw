@@ -12,11 +12,11 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// A booted raft node ends up with exactly one bot, it is the chief,
+// A booted raft node ends up with exactly one bot, it is the coordinator,
 // and its personality overlay key is the constant every pre-existing
 // cluster already has a record under.
 //
-// That last assertion is the upgrade story. If the chief ever gets a
+// That last assertion is the upgrade story. If the coordinator ever gets a
 // key of its own, every existing deployment wakes up after an upgrade
 // with a default personality — a regression that is silent, lands on
 // the user rather than the operator, and has no obvious connection to
@@ -50,16 +50,16 @@ func TestNodeSeedsExactlyOneChiefBotAtBoot(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- n.Start(ctx) }()
 
-	chief := waitForChief(ctx, t, n)
+	coordinator := waitForCoordinator(ctx, t, n)
 
-	if !chief.GetIsChief() {
-		t.Error("the seeded bot is not marked chief")
+	if !coordinator.GetIsCoordinator() {
+		t.Error("the seeded bot is not marked coordinator")
 	}
-	if !chief.GetEnabled() {
-		t.Error("the seeded chief is disabled; nothing would answer an inbound message")
+	if !coordinator.GetEnabled() {
+		t.Error("the seeded coordinator is disabled; nothing would answer an inbound message")
 	}
-	if got := memory.SoulTuneRecordIDFor(chief.GetId()); got != memory.SoulTuneRecordID {
-		t.Errorf("chief overlay key = %q, want the pre-existing %q — an upgrade would lose the deployment's personality",
+	if got := memory.SoulTuneRecordIDFor(coordinator.GetId()); got != memory.SoulTuneRecordID {
+		t.Errorf("coordinator overlay key = %q, want the pre-existing %q — an upgrade would lose the deployment's personality",
 			got, memory.SoulTuneRecordID)
 	}
 
@@ -77,15 +77,15 @@ func TestNodeSeedsExactlyOneChiefBotAtBoot(t *testing.T) {
 	}
 }
 
-func waitForChief(ctx context.Context, t *testing.T, n *node.Node) *lobslawv1.BotRecord {
+func waitForCoordinator(ctx context.Context, t *testing.T, n *node.Node) *lobslawv1.BotRecord {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		if rec, err := n.Bots().Get(ctx, memory.ChiefBotID); err == nil {
+		if rec, err := n.Bots().Get(ctx, memory.CoordinatorBotID); err == nil {
 			return rec
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("no chief bot was seeded within 15s of boot")
+	t.Fatal("no coordinator bot was seeded within 15s of boot")
 	return nil
 }

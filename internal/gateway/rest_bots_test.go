@@ -160,7 +160,7 @@ func do(t *testing.T, s *Server, method, path, body string) *httptest.ResponseRe
 func TestListBots(t *testing.T) {
 	t.Parallel()
 	s := botServer(newFakeBots(
-		&lobslawv1.BotRecord{Id: "chief", IsChief: true, Enabled: true},
+		&lobslawv1.BotRecord{Id: "coordinator", IsCoordinator: true, Enabled: true},
 		&lobslawv1.BotRecord{Id: "engineering", Enabled: true},
 	), nil)
 

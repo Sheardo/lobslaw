@@ -17,12 +17,12 @@ import (
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
-// seedChiefBot writes the chief-of-staff record if the registry is
+// seedCoordinatorBot writes the coordinator-of-staff record if the registry is
 // empty. Leader-only and idempotent, like every other seed here.
 //
 // This is the entire upgrade path for an existing deployment. The
-// chief's personality overlay key is memory.SoulTuneRecordID
-// unchanged, so the cluster's existing soul becomes the chief's soul
+// coordinator's personality overlay key is memory.SoulTuneRecordID
+// unchanged, so the cluster's existing soul becomes the coordinator's soul
 // and the first turn after upgrading is the same turn it would have
 // been before. A seed that minted a new key instead would look like a
 // personality regression, and the operator would have no reason to
@@ -31,7 +31,7 @@ import (
 // Display name comes from the soul's name when it has one: the
 // operator already said what to call the assistant, and asking them
 // again in a second place is how the two come to disagree.
-func (n *Node) seedChiefBot(ctx context.Context) error {
+func (n *Node) seedCoordinatorBot(ctx context.Context) error {
 	if n.botSvc == nil || n.raft == nil || !n.raft.IsLeader() {
 		return nil
 	}
@@ -39,11 +39,11 @@ func (n *Node) seedChiefBot(ctx context.Context) error {
 	if s := n.soul.Load(); s != nil {
 		displayName = strings.TrimSpace(s.Config.Name)
 	}
-	rec, err := n.botSvc.EnsureChief(ctx, displayName)
+	rec, err := n.botSvc.EnsureCoordinator(ctx, displayName)
 	if err != nil {
 		return err
 	}
-	n.log.Info("bots: chief of staff ready",
+	n.log.Info("bots: coordinator ready",
 		"id", rec.GetId(), "display_name", rec.GetDisplayName(), "revision", rec.GetRevision())
 	return nil
 }

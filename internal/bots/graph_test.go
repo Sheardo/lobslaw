@@ -16,7 +16,7 @@ import (
 func TestAcyclicGraphIsAccepted(t *testing.T) {
 	t.Parallel()
 	g := Graph{
-		"chief":       {"engineering", "marketing"},
+		"coordinator": {"engineering", "marketing"},
 		"marketing":   {"engineering"},
 		"engineering": nil,
 	}
@@ -72,7 +72,7 @@ func TestSelfEdgeIsACycle(t *testing.T) {
 // registry checks existence separately.
 func TestEdgeToAnUnknownBotIsNotACycle(t *testing.T) {
 	t.Parallel()
-	if err := (Graph{"chief": {"not-created-yet"}}).Validate(); err != nil {
+	if err := (Graph{"coordinator": {"not-created-yet"}}).Validate(); err != nil {
 		t.Errorf("an edge to an unknown bot was treated as a cycle: %v", err)
 	}
 }
@@ -82,10 +82,10 @@ func TestEdgeToAnUnknownBotIsNotACycle(t *testing.T) {
 func TestWithEdgesValidatesTheProposalNotTheStoredGraph(t *testing.T) {
 	t.Parallel()
 	stored := Graph{
-		"chief":       {"engineering"},
+		"coordinator": {"engineering"},
 		"engineering": nil,
 	}
-	if err := stored.WithEdges("engineering", []string{"chief"}).Validate(); err == nil {
+	if err := stored.WithEdges("engineering", []string{"coordinator"}).Validate(); err == nil {
 		t.Error("an update closing a loop was accepted")
 	}
 	if err := stored.Validate(); err != nil {

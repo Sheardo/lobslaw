@@ -247,7 +247,7 @@ func TestInboxPostStampsTheSenderFromTheTurn(t *testing.T) {
 	if _, _, err := handler(asBot(context.Background(), "marketing"), map[string]string{
 		"bot_id": "engineering",
 		"body":   "please deploy",
-		"sender": "bot:chief",
+		"sender": "bot:coordinator",
 	}); err != nil {
 		t.Fatalf("inbox_post: %v", err)
 	}

@@ -1,117 +1,121 @@
-import {
-  Badge,
-  Box,
-  Button,
-  Flex,
-  HStack,
-  Heading,
-  Table,
-  Text,
-} from "@chakra-ui/react";
+import { Box, Button, Flex, HStack, Stack, Text } from "@chakra-ui/react";
+import { useEffect } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import { api, type InboxItem } from "../api";
-import {
-  EmptyState,
-  ErrorPanel,
-  Loading,
-  StatusBadge,
-  useLoad,
-  when,
-} from "../components/common";
+import { Page } from "../App";
+import { Avatar, Empty, ErrorPanel, Loading, Panel, Status, useLoad, when } from "../components/ui";
+import { botColors } from "../theme";
 
-/** The cross-bot timeline.
+/** What the team is doing, newest first.
  *
  * Built from the inboxes rather than from sessions, because the
- * question this page answers is "what is the team doing" — and a
- * session index answers "what conversations exist", which stops being
- * the same thing the moment bots start working items nobody chatted
- * about.
+ * question this answers is "what is the team doing" — and a session
+ * index answers "what conversations exist", which stops being the same
+ * thing the moment bots work items nobody chatted about.
  */
 export function Activity() {
   const { data, error, loading, reload } = useLoad(() => api.activity(100));
 
+  // A queue that only updates when you press a button is a queue you
+  // stop believing. Ten seconds is slow enough to be free and fast
+  // enough that a drain finishing feels live.
+  useEffect(() => {
+    const t = setInterval(reload, 10_000);
+    return () => clearInterval(t);
+  }, [reload]);
+
+  const working = (data ?? []).filter((i) => i.status === "claimed").length;
+  const queued = (data ?? []).filter((i) => i.status === "pending").length;
+
   return (
-    <Box>
-      <Flex align="center" justify="space-between" mb={5}>
-        <Box>
-          <Heading size="lg">Activity</Heading>
-          <Text color="fg.muted" fontSize="sm">
-            Every bot's queue, newest first.
-          </Text>
-        </Box>
-        <Button size="sm" variant="outline" onClick={reload} loading={loading}>
+    <Page
+      title="Activity"
+      subtitle={
+        data
+          ? `${working} working · ${queued} queued · ${data.length} total`
+          : "Every bot's queue."
+      }
+      action={
+        <Button size="xs" variant="ghost" color="fg.mid" onClick={reload} loading={loading}>
           Refresh
         </Button>
-      </Flex>
-
+      }
+    >
       {error && <ErrorPanel error={error} />}
       {!error && loading && !data && <Loading />}
-      {!error && data && data.length === 0 && (
-        <EmptyState
+      {!error && data?.length === 0 && (
+        <Empty
           title="Nothing has happened yet"
-          hint="Assign a bot some work from its page, or ask the chief of staff to."
+          hint="Assign a bot some work from its page, or ask the coordinator to."
         />
       )}
-      {!error && data && data.length > 0 && <ActivityTable items={data} />}
-    </Box>
+      {!error && data && data.length > 0 && (
+        <Stack gap={2}>
+          {data.map((item) => (
+            <Row key={`${item.recipient}/${item.id}`} item={item} />
+          ))}
+        </Stack>
+      )}
+    </Page>
   );
 }
 
-function ActivityTable({ items }: { items: InboxItem[] }) {
+function Row({ item }: { item: InboxItem }) {
+  const c = botColors(item.recipient);
+  const outcome = item.error || item.result;
+
   return (
-    <Table.Root size="sm" variant="line" interactive>
-      <Table.Header>
-        <Table.Row>
-          <Table.ColumnHeader>Bot</Table.ColumnHeader>
-          <Table.ColumnHeader>Subject</Table.ColumnHeader>
-          <Table.ColumnHeader>From</Table.ColumnHeader>
-          <Table.ColumnHeader>Kind</Table.ColumnHeader>
-          <Table.ColumnHeader>Status</Table.ColumnHeader>
-          <Table.ColumnHeader>When</Table.ColumnHeader>
-        </Table.Row>
-      </Table.Header>
-      <Table.Body>
-        {items.map((item) => (
-          <Table.Row key={`${item.recipient}/${item.id}`}>
-            <Table.Cell>
-              <RouterLink to={`/bots/${item.recipient}`}>
-                <Text fontWeight="medium" textDecoration="underline">
-                  {item.recipient}
-                </Text>
-              </RouterLink>
-            </Table.Cell>
-            <Table.Cell maxW="sm" truncate>
-              {item.subject || <Text color="fg.muted">(no subject)</Text>}
-            </Table.Cell>
-            <Table.Cell>
-              <Text fontSize="sm" color="fg.muted">
-                {item.sender}
+    <RouterLink to={`/bots/${item.recipient}`}>
+      <Panel
+        px={4}
+        py={3.5}
+        _hover={{ borderColor: "edge.mid", bg: "bg.s2" }}
+        transition="all 120ms"
+        // A hairline in the bot's colour down the left edge. Cheaper
+        // to scan than any badge: you find the devops rows without
+        // reading a single word.
+        borderLeftWidth="2px"
+        borderLeftColor={c.border}
+      >
+        <Flex gap={3} align="flex-start">
+          <Avatar id={item.recipient} size={28} />
+          <Box flex="1" minW={0}>
+            <HStack gap={2} mb={0.5}>
+              <Text fontSize="13px" fontWeight="600" color={c.text}>
+                {item.recipient}
               </Text>
-            </Table.Cell>
-            <Table.Cell>
-              <Badge variant="outline">{item.kind}</Badge>
-            </Table.Cell>
-            <Table.Cell>
-              <HStack gap={2}>
-                <StatusBadge status={item.status} />
-                {/* Attempts are shown only when there have been
-                    several. A "1" beside every row is noise; a "3"
-                    beside one is the thing you were looking for. */}
-                {item.attempts > 1 && (
-                  <Text fontSize="xs" color="fg.muted">
-                    {item.attempts} attempts
-                  </Text>
-                )}
-              </HStack>
-            </Table.Cell>
-            <Table.Cell whiteSpace="nowrap">
-              <Text fontSize="sm" color="fg.muted">
-                {when(item.completed_at ?? item.created_at)}
+              <Text fontSize="11px" color="fg.low">
+                {item.kind}
+                {item.sender && item.sender !== "operator" ? ` from ${item.sender}` : ""}
               </Text>
-            </Table.Cell>
-          </Table.Row>
-        ))}
-      </Table.Body>
-    </Table.Root>
+            </HStack>
+            <Text fontSize="14px" fontWeight="500" truncate>
+              {item.subject || "(no subject)"}
+            </Text>
+            {outcome && (
+              <Text
+                fontSize="13px"
+                color={item.error ? "st.failed" : "fg.mid"}
+                mt={1}
+                lineClamp={2}
+              >
+                {outcome}
+              </Text>
+            )}
+          </Box>
+          <Stack align="flex-end" gap={1} minW="fit-content">
+            <Status status={item.status} />
+            <Text fontSize="11px" color="fg.low">
+              {when(item.completed_at ?? item.created_at)}
+            </Text>
+            {item.attempts > 1 && (
+              <Text fontSize="10px" color="st.cancelled">
+                {item.attempts} attempts
+              </Text>
+            )}
+          </Stack>
+        </Flex>
+      </Panel>
+    </RouterLink>
   );
 }

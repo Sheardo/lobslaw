@@ -57,7 +57,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	go func() { done <- n.Start(ctx) }()
 
 	base := waitForGatewayAddr(t, n)
-	waitForChief(ctx, t, n)
+	waitForCoordinator(ctx, t, n)
 
 	t.Run("console is served at the root", func(t *testing.T) {
 		body, status := get(t, base+"/")
@@ -69,10 +69,32 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 		}
 	})
 
-	t.Run("a deep link reloads", func(t *testing.T) {
-		_, status := get(t, base+"/bots/chief")
+	// This test USED to check only that the shell came back 200, and
+	// it passed for the entire time deep links were completely broken:
+	// vite's base was "./", so on /bots/x the browser resolved
+	// "./assets/app.js" to /bots/assets/app.js, the SPA fallback
+	// answered it with index.html, and the module failed MIME checking
+	// — a blank white page. Asserting the shell proves the fallback
+	// works; it says nothing about whether the page can RUN.
+	t.Run("a deep link's assets resolve", func(t *testing.T) {
+		body, status := get(t, base+"/bots/coordinator")
 		if status != http.StatusOK {
-			t.Errorf("status = %d; reloading a bot page 404s", status)
+			t.Fatalf("status = %d; reloading a bot page 404s", status)
+		}
+		src := scriptSrc(body)
+		if src == "" {
+			t.Fatalf("no module script in the shell:\n%s", truncateForLog(body))
+		}
+		if strings.HasPrefix(src, "./") || strings.HasPrefix(src, "../") {
+			t.Fatalf("asset path %q is relative; it resolves against the deep link's "+
+				"directory and 404s into the SPA fallback", src)
+		}
+		assetBody, assetStatus := get(t, base+src)
+		if assetStatus != http.StatusOK {
+			t.Fatalf("asset %s = %d from a deep link", src, assetStatus)
+		}
+		if strings.Contains(assetBody, "<!doctype html") || strings.Contains(assetBody, "<div id=") {
+			t.Errorf("asset %s served HTML; the browser would refuse it on MIME", src)
 		}
 	})
 
@@ -87,8 +109,8 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 		if !strings.Contains(body, `"bots"`) {
 			t.Errorf("/v1/bots did not return JSON:\n%s", truncateForLog(body))
 		}
-		if !strings.Contains(body, `"chief"`) {
-			t.Errorf("the seeded chief is missing from the API:\n%s", truncateForLog(body))
+		if !strings.Contains(body, `"coordinator"`) {
+			t.Errorf("the seeded coordinator is missing from the API:\n%s", truncateForLog(body))
 		}
 	})
 
@@ -133,7 +155,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	})
 
 	t.Run("a bot's own sessions list", func(t *testing.T) {
-		body, status := get(t, base+"/v1/bots/chief/sessions")
+		body, status := get(t, base+"/v1/bots/coordinator/sessions")
 		if status != http.StatusOK {
 			t.Fatalf("status = %d: %s", status, truncateForLog(body))
 		}
@@ -143,12 +165,12 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	})
 
 	t.Run("chatting to a named bot streams", func(t *testing.T) {
-		body, status := post(t, base+"/v1/bots/chief/messages", `{"message":"hello"}`)
+		body, status := post(t, base+"/v1/bots/coordinator/messages", `{"message":"hello"}`)
 		if status != http.StatusOK {
 			t.Fatalf("status = %d: %s", status, truncateForLog(body))
 		}
 		// The whole reason this route exists: /v1/messages reaches the
-		// chief only, so without it a specialist is configurable but
+		// coordinator only, so without it a specialist is configurable but
 		// not conversable.
 		for _, want := range []string{"event: start", "event: reply", "hello"} {
 			if !strings.Contains(body, want) {
@@ -208,6 +230,20 @@ func post(t *testing.T, url, body string) (string, int) {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(out), res.StatusCode
+}
+
+// scriptSrc pulls the module script's src out of the shell.
+func scriptSrc(shell string) string {
+	_, rest, ok := strings.Cut(shell, `<script type="module"`)
+	if !ok {
+		return ""
+	}
+	_, rest, ok = strings.Cut(rest, `src="`)
+	if !ok {
+		return ""
+	}
+	src, _, _ := strings.Cut(rest, `"`)
+	return src
 }
 
 func truncateForLog(s string) string {

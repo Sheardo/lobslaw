@@ -15,8 +15,8 @@ import (
 // handleBotChat serves POST /v1/bots/{id}/messages.
 //
 // Talking to a SPECIFIC bot, which /v1/messages cannot do — that
-// endpoint is the chief's, shared with Telegram and Slack, and a
-// console that could only reach the chief would make every specialist
+// endpoint is the coordinator's, shared with Telegram and Slack, and a
+// console that could only reach the coordinator would make every specialist
 // something you can configure but not converse with.
 //
 // Streamed as Server-Sent Events. A bot turn can run tools for a

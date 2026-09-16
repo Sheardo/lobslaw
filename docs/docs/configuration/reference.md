@@ -735,7 +735,7 @@ end would be the wrong trade.
 ## `[bots]`
 
 Operator bounds over the whole team. The bots themselves are runtime
-records — created through the GUI or by the chief of staff, and
+records — created through the GUI or by the coordinator, and
 replicated like any other state — so nothing here names one.
 
 ```toml

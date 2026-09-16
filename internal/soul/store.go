@@ -95,7 +95,7 @@ type TuneStore interface {
 // MemoryTuneStore and the compute-node's remote store both satisfy
 // TuneStore today, and widening it would make every implementation
 // carry a per-bot path whether or not its deployment has bots. A store
-// that does not implement this serves the chief's overlay to every
+// that does not implement this serves the coordinator's overlay to every
 // bot, which is the behaviour a single-assistant deployment already
 // has.
 type BotTuneStore interface {

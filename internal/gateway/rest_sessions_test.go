@@ -231,7 +231,7 @@ func (f *fakeTurns) Run(_ context.Context, req compute.TurnRequest) (*compute.Pr
 }
 
 // The console must be able to talk to a SPECIFIC bot. /v1/messages is
-// the chief's, shared with Telegram, so without this every specialist
+// the coordinator's, shared with Telegram, so without this every specialist
 // is something you can configure but not converse with.
 func TestBotChatRunsAsThatBotAndStreams(t *testing.T) {
 	t.Parallel()

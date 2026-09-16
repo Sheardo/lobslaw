@@ -38,17 +38,17 @@ type InboxAPI interface {
 // API the moment somebody added it to the record, and the GUI would
 // start depending on something nobody decided to publish.
 type botJSON struct {
-	ID           string   `json:"id"`
-	DisplayName  string   `json:"display_name"`
-	Description  string   `json:"description"`
-	Instructions string   `json:"instructions"`
-	IsChief      bool     `json:"is_chief"`
-	Enabled      bool     `json:"enabled"`
-	Tools        []string `json:"tools"`
-	MayMessage   []string `json:"may_message"`
-	Revision     uint64   `json:"revision"`
-	CreatedAt    string   `json:"created_at,omitempty"`
-	UpdatedAt    string   `json:"updated_at,omitempty"`
+	ID            string   `json:"id"`
+	DisplayName   string   `json:"display_name"`
+	Description   string   `json:"description"`
+	Instructions  string   `json:"instructions"`
+	IsCoordinator bool     `json:"is_chief"`
+	Enabled       bool     `json:"enabled"`
+	Tools         []string `json:"tools"`
+	MayMessage    []string `json:"may_message"`
+	Revision      uint64   `json:"revision"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
 }
 
 type inboxItemJSON struct {
@@ -71,15 +71,15 @@ type inboxItemJSON struct {
 
 func botToJSON(rec *lobslawv1.BotRecord) botJSON {
 	out := botJSON{
-		ID:           rec.GetId(),
-		DisplayName:  rec.GetDisplayName(),
-		Description:  rec.GetDescription(),
-		Instructions: rec.GetInstructions(),
-		IsChief:      rec.GetIsChief(),
-		Enabled:      rec.GetEnabled(),
-		Tools:        rec.GetTools(),
-		MayMessage:   rec.GetMayMessage(),
-		Revision:     rec.GetRevision(),
+		ID:            rec.GetId(),
+		DisplayName:   rec.GetDisplayName(),
+		Description:   rec.GetDescription(),
+		Instructions:  rec.GetInstructions(),
+		IsCoordinator: rec.GetIsCoordinator(),
+		Enabled:       rec.GetEnabled(),
+		Tools:         rec.GetTools(),
+		MayMessage:    rec.GetMayMessage(),
+		Revision:      rec.GetRevision(),
 	}
 	if ts := rec.GetCreatedAt(); ts != nil {
 		out.CreatedAt = ts.AsTime().UTC().Format(rfc3339)

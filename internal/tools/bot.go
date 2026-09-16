@@ -19,7 +19,7 @@ import (
 // askBotTimeout bounds one delegated turn.
 //
 // Shorter than a top-level turn's budget: the caller is holding a
-// conversation open while this runs, and a person waiting on the chief
+// conversation open while this runs, and a person waiting on the coordinator
 // has no idea a second bot is even involved. A question that cannot be
 // answered inside ninety seconds is one that should have been handed
 // over with tell_bot.
@@ -78,7 +78,7 @@ func BotToolDefs() []*types.ToolDef {
 		{
 			Name:        "bot_list",
 			Path:        compute.BuiltinScheme + "bot_list",
-			Description: "List the bots on this cluster — the chief of staff and every specialist. Returns id, display name, description, whether it is enabled, which tools it may use and which other bots it may message. Use it before handing work to somebody, to check who exists and what they do. Present as a markdown table.",
+			Description: "List the bots on this cluster — the coordinator and every specialist. Returns id, display name, description, whether it is enabled, which tools it may use and which other bots it may message. Use it before handing work to somebody, to check who exists and what they do. Present as a markdown table.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {},
@@ -108,7 +108,7 @@ func BotToolDefs() []*types.ToolDef {
 		{
 			Name:        "bot_update",
 			Path:        compute.BuiltinScheme + "bot_update",
-			Description: "Change an existing bot: its brief, description, display name, tool allowlist, messaging edges, or whether it is enabled. Pass bot_id plus only the fields you are changing; anything you omit is left alone. Use enabled=false to stop a bot working without deleting it or its history. You cannot change a bot's id, and you cannot promote one to chief of staff.",
+			Description: "Change an existing bot: its brief, description, display name, tool allowlist, messaging edges, or whether it is enabled. Pass bot_id plus only the fields you are changing; anything you omit is left alone. Use enabled=false to stop a bot working without deleting it or its history. You cannot change a bot's id, and you cannot promote one to coordinator.",
 			ParametersSchema: []byte(`{
 				"type": "object",
 				"properties": {
@@ -156,7 +156,7 @@ func newBotListHandler(reg BotRegistry) compute.BuiltinFunc {
 				"display_name": rec.GetDisplayName(),
 				"description":  rec.GetDescription(),
 				"enabled":      rec.GetEnabled(),
-				"is_chief":     rec.GetIsChief(),
+				"is_chief":     rec.GetIsCoordinator(),
 			}
 			if len(rec.GetTools()) > 0 {
 				entry["tools"] = rec.GetTools()

@@ -41,13 +41,13 @@ func botProfileFrom(rec *lobslawv1.BotRecord) *compute.BotProfile {
 		return nil
 	}
 	return &compute.BotProfile{
-		ID:           rec.GetId(),
-		DisplayName:  rec.GetDisplayName(),
-		Instructions: rec.GetInstructions(),
-		IsChief:      rec.GetIsChief(),
-		Tools:        rec.GetTools(),
-		MayMessage:   rec.GetMayMessage(),
-		ModelRole:    rec.GetModelRole(),
+		ID:            rec.GetId(),
+		DisplayName:   rec.GetDisplayName(),
+		Instructions:  rec.GetInstructions(),
+		IsCoordinator: rec.GetIsCoordinator(),
+		Tools:         rec.GetTools(),
+		MayMessage:    rec.GetMayMessage(),
+		ModelRole:     rec.GetModelRole(),
 		Caps: compute.BudgetCaps{
 			MaxToolCalls:   int(rec.GetBudget().GetMaxToolCalls()),
 			MaxSpendUSD:    rec.GetBudget().GetMaxSpendUsd(),

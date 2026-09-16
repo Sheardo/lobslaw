@@ -83,9 +83,9 @@ func (s *BotService) Get(_ context.Context, id string) (*lobslawv1.BotRecord, er
 	return &rec, nil
 }
 
-// List returns every bot, chief first and the rest by id.
+// List returns every bot, coordinator first and the rest by id.
 //
-// Chief first because every caller that renders a list wants it there
+// Coordinator first because every caller that renders a list wants it there
 // and sorting it into the middle of the alphabet reads as a bug.
 func (s *BotService) List(_ context.Context) ([]*lobslawv1.BotRecord, error) {
 	if s.store == nil {
@@ -104,8 +104,8 @@ func (s *BotService) List(_ context.Context) ([]*lobslawv1.BotRecord, error) {
 		return nil, err
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].GetIsChief() != out[j].GetIsChief() {
-			return out[i].GetIsChief()
+		if out[i].GetIsCoordinator() != out[j].GetIsCoordinator() {
+			return out[i].GetIsCoordinator()
 		}
 		return out[i].GetId() < out[j].GetId()
 	})
@@ -116,7 +116,7 @@ func (s *BotService) List(_ context.Context) ([]*lobslawv1.BotRecord, error) {
 // record. Zero is the expected revision for a create.
 //
 // The record is validated here rather than at each call site: the GUI,
-// the chief's bot_create tool and the first-boot seed all write
+// the coordinator's bot_create tool and the first-boot seed all write
 // through this one door, and a validation rule enforced at two of
 // three doors is a rule that is not enforced.
 func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expectedRevision uint64) (*lobslawv1.BotRecord, error) {
@@ -141,11 +141,11 @@ func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expected
 		if prev.GetRevision() != expectedRevision {
 			return nil, fmt.Errorf("%w: bot %q changed; read it again and retry", ErrClaimConflict, rec.GetId())
 		}
-		// The chief flag and creation stamp are properties of the
+		// The coordinator flag and creation stamp are properties of the
 		// record's history, not of whatever the caller happened to
 		// send. Letting an update carry them would let an edit
-		// promote a bot to chief, and there can only be one.
-		rec.IsChief = prev.GetIsChief()
+		// promote a bot to coordinator, and there can only be one.
+		rec.IsCoordinator = prev.GetIsCoordinator()
 		rec.CreatedAt = prev.GetCreatedAt()
 		rec.CreatedBy = prev.GetCreatedBy()
 	case errors.Is(err, ErrBotNotFound):
@@ -180,7 +180,7 @@ func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expected
 	return rec, nil
 }
 
-// Delete removes a bot. The chief is refused: it owns the human-facing
+// Delete removes a bot. The coordinator is refused: it owns the human-facing
 // channels, so deleting it would leave an inbound Telegram message
 // with nobody to answer it, and the failure would look like an outage
 // rather than a consequence.
@@ -197,8 +197,8 @@ func (s *BotService) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if rec.GetIsChief() {
-		return errors.New("bots: the chief of staff cannot be deleted; it is what answers your messages")
+	if rec.GetIsCoordinator() {
+		return errors.New("bots: the coordinator cannot be deleted; it is what answers your messages")
 	}
 	data, err := proto.Marshal(&lobslawv1.LogEntry{
 		Op: lobslawv1.LogOp_LOG_OP_DELETE,
@@ -220,18 +220,18 @@ func (s *BotService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// EnsureChief writes the chief record if the registry is empty.
+// EnsureCoordinator writes the coordinator record if the registry is empty.
 //
 // This is the whole upgrade story. An existing cluster has a soul
 // overlay under SoulTuneRecordID and no bots bucket; after this it has
-// a chief whose overlay key is that same constant, so the personality
-// the deployment already had is the personality the chief has. Nothing
+// a coordinator whose overlay key is that same constant, so the personality
+// the deployment already had is the personality the coordinator has. Nothing
 // about an existing turn changes.
 //
-// Idempotent, and a no-op once any chief exists — it must not
+// Idempotent, and a no-op once any coordinator exists — it must not
 // overwrite instructions an operator has since edited.
-func (s *BotService) EnsureChief(ctx context.Context, displayName string) (*lobslawv1.BotRecord, error) {
-	existing, err := s.Get(ctx, ChiefBotID)
+func (s *BotService) EnsureCoordinator(ctx context.Context, displayName string) (*lobslawv1.BotRecord, error) {
+	existing, err := s.Get(ctx, CoordinatorBotID)
 	if err == nil {
 		return existing, nil
 	}
@@ -240,15 +240,15 @@ func (s *BotService) EnsureChief(ctx context.Context, displayName string) (*lobs
 	}
 	displayName = strings.TrimSpace(displayName)
 	if displayName == "" {
-		displayName = "Chief of Staff"
+		displayName = "Coordinator"
 	}
 	return s.Put(ctx, &lobslawv1.BotRecord{
-		Id:          ChiefBotID,
-		DisplayName: displayName,
-		Description: "The agent you talk to. Coordinates the other bots and answers on your channels.",
-		IsChief:     true,
-		Enabled:     true,
-		CreatedBy:   "system",
+		Id:            CoordinatorBotID,
+		DisplayName:   displayName,
+		Description:   "The agent you talk to. Coordinates the other bots and answers on your channels.",
+		IsCoordinator: true,
+		Enabled:       true,
+		CreatedBy:     "system",
 	}, 0)
 }
 

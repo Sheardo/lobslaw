@@ -25,8 +25,8 @@ type BotProfile struct {
 	DisplayName string
 	// Instructions is the bot's standing brief, rendered as soul
 	// guidance. Standing configuration, never the current task.
-	Instructions string
-	IsChief      bool
+	Instructions  string
+	IsCoordinator bool
 	// Tools is the registry filter. Empty means the node's full set —
 	// see FilterTools for why that is not "no tools".
 	Tools []string
@@ -348,7 +348,7 @@ func (r *TurnRunner) budgetFor(profile *BotProfile, turnCaps BudgetCaps, reserva
 // thinking about budgets gets the operator's limits. A bot naming a
 // LARGER cap than the node's is clamped rather than rejected: the
 // operator's number is the one that was chosen deliberately, and a bot
-// record the chief wrote is not the place to overrule it.
+// record the coordinator wrote is not the place to overrule it.
 func mergeCaps(node, bot BudgetCaps) BudgetCaps {
 	out := node
 	if bot.MaxToolCalls > 0 && (node.MaxToolCalls == 0 || bot.MaxToolCalls < node.MaxToolCalls) {

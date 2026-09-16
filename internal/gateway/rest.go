@@ -167,7 +167,7 @@ type RESTConfig struct {
 	Transcripts SessionBrowser
 
 	// Turns runs a turn as a named bot, for the console's per-bot chat.
-	// The chief is reachable through /v1/messages like every other
+	// The coordinator is reachable through /v1/messages like every other
 	// channel; this is how a specialist becomes something you can
 	// converse with rather than only configure.
 	Turns BotTurnRunner

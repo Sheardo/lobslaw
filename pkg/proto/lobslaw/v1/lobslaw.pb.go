@@ -8300,11 +8300,11 @@ type BotRecord struct {
 	// for XYZ, you do this". Rendered as soul guidance, which means it
 	// is standing configuration and never the current task.
 	Instructions string `protobuf:"bytes,4,opt,name=instructions,proto3" json:"instructions,omitempty"`
-	// is_chief marks the single bot that owns the human-facing channels.
-	// Exactly one exists, it is seeded at first boot from the node's
-	// existing soul, and it cannot be deleted — deleting it would leave
-	// inbound Telegram messages with nobody to answer them.
-	IsChief bool `protobuf:"varint,5,opt,name=is_chief,json=isChief,proto3" json:"is_chief,omitempty"`
+	// is_coordinator marks the single bot that owns the human-facing
+	// channels. Exactly one exists, it is seeded at first boot from the
+	// node's existing soul, and it cannot be deleted — deleting it would
+	// leave inbound Telegram messages with nobody to answer them.
+	IsCoordinator bool `protobuf:"varint,5,opt,name=is_coordinator,json=isCoordinator,proto3" json:"is_coordinator,omitempty"`
 	// tools is the registry filter described above. Empty means the node
 	// default set, NOT "no tools": a bot created without a stated
 	// allowlist should be as capable as the assistant was before it
@@ -8328,8 +8328,8 @@ type BotRecord struct {
 	ClaimedBy string                 `protobuf:"bytes,12,opt,name=claimed_by,json=claimedBy,proto3" json:"claimed_by,omitempty"`
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// created_by is a principal — the chief that proposed this bot, or
-	// the operator who added it in the GUI.
+	// created_by is a principal — the coordinator that proposed this
+	// bot, or the operator who added it in the GUI.
 	CreatedBy     string `protobuf:"bytes,15,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -8393,9 +8393,9 @@ func (x *BotRecord) GetInstructions() string {
 	return ""
 }
 
-func (x *BotRecord) GetIsChief() bool {
+func (x *BotRecord) GetIsCoordinator() bool {
 	if x != nil {
-		return x.IsChief
+		return x.IsCoordinator
 	}
 	return false
 }
@@ -14102,13 +14102,13 @@ const file_lobslaw_v1_lobslaw_proto_rawDesc = "" +
 	"\n" +
 	"\b_sarcasmB\b\n" +
 	"\x06_humorB\x0e\n" +
-	"\f_emoji_usage\"\x8e\x04\n" +
+	"\f_emoji_usage\"\x9a\x04\n" +
 	"\tBotRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12 \n" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\"\n" +
-	"\finstructions\x18\x04 \x01(\tR\finstructions\x12\x19\n" +
-	"\bis_chief\x18\x05 \x01(\bR\aisChief\x12\x14\n" +
+	"\finstructions\x18\x04 \x01(\tR\finstructions\x12%\n" +
+	"\x0eis_coordinator\x18\x05 \x01(\bR\risCoordinator\x12\x14\n" +
 	"\x05tools\x18\x06 \x03(\tR\x05tools\x12\x1f\n" +
 	"\vmay_message\x18\a \x03(\tR\n" +
 	"mayMessage\x12\x1d\n" +

@@ -113,7 +113,7 @@ func (a *Adjuster) mergedLocked() Soul {
 //
 // Split out from mergedLocked so the per-bot path merges through the
 // same code rather than growing a second copy of the clamp rules — a
-// bot whose drift cap was enforced differently from the chief's would
+// bot whose drift cap was enforced differently from the coordinator's would
 // be a difference nobody would find by reading either one.
 //
 // Caller holds a.mu (read or write).
@@ -379,7 +379,7 @@ func (a *Adjuster) Snapshot(ctx context.Context) (Soul, error) {
 // SnapshotFor is Snapshot for one bot.
 //
 // A bot's overlay is read fresh and merged onto the baseline WITHOUT
-// the chief's overlay underneath it. The chief's tune is the chief's
+// the coordinator's overlay underneath it. The coordinator's tune is the coordinator's
 // personality — "be less sarcastic with me" said in Telegram is about
 // the agent you said it to, and having it silently re-tune the devops
 // bot is the kind of action-at-a-distance nobody would connect back to
