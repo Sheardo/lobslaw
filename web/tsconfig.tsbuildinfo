@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/components/LoginGate.tsx","./src/components/common.tsx","./src/routes/Activity.tsx","./src/routes/BotDetail.tsx","./src/routes/Bots.tsx","./src/routes/Chat.tsx","./src/routes/Config.tsx"],"version":"5.7.3"}
