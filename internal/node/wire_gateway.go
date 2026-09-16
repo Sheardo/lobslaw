@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"net/http"
+
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
@@ -74,7 +77,8 @@ func (n *Node) wireGateway() error {
 	// explicitly, so this only affects callers that constructed
 	// node.Config programmatically and left the field zero.
 	port := n.cfg.Gateway.HTTPPort
-	addr := fmt.Sprintf(":%d", port)
+	// Empty bind_address keeps the historical "every interface".
+	addr := fmt.Sprintf("%s:%d", n.cfg.Gateway.BindAddress, port)
 
 	// Pick a default TLS pair from the first channel that supplies
 	// one — Telegram's webhook demands TLS, so if it's configured we
@@ -112,6 +116,9 @@ func (n *Node) wireGateway() error {
 		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
+		Bots:             botAPIOrNil(n.botSvc),
+		Inbox:            inboxAPIOrNil(n.inboxSvc),
+		UI:               n.webConsole(),
 		Telegram:         tg,
 		Slack:            sl,
 		Webhooks:         webhooks,
@@ -528,4 +535,42 @@ func restWriteTimeout(g config.GatewayConfig) time.Duration {
 	// Margin so the agent's own forced-summary path is what ends a slow
 	// turn, not the socket.
 	return hard + 30*time.Second
+}
+
+// botAPIOrNil / inboxAPIOrNil bridge nil pointers to interface-typed
+// nils, so the REST layer's "is this node hosting the registry" check
+// is not defeated by Go's nil-in-an-interface gotcha.
+func botAPIOrNil(svc *memory.BotService) gateway.BotAPI {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+func inboxAPIOrNil(svc *memory.InboxService) gateway.InboxAPI {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// webConsole returns the embedded console handler, or nil when it is
+// switched off or the binary was built without the web assets.
+//
+// A missing build is a WARNING rather than a boot failure: an operator
+// who enabled the console and built without running `make web` should
+// get a node that still serves Telegram and the API, plus a line
+// saying exactly why the console is not there. Refusing to start would
+// take the whole assistant down over a front end.
+func (n *Node) webConsole() http.Handler {
+	if !n.cfg.Gateway.UI.Enabled {
+		return nil
+	}
+	handler, err := ui.Handler()
+	if err != nil {
+		n.log.Warn("gateway: web console enabled but unavailable", "err", err)
+		return nil
+	}
+	n.log.Info("gateway: web console mounted", "path", "/")
+	return handler
 }

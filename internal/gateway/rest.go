@@ -148,6 +148,16 @@ type RESTConfig struct {
 	// Conversation tunes replay depth and the degraded-mode cache.
 	Conversation ConversationConfig
 
+	// Bots and Inbox back the team API the web GUI reads. Nil on a
+	// node that does not host raft, where the routes answer 503 rather
+	// than being absent — a GUI served by that node can then say what
+	// is wrong instead of 404ing as if the feature did not exist.
+	Bots  BotAPI
+	Inbox InboxAPI
+
+	// UI serves the embedded web console when non-nil.
+	UI http.Handler
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -226,6 +236,21 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	if s.cfg.Plan != nil {
 		mux.HandleFunc("/v1/plan", s.handlePlan)
+	}
+	if s.cfg.Bots != nil {
+		mux.HandleFunc("/v1/bots", s.handleBots)
+		mux.HandleFunc("/v1/bots/", s.handleBots)
+	}
+	if s.cfg.Inbox != nil {
+		mux.HandleFunc("/v1/inbox/", s.handleInboxItem)
+		mux.HandleFunc("/v1/activity", s.handleActivity)
+	}
+	// Last, and on the bare root: it is the only handler that claims a
+	// prefix everything else lives under, so mounting it earlier would
+	// be fine with net/http's longest-match but would read as if it
+	// shadowed them.
+	if s.cfg.UI != nil {
+		mux.Handle("/", s.cfg.UI)
 	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)

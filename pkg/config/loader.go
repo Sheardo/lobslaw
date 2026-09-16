@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -131,7 +132,68 @@ func (c *Config) Validate() error {
 	if err := validateQueueMode(c.Gateway.QueueMode); err != nil {
 		return err
 	}
+	if err := validateUIAuth(c.Gateway, c.Auth); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateUIAuth refuses to start an unauthenticated admin console on
+// a non-loopback bind.
+//
+// [auth] require_auth defaults false, and its comment says that is the
+// correct stance for a dev or reverse-proxy-terminated deployment.
+// That reasoning holds for an API and does NOT hold for a web console
+// that can rewrite a bot's instructions, read every conversation and
+// assign it work — the blast radius is the whole team rather than one
+// request.
+//
+// A refusal rather than a warning, because a warning at boot is a line
+// in a log nobody reads until afterwards, and the failure it precedes
+// is somebody else's browser.
+//
+// Loopback is exempt: an operator running the console on their own
+// machine is the case the default was written for, and making them
+// stand up a JWT issuer to see their own bots would push them towards
+// binding 0.0.0.0 to avoid the hassle.
+func validateUIAuth(gw GatewayConfig, auth AuthConfig) error {
+	if !gw.UI.Enabled || auth.RequireAuth {
+		return nil
+	}
+	if isLoopbackBind(gw.BindAddress) {
+		return nil
+	}
+	return fmt.Errorf("%w: [gateway.ui] enabled on %q needs [auth] require_auth = true — "+
+		"the console can rewrite bot instructions and read every conversation, so it must not be "+
+		"reachable without a token. Bind to localhost instead if this is a single-machine setup",
+		types.ErrInvalidConfig, describeBind(gw.BindAddress))
+}
+
+// isLoopbackBind reports whether an address reaches only this machine.
+//
+// An EMPTY bind is not loopback: net/http reads it as every
+// interface, which is the case this check exists for and the one an
+// operator is most likely to leave unset.
+func isLoopbackBind(addr string) bool {
+	host := strings.TrimSpace(addr)
+	if host == "" {
+		return false
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func describeBind(addr string) string {
+	if strings.TrimSpace(addr) == "" {
+		return "every interface"
+	}
+	return addr
 }
 
 // validateTrustTiers rejects an out-of-range numeric trust_tier.

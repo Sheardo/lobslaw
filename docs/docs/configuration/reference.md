@@ -531,6 +531,12 @@ optional model verdict.
 require_auth        = false
 unknown_user_scope  = "public"
 
+# Which interface the HTTP listener binds. Empty means every
+# interface, which is what it has always done. Set it to "127.0.0.1"
+# for a single-machine install — that is also what exempts the web
+# console from the auth rule below.
+bind_address        = ""
+
 # Where inbound attachments are written, and the ONLY directory
 # read_image / read_audio / read_pdf will open a path in. The default
 # only exists inside the container image: on a host install nothing
@@ -681,6 +687,35 @@ signing_policy = "prefer"
 [soul]
 path = "SOUL.md"
 ```
+
+## `[gateway.ui]`
+
+The embedded web console: chat with any bot, see and assign their
+queues, edit who they are. Served by the gateway's own listener, so
+there is no second deployable and no CORS.
+
+```toml
+[gateway.ui]
+enabled = true
+```
+
+Off by default — a headless cluster node has no use for a web app, and
+an admin console that appears without anybody asking for it is an
+attack surface nobody decided to accept.
+
+**Enabling it on a non-loopback bind requires `[auth] require_auth =
+true`, and the node refuses to start otherwise.** `require_auth`
+defaults false because that is the right stance for an API behind a
+reverse proxy; it is not the right stance for a console that can
+rewrite a bot's instructions, read every conversation and assign the
+team work. Bind `127.0.0.1` instead if this is a single-machine setup
+— loopback is exempt, so running the console on your own laptop does
+not mean standing up a JWT issuer first.
+
+A binary built without running `make web` has no console in it. The
+node logs a warning and serves everything else normally rather than
+refusing to boot; taking the whole assistant down over a missing front
+end would be the wrong trade.
 
 ## `[bots]`
 

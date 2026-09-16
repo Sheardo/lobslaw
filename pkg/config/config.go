@@ -1480,8 +1480,19 @@ type HooksConfig map[string][]types.HookConfig
 // the channels mounted on them, plus the defaults applied to turns
 // those channels dispatch.
 type GatewayConfig struct {
-	Enabled             bool                   `koanf:"enabled"`
-	HTTPPort            int                    `koanf:"http_port"`
+	Enabled  bool `koanf:"enabled"`
+	HTTPPort int  `koanf:"http_port"`
+
+	// BindAddress is the interface the HTTP listener binds. Empty
+	// means every interface, which is what it has always done.
+	//
+	// It exists because "reachable from this machine only" was not
+	// expressible, and the web console needs it to be: an operator
+	// running the console on their laptop should not have to stand up
+	// a JWT issuer, and the alternative to a loopback exemption is
+	// that they bind everything to avoid the hassle.
+	BindAddress string `koanf:"bind_address"`
+
 	Channels            []GatewayChannelConfig `koanf:"channels"`
 	ConfirmationTimeout time.Duration          `koanf:"confirmation_timeout"`
 	UnknownUserScope    string                 `koanf:"unknown_user_scope"`
@@ -1498,6 +1509,9 @@ type GatewayConfig struct {
 	ReadTimeout  time.Duration `koanf:"read_timeout,omitempty"`
 	WriteTimeout time.Duration `koanf:"write_timeout,omitempty"`
 	IdleTimeout  time.Duration `koanf:"idle_timeout,omitempty"`
+
+	// UI is the embedded web console. Off by default.
+	UI UIConfig `koanf:"ui"`
 
 	// DefaultTimezone is the cluster-wide IANA zone used when a user
 	// hasn't bound a per-user timezone via [[user]] config or the
@@ -1837,6 +1851,15 @@ type MTLSConfig struct {
 // the file applies when one file serves several deployments.
 type SoulLoaderConfig struct {
 	Path string `koanf:"path"`
+}
+
+// UIConfig is the [gateway.ui] block: the embedded web console.
+//
+// Off by default. A headless cluster node has no use for a web app,
+// and an admin console that appears without anybody asking for it is
+// an attack surface nobody decided to accept.
+type UIConfig struct {
+	Enabled bool `koanf:"enabled"`
 }
 
 // BotsConfig is the [bots] block: operator bounds over the whole
