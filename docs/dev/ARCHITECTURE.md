@@ -7,13 +7,22 @@ High-level shape of the system. Start here, then dive into a subsystem doc.
 ```mermaid
 flowchart TB
   subgraph UserFacing["User-Facing (Phase 6)"]
-    REST["gateway.Server<br/>/v1/messages /healthz /readyz<br/>/v1/prompts/{id} /v1/prompts/{id}/resolve"]
+    REST["gateway.Server<br/>/v1/messages /healthz /readyz<br/>/v1/prompts/{id} /v1/bots /v1/activity"]
     TG["gateway.TelegramHandler<br/>webhook + inline keyboard"]
+    UI["gateway/ui<br/>embedded React console<br/>(opt-in, auth-gated)"]
     Prompts["gateway.PromptRegistry<br/>confirmation state<br/>(in-memory, TTL auto-deny)"]
     JWT["pkg/auth.Validator<br/>HS256 (RS256/EdDSA=TBD)"]
     REST --> JWT
     REST --> Prompts
+    REST --> UI
     TG --> Prompts
+  end
+
+  subgraph Team["Bots (Phase 12)"]
+    Runner["compute.TurnRunner<br/>the ONE headless turn entry"]
+    BotReg["memory.BotService<br/>BotRecord + CAS"]
+    InboxSvc["memory.InboxService<br/>durable queue, LOG_OP_CLAIM"]
+    Drain["node inbox drain<br/>woken by the FSM callback"]
   end
 
   subgraph Agent["Agent loop (Phase 5)"]
@@ -54,6 +63,16 @@ flowchart TB
 
   REST --> AgentLoop
   TG --> AgentLoop
+  REST --> BotReg
+  REST --> InboxSvc
+
+  Runner --> AgentLoop
+  Runner --> BotReg
+  Drain --> Runner
+  Drain --> InboxSvc
+  InboxSvc --> Store
+  BotReg --> Store
+  Store -. bot_inbox change callback .-> Drain
   REST -- conversation history --> Sessions
   TG -- conversation history --> Sessions
   AgentLoop --> Promptgen
@@ -149,6 +168,7 @@ Extra state nodes are Raft replicas for durability, not a memory service other n
 | 8 | Skills (manifest parsing, registry, python/bash invoker, sandbox integration, agent dispatch, plugin CLI, MCP client, ed25519 signing, RTK hooks) | [SKILLS.md](SKILLS.md) |
 | 10 | SOUL (loader, dynamic adjustment with LLM/regex classifier + cooldown + persist, lingua-go language detection, min-trust-tier validation) | internal/soul |
 | 11+ | Audit, Polish | see PLAN.md |
+| 12 | Bots (registry, per-bot souls, one turn-runner, durable inbox, ask_bot/inbox_post, embedded web console) | [BOTS.md](BOTS.md) |
 
 ---
 

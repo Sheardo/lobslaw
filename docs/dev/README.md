@@ -23,6 +23,7 @@ For people modifying lobslaw itself. End-user docs live in [`../user/`](../user/
 | Scheduler | [SCHEDULER.md](SCHEDULER.md) | Sleep-until-due loop, CAS claim, PlanService, built-in agent:turn handler |
 | Storage | [STORAGE.md](STORAGE.md) | Mount Manager + Watcher, local/nfs/rclone backends, StorageService gRPC |
 | Skills | [SKILLS.md](SKILLS.md) | Manifest-driven user skills, registry + invoker (python/bash), sandbox integration pending |
+| Bots | [BOTS.md](BOTS.md) | A bot as a principal, per-bot souls, the one turn-runner, the durable inbox, ask_bot/inbox_post, the embedded console |
 
 ## Conventions
 
