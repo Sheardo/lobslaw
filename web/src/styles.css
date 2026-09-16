@@ -387,3 +387,35 @@ h2 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
   font-size: 12.5px; color: var(--mid); transition: background 120ms;
 }
 .side-foot a:hover { background: var(--s2); color: var(--hi); }
+
+/* ---------- a bot's room ---------- */
+
+.room-head {
+  display: flex; align-items: center; gap: 11px;
+  padding: 12px 20px; border-bottom: 1px solid var(--edge); background: var(--s1);
+}
+.room-nm { font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 8px; }
+.tag.brand { color: var(--brand) }
+.tag.warn { color: var(--warn) }
+
+/* A queue item inside the thread.
+   Visually apart from a spoken line — quieter, boxed, indented — because
+   "you asked me this" and "something made me do this" are different
+   events, and flattening them would misrepresent who started what. */
+.work {
+  border: 1px solid var(--edge); border-left: 2px solid var(--bot);
+  border-radius: var(--r); background: var(--s1);
+  padding: 11px 14px; margin-left: 42px; box-shadow: var(--lift);
+}
+.work-top { display: flex; align-items: center; gap: 10px; cursor: pointer; flex-wrap: wrap; }
+.work-ttl { font-size: 13.5px; font-weight: 550; color: var(--hi); }
+.work-body {
+  font-size: 12.5px; color: var(--mid); margin-top: 7px; line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.work-body.bad { color: var(--bad) }
+.work-detail {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--edge);
+  display: flex; flex-direction: column; gap: 14px;
+}

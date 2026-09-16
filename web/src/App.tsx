@@ -1,11 +1,9 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { api, type InboxItem } from "./api";
+import { api, type Bot, type InboxItem } from "./api";
 import { LoginGate } from "./components/LoginGate";
 import { Mascot } from "./components/Mascot";
-import { useLoad, when } from "./components/ui";
-import { Activity } from "./routes/Activity";
-import { BotDetail } from "./routes/BotDetail";
-import { Chat } from "./routes/Chat";
+import { Spinner, useLoad, when } from "./components/ui";
+import { BotRoom } from "./routes/BotRoom";
 import { Config } from "./routes/Config";
 import { NewBot } from "./routes/NewBot";
 
@@ -38,11 +36,6 @@ function Shell() {
     <div className="shell">
       <aside className="side">
         <div className="brand"><i />lobslaw</div>
-
-        <nav className="nav">
-          <NavLink to="/activity" className={({ isActive }) => (isActive ? "on" : "")}>Activity</NavLink>
-          <NavLink to="/chat" className={({ isActive }) => (isActive ? "on" : "")}>Chat</NavLink>
-        </nav>
 
         <h6>Team</h6>
         <div className="roster">
@@ -82,20 +75,32 @@ function Shell() {
 
       <main className="main">
         <Routes>
-          {/* Activity first. The question somebody opens this to answer
-              is "what is the team doing"; the sidebar already answers
-              "who exists", permanently. */}
-          <Route path="/" element={<Navigate to="/activity" replace />} />
-          <Route path="/activity" element={<Activity />} />
-          <Route path="/chat" element={<Chat />} />
+          {/* Chat-first: opening the console lands you in a
+              conversation with the coordinator, and clicking a bot
+              opens ITS conversation. There is no separate activity
+              page — a bot's queue is woven into its own thread, where
+              the ordering against what you said still means
+              something. */}
+          <Route path="/" element={<Landing bots={bots} />} />
           <Route path="/config" element={<Config />} />
           <Route path="/bots/new" element={<NewBot onCreated={refresh} />} />
-          <Route path="/bots/:botId" element={<BotDetail onChanged={refresh} />} />
+          <Route path="/bots/:botId" element={<BotRoom onChanged={refresh} />} />
           <Route path="*" element={<div className="empty"><b>Nothing here</b><span>That page does not exist.</span></div>} />
         </Routes>
       </main>
     </div>
   );
+}
+
+/** Landing sends you straight to the coordinator, or to the first bot
+ * on a node that somehow has no coordinator. Waiting on the roster
+ * before redirecting avoids a flash of "nothing here" on first load.
+ */
+function Landing({ bots }: { bots: Bot[] | null }) {
+  if (!bots) return <Spinner />;
+  const first = bots.find((b) => b.is_coordinator) ?? bots[0];
+  if (!first) return <Navigate to="/bots/new" replace />;
+  return <Navigate to={`/bots/${first.id}`} replace />;
 }
 
 /** The common frame: a title, an optional action, and a body. Repeated
