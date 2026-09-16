@@ -102,6 +102,61 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 		}
 	})
 
+	t.Run("whoami tells the console what to render", func(t *testing.T) {
+		body, status := get(t, base+"/v1/auth/whoami")
+		if status != http.StatusOK {
+			t.Fatalf("status = %d: %s", status, truncateForLog(body))
+		}
+		// require_auth is off on this loopback node, so the console is
+		// already in — which is the single-machine case the loopback
+		// exemption exists for.
+		if !strings.Contains(body, `"authenticated":true`) {
+			t.Errorf("whoami: %s", truncateForLog(body))
+		}
+	})
+
+	t.Run("the config view carries no credentials", func(t *testing.T) {
+		body, status := get(t, base+"/v1/config")
+		if status != http.StatusOK {
+			t.Fatalf("status = %d: %s", status, truncateForLog(body))
+		}
+		if !strings.Contains(body, `"node_id":"ui-boot-node"`) {
+			t.Errorf("config view is missing the node id: %s", truncateForLog(body))
+		}
+		// The allowlist is what guarantees this; the assertion is the
+		// belt to its braces.
+		for _, leak := range []string{"api_key", "memory_key", "bot_token", "secret_token"} {
+			if strings.Contains(strings.ToLower(body), leak) {
+				t.Errorf("the config view mentions %q:\n%s", leak, truncateForLog(body))
+			}
+		}
+	})
+
+	t.Run("a bot's own sessions list", func(t *testing.T) {
+		body, status := get(t, base+"/v1/bots/chief/sessions")
+		if status != http.StatusOK {
+			t.Fatalf("status = %d: %s", status, truncateForLog(body))
+		}
+		if !strings.Contains(body, `"sessions"`) {
+			t.Errorf("unexpected shape: %s", truncateForLog(body))
+		}
+	})
+
+	t.Run("chatting to a named bot streams", func(t *testing.T) {
+		body, status := post(t, base+"/v1/bots/chief/messages", `{"message":"hello"}`)
+		if status != http.StatusOK {
+			t.Fatalf("status = %d: %s", status, truncateForLog(body))
+		}
+		// The whole reason this route exists: /v1/messages reaches the
+		// chief only, so without it a specialist is configurable but
+		// not conversable.
+		for _, want := range []string{"event: start", "event: reply", "hello"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("stream is missing %q:\n%s", want, truncateForLog(body))
+			}
+		}
+	})
+
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Start returned: %v", err)
@@ -139,6 +194,20 @@ func get(t *testing.T, url string) (string, int) {
 		t.Fatalf("read body: %v", err)
 	}
 	return string(body), res.StatusCode
+}
+
+func post(t *testing.T, url, body string) (string, int) {
+	t.Helper()
+	res, err := http.Post(url, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	out, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return string(out), res.StatusCode
 }
 
 func truncateForLog(s string) string {

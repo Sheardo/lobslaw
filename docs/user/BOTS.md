@@ -109,6 +109,23 @@ It gives you the whole team on one page: what each bot is working on,
 what it finished, what failed and why. You can assign work, retry
 something, edit a brief, or chat to the chief of staff.
 
+### Signing in from anywhere but this machine
+
+```toml
+[gateway]
+bind_address = "0.0.0.0"
+
+[auth]
+require_auth = true
+
+[gateway.ui]
+enabled   = true
+token_ref = "env:LOBSLAW_CONSOLE_TOKEN"
+```
+
+You type that token once and the console keeps a 12-hour cookie. On
+loopback you need none of this.
+
 ### It will refuse to start if you expose it without auth
 
 The console can rewrite a bot's instructions, read every conversation
@@ -124,6 +141,9 @@ The node refuses to boot otherwise. That is deliberate — a warning in a
 log is not much use when the consequence is somebody else's browser.
 Binding `127.0.0.1` is exempt, so running it on your own machine needs
 no token.
+
+It also refuses `require_auth` with no `token_ref`: that combination
+demands a credential nobody can present.
 
 ### Building it
 

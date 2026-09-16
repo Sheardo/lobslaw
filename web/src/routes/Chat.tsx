@@ -5,68 +5,118 @@ import {
   Flex,
   HStack,
   Heading,
+  NativeSelect,
+  Spinner,
   Stack,
   Text,
   Textarea,
 } from "@chakra-ui/react";
 import { useState } from "react";
-import { api } from "../api";
-import { ErrorPanel } from "../components/common";
+import { useSearchParams } from "react-router-dom";
+import { api, streamBotChat } from "../api";
+import { ErrorPanel, Loading, useLoad } from "../components/common";
 
 interface Line {
-  from: "you" | "assistant";
+  from: "you" | string;
   text: string;
 }
 
-/** Chat with the chief of staff.
+/** Chat with any bot.
  *
- * Deliberately narrow: this is the same /v1/messages endpoint every
- * other channel uses, so what you get here is what you would get on
- * Telegram. Per-bot chat threads would need a session dimension the
- * transcript store does not have yet, and inventing one in the browser
- * would produce a history the node does not agree with.
+ * The bot picker is the point. /v1/messages reaches the chief and is
+ * shared with Telegram and Slack; without a per-bot route every
+ * specialist would be something you can configure but never talk to.
+ *
+ * Streamed, because a bot turn can run tools for a minute and a
+ * request that returns nothing until it finishes looks identical to
+ * one that has hung — which is how somebody reloads and starts a
+ * second turn.
  */
 export function Chat() {
+  const [params, setParams] = useSearchParams();
+  const { data: bots, error, loading } = useLoad(() => api.listBots());
   const [lines, setLines] = useState<Line[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [working, setWorking] = useState(false);
+  const [sendError, setSendError] = useState<Error | null>(null);
+
+  const selected = params.get("bot") ?? bots?.find((b) => b.is_chief)?.id ?? "";
 
   async function send() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || !selected) return;
     setLines((prev) => [...prev, { from: "you", text }]);
     setDraft("");
     setBusy(true);
-    setError(null);
+    setWorking(false);
+    setSendError(null);
     try {
-      const res = await api.sendMessage(text);
-      setLines((prev) => [
-        ...prev,
-        {
-          from: "assistant",
-          text:
-            res.reply ??
-            (res.needs_confirmation
-              ? "That needs a confirmation. Approve it on the channel you usually use."
-              : "(no reply)"),
-        },
-      ]);
+      await streamBotChat(selected, text, (event, data) => {
+        switch (event) {
+          case "working":
+            setWorking(true);
+            break;
+          case "reply":
+            setWorking(false);
+            setLines((prev) => [...prev, { from: selected, text: String(data.text ?? "") }]);
+            break;
+          case "needs_confirmation":
+            setWorking(false);
+            setLines((prev) => [
+              ...prev,
+              {
+                from: selected,
+                text:
+                  `That needs a confirmation (${String(data.reason ?? "")}). ` +
+                  String(data.note ?? ""),
+              },
+            ]);
+            break;
+          case "error":
+            setWorking(false);
+            setSendError(new Error(String(data.message ?? "the turn failed")));
+            break;
+        }
+      });
     } catch (err) {
-      setError(err as Error);
+      setSendError(err as Error);
     } finally {
       setBusy(false);
+      setWorking(false);
     }
   }
 
+  if (error) return <ErrorPanel error={error} />;
+  if (loading && !bots) return <Loading />;
+
   return (
     <Box>
-      <Heading size="lg" mb={1}>
-        Chat
-      </Heading>
+      <Flex align="center" justify="space-between" mb={1} gap={4}>
+        <Heading size="lg">Chat</Heading>
+        <NativeSelect.Root size="sm" width="56">
+          <NativeSelect.Field
+            value={selected}
+            onChange={(e) => {
+              setParams({ bot: e.target.value });
+              // A new bot is a new conversation. Carrying the old
+              // transcript across would show a history the bot you are
+              // now talking to has never seen.
+              setLines([]);
+            }}
+          >
+            {(bots ?? []).map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.display_name || b.id}
+                {b.is_chief ? " (chief of staff)" : ""}
+              </option>
+            ))}
+          </NativeSelect.Field>
+          <NativeSelect.Indicator />
+        </NativeSelect.Root>
+      </Flex>
       <Text color="fg.muted" fontSize="sm" mb={5}>
-        The same conversation as Telegram or Slack — ask the chief of staff to create a
-        bot, or to tell you what the team has been doing.
+        Ask the chief of staff to create a bot, or talk to a specialist directly.
       </Text>
 
       <Stack gap={3} mb={4}>
@@ -85,11 +135,17 @@ export function Chat() {
             </Card.Body>
           </Card.Root>
         ))}
+        {working && (
+          <HStack color="fg.muted" fontSize="sm">
+            <Spinner size="xs" />
+            <Text>{selected} is working…</Text>
+          </HStack>
+        )}
       </Stack>
 
-      {error && (
+      {sendError && (
         <Box mb={4}>
-          <ErrorPanel error={error} />
+          <ErrorPanel error={sendError} />
         </Box>
       )}
 
@@ -100,20 +156,15 @@ export function Chat() {
           placeholder="Make me a devops bot that checks the cluster every morning."
           rows={3}
           onKeyDown={(e) => {
-            // Enter sends, shift-enter newlines — the convention every
-            // chat app has, and getting it backwards makes the box feel
-            // broken before anybody reads a hint.
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void send();
             }
           }}
         />
-        <HStack>
-          <Button onClick={send} loading={busy} disabled={!draft.trim()}>
-            Send
-          </Button>
-        </HStack>
+        <Button onClick={send} loading={busy} disabled={!draft.trim() || !selected}>
+          Send
+        </Button>
       </Flex>
     </Box>
   );

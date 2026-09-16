@@ -108,7 +108,11 @@ enabled = true
 
 Then open `http://127.0.0.1:8080/`. It shows the whole team on one
 page: what each bot is working on, what it finished, what failed and
-why. Assign work, retry something, edit a brief, or chat to the chief.
+why. Assign work, retry something, edit a brief, or chat to **any**
+bot — not just the chief.
+
+Open a finished item and you can read the turn that produced it, not
+only its result.
 
 :::warning Exposing it requires auth
 The console can rewrite a bot's instructions, read every conversation
@@ -120,6 +124,24 @@ That is deliberate: a warning in a log is not much use when the
 consequence is somebody else's browser. Loopback is exempt, so running
 it on your own machine needs no token.
 :::
+
+To sign in from anywhere else, give the console a token:
+
+```toml
+[gateway]
+bind_address = "0.0.0.0"
+
+[auth]
+require_auth = true
+
+[gateway.ui]
+enabled   = true
+token_ref = "env:LOBSLAW_CONSOLE_TOKEN"
+```
+
+You type that token once; the console keeps a 12-hour cookie. Enabling
+`require_auth` **without** `token_ref` is refused at boot — it would be
+a locked door with no key.
 
 The console is compiled into the binary, but only if you build it:
 

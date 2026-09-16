@@ -158,6 +158,42 @@ type RESTConfig struct {
 	// UI serves the embedded web console when non-nil.
 	UI http.Handler
 
+	// Transcripts backs the read-only transcript views an inbox item's
+	// session_id points at.
+	//
+	// A different field from Sessions above, which is the WRITE path a
+	// turn appends to. Conflating a writer with a browser is how a
+	// read-only console view ends up holding something that can append.
+	Transcripts SessionBrowser
+
+	// Turns runs a turn as a named bot, for the console's per-bot chat.
+	// The chief is reachable through /v1/messages like every other
+	// channel; this is how a specialist becomes something you can
+	// converse with rather than only configure.
+	Turns BotTurnRunner
+
+	// Config is the allowlisted view of this node's configuration.
+	// Nil omits it — see rest_config.go for why it is assembled rather
+	// than marshalled.
+	Config *ConfigView
+
+	// ConsoleToken is the resolved shared secret an operator exchanges
+	// for a session cookie. Empty leaves /v1/auth/login answering 501
+	// with what to configure — which is a better answer than 401 to
+	// somebody who has no way of knowing a token was never set.
+	ConsoleToken string
+
+	// ConsoleKey signs session cookies, derived from the cluster
+	// MemoryKey so any node validates a cookie any other node minted.
+	ConsoleKey []byte
+
+	// ConsoleScope is the permission tier a signed-in operator gets.
+	// Empty means "owner" — see Server.consoleScope.
+	ConsoleScope string
+
+	// ConsoleSessionTTL bounds a login. Zero takes the default.
+	ConsoleSessionTTL time.Duration
+
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
 }
@@ -244,6 +280,17 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cfg.Inbox != nil {
 		mux.HandleFunc("/v1/inbox/", s.handleInboxItem)
 		mux.HandleFunc("/v1/activity", s.handleActivity)
+	}
+	// Always mounted, even with no console token configured: whoami is
+	// how the console finds out whether to show a login form, and a
+	// login route that 404s cannot say why it is unavailable.
+	mux.HandleFunc("/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("/v1/auth/whoami", s.handleWhoami)
+	if s.cfg.Transcripts != nil {
+		mux.HandleFunc("/v1/sessions/", s.handleSession)
+	}
+	if s.cfg.Config != nil {
+		mux.HandleFunc("/v1/config", s.handleConfig)
 	}
 	// Last, and on the bare root: it is the only handler that claims a
 	// prefix everything else lives under, so mounting it earlier would
@@ -754,6 +801,16 @@ func (s *Server) jsonErr(w http.ResponseWriter, status int, reason string) {
 // RequireAuth without configuring a validator get a boot-time
 // warning via Start's logs (Phase 6d.2 — JWKS wiring).
 func (s *Server) authenticate(r *http.Request) (*types.Claims, error) {
+	// The console's cookie is checked FIRST, and on its own terms: a
+	// browser cannot set an Authorization header on a plain navigation,
+	// so without this the console would be locked out of exactly the
+	// deployments that require auth. It is a second transport for one
+	// credential concept, not a second authority — this function is
+	// still the only place a request's identity is decided.
+	if claims := s.consoleSessionClaims(r); claims != nil {
+		return claims, nil
+	}
+
 	token := auth.ExtractBearer(r.Header.Get("Authorization"))
 
 	if s.cfg.JWTValidator == nil {

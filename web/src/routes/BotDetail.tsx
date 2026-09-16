@@ -16,7 +16,13 @@ import {
 } from "@chakra-ui/react";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, type Bot, type InboxItem, type InboxKind } from "../api";
+import {
+  api,
+  type Bot,
+  type InboxItem,
+  type InboxKind,
+  type TranscriptMessage,
+} from "../api";
 import {
   EmptyState,
   ErrorPanel,
@@ -218,10 +224,56 @@ function InboxRow({
                 A task that vanished quietly is the failure the queue
                 exists to prevent. */}
             {detail.error && <Section label="Error" body={detail.error} tone="red.500" />}
+            {/* The item records WHICH turn worked it. Without the
+                transcript behind that id, "what did the bot actually
+                do" stops at the result string. */}
+            {detail.session_id && <Transcript sessionId={detail.session_id} />}
           </Stack>
         )}
       </Card.Body>
     </Card.Root>
+  );
+}
+
+function Transcript({ sessionId }: { sessionId: string }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<TranscriptMessage[] | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && !messages) {
+      try {
+        setMessages(await api.transcript(sessionId));
+      } catch (err) {
+        setError(err as Error);
+      }
+    }
+  }
+
+  return (
+    <Box>
+      <Button size="xs" variant="ghost" onClick={toggle} px={0}>
+        {open ? "Hide" : "Show"} what the bot did ({messages?.length ?? "…"} messages)
+      </Button>
+      {error && <ErrorPanel error={error} />}
+      {open && messages && (
+        <Stack gap={2} mt={2} pl={3} borderLeftWidth="2px">
+          {messages.map((m) => (
+            <Box key={m.seq}>
+              <Text fontSize="xs" color="fg.muted">
+                {m.role}
+                {m.tool_calls ? ` · ${m.tool_calls} tool calls` : ""}
+              </Text>
+              <Text fontSize="sm" whiteSpace="pre-wrap">
+                {m.content || <Text as="span" color="fg.muted">(no text — tool calls only)</Text>}
+              </Text>
+            </Box>
+          ))}
+        </Stack>
+      )}
+    </Box>
   );
 }
 

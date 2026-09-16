@@ -1860,6 +1860,32 @@ type SoulLoaderConfig struct {
 // an attack surface nobody decided to accept.
 type UIConfig struct {
 	Enabled bool `koanf:"enabled"`
+
+	// TokenRef is a secret reference to the shared token an operator
+	// types to sign in — "env:LOBSLAW_CONSOLE_TOKEN", "file:...", or a
+	// configured vault provider.
+	//
+	// A shared token rather than a user table because this is a
+	// personal assistant with one operator, and a password database is
+	// a thing to get wrong for no benefit. It is exchanged for a
+	// short-lived cookie rather than being sent on every request.
+	//
+	// Required when the console is reachable off this machine: without
+	// it, require_auth is demanded and nothing can satisfy it.
+	TokenRef string `koanf:"token_ref"`
+
+	// SessionTTL bounds a login. Zero takes 12 hours.
+	//
+	// There is no revocation list, so this is the revocation — the
+	// trade a stateless cookie makes. Shorten it if the machine the
+	// browser runs on is not one you control.
+	SessionTTL time.Duration `koanf:"session_ttl"`
+
+	// Scope is the permission tier a signed-in operator gets. Empty
+	// means "owner": the person holding the console token IS the
+	// deployment's operator, and granting them the unauthenticated
+	// scope would make signing in change nothing.
+	Scope string `koanf:"scope"`
 }
 
 // BotsConfig is the [bots] block: operator bounds over the whole

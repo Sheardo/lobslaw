@@ -130,7 +130,132 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message: text }),
     }),
+
+  whoami: () => request<Whoami>("/v1/auth/whoami"),
+
+  login: (token: string) =>
+    request<{ scope: string; expires_at: string }>("/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    }),
+
+  logout: () => request<void>("/v1/auth/login", { method: "DELETE" }),
+
+  config: () => request<NodeConfig>("/v1/config"),
+
+  botSessions: (botId: string) =>
+    request<{ sessions: Session[] }>(
+      `/v1/bots/${encodeURIComponent(botId)}/sessions`,
+    ).then((r) => r.sessions ?? []),
+
+  transcript: (sessionId: string) =>
+    request<{ messages: TranscriptMessage[] }>(
+      `/v1/sessions/${encodeURIComponent(sessionId)}`,
+    ).then((r) => r.messages ?? []),
 };
+
+export interface Whoami {
+  authenticated: boolean;
+  subject?: string;
+  scope?: string;
+  login_available: boolean;
+  reason?: string;
+}
+
+export interface Session {
+  id: string;
+  channel: string;
+  channel_id: string;
+  title?: string;
+  messages: number;
+  updated_at?: string;
+}
+
+export interface TranscriptMessage {
+  seq: number;
+  role: string;
+  content: string;
+  tool_calls?: number;
+  turn_id?: string;
+}
+
+export interface NodeConfig {
+  node_id: string;
+  version?: string;
+  functions: string[];
+  gateway: {
+    enabled: boolean;
+    bind_address: string;
+    http_port: number;
+    require_auth: boolean;
+    ui_enabled: boolean;
+    login_configured: boolean;
+    default_timezone?: string;
+    queue_mode?: string;
+  };
+  compute: {
+    providers: { label: string; trust_tier?: string; roles?: string[] }[];
+    max_tool_calls_per_turn: number;
+    self_learning_mode?: string;
+  };
+  memory: { enabled: boolean; dream_schedule?: string; embedding_model?: string };
+  bots: { max_pending: number; drain_enabled: boolean };
+  channels: { type: string; enabled: boolean }[];
+}
+
+/** streamBotChat talks to ONE bot over SSE.
+ *
+ * Hand-parsed rather than using EventSource, because EventSource
+ * cannot issue a POST — and the message has to go in a body, not a
+ * query string, where it would end up in every access log between here
+ * and the node. */
+export async function streamBotChat(
+  botId: string,
+  message: string,
+  onEvent: (event: string, data: Record<string, unknown>) => void,
+): Promise<void> {
+  const res = await fetch(`/v1/bots/${encodeURIComponent(botId)}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text();
+    let msg = text;
+    try {
+      msg = (JSON.parse(text) as { error?: string }).error ?? text;
+    } catch {
+      /* keep the raw body */
+    }
+    throw new ApiError(res.status, msg || res.statusText);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Events are separated by a blank line. Anything after the last
+    // one is a partial frame and stays in the buffer.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      let event = "message";
+      let data = "{}";
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("event: ")) event = line.slice(7).trim();
+        if (line.startsWith("data: ")) data = line.slice(6);
+      }
+      try {
+        onEvent(event, JSON.parse(data) as Record<string, unknown>);
+      } catch {
+        /* a frame we cannot parse is one we cannot act on */
+      }
+    }
+  }
+}
 
 /** Colours for a queue item's status.
  *

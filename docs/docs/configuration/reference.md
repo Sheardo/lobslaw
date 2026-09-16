@@ -696,8 +696,23 @@ there is no second deployable and no CORS.
 
 ```toml
 [gateway.ui]
-enabled = true
+enabled     = true
+token_ref   = "env:LOBSLAW_CONSOLE_TOKEN"
+session_ttl = "12h"
+scope       = "owner"
 ```
+
+| Key | Default | Effect |
+|---|---|---|
+| `enabled` | off | Serve the console. |
+| `token_ref` | — | Secret reference to the token an operator types to sign in. **Required** when `require_auth` is on — without it there is no way in, and the node refuses to start rather than let you find out against a 401. |
+| `session_ttl` | 12h | How long a login lasts. There is no revocation list, so this *is* the revocation. |
+| `scope` | `owner` | The permission tier a signed-in operator gets. The default is deliberate: the person holding the console token is the deployment's operator, and granting the unauthenticated scope would make signing in change nothing. |
+
+Signing in sets an `HttpOnly`, `SameSite=Strict` cookie. Its signing
+key is derived from the cluster memory key, so a cookie minted by one
+node is accepted by every other — a console behind a load balancer
+does not log you out on alternate requests.
 
 Off by default — a headless cluster node has no use for a web app, and
 an admin console that appears without anybody asking for it is an

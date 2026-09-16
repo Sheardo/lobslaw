@@ -135,6 +135,9 @@ func (c *Config) Validate() error {
 	if err := validateUIAuth(c.Gateway, c.Auth); err != nil {
 		return err
 	}
+	if err := validateUILogin(c.Gateway, c.Auth); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -167,6 +170,26 @@ func validateUIAuth(gw GatewayConfig, auth AuthConfig) error {
 		"the console can rewrite bot instructions and read every conversation, so it must not be "+
 		"reachable without a token. Bind to localhost instead if this is a single-machine setup",
 		types.ErrInvalidConfig, describeBind(gw.BindAddress))
+}
+
+// validateUILogin refuses a console that requires a credential nobody
+// can present.
+//
+// require_auth with no token_ref and no JWKS issuer is a locked door
+// with no key: a browser cannot set an Authorization header on a plain
+// navigation, so the login cookie is the only way in. Catching it at
+// boot beats an operator discovering it against a 401 they cannot
+// explain.
+func validateUILogin(gw GatewayConfig, auth AuthConfig) error {
+	if !gw.UI.Enabled || !auth.RequireAuth {
+		return nil
+	}
+	if strings.TrimSpace(gw.UI.TokenRef) != "" {
+		return nil
+	}
+	return fmt.Errorf("%w: [gateway.ui] is enabled with [auth] require_auth = true but no "+
+		"[gateway.ui] token_ref — there would be no way to sign in. Set it to a secret "+
+		"reference such as env:LOBSLAW_CONSOLE_TOKEN", types.ErrInvalidConfig)
 }
 
 // isLoopbackBind reports whether an address reaches only this machine.

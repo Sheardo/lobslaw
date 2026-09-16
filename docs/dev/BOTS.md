@@ -384,6 +384,43 @@ React 19 + Chakra UI v3, built by Vite straight into
 own listener — one binary, one port, no CORS, and no way for a front
 end and an API to drift apart in version.
 
+### Signing in
+
+An operator opening the console has no bearer token and no way to get
+one — an external IdP would need an OIDC redirect flow, and a personal
+assistant should not require standing one up to look at its own bots.
+So the console exchanges a configured shared secret
+(`[gateway.ui] token_ref`) for a short-lived cookie.
+
+Deliberately **not a JWT**. A JWT's value is that a third party can
+verify it; this token never leaves lobslaw, so the format would buy
+nothing and cost a library's worth of algorithm-confusion footguns.
+
+The signing key is **derived from the cluster MemoryKey** via HKDF with
+its own label. Derived rather than configured so there is no third
+secret to manage; derived rather than used directly so a flaw that
+leaked one key does not hand over the other. Every node holds the same
+MemoryKey, which is what lets a cookie minted by one be accepted by
+another — a console behind a load balancer would otherwise log you out
+on every other request.
+
+The cookie is `HttpOnly` and `SameSite=Strict`, and `Secure` only over
+TLS: setting it unconditionally would make the cookie undeliverable on
+a plain-HTTP loopback console, which is the supported single-machine
+setup.
+
+There is no revocation list. The TTL **is** the revocation, which is
+the trade a stateless token makes.
+
+Two config checks run at boot, both refusals rather than warnings:
+
+- UI on a non-loopback bind ⇒ `require_auth` must be on.
+- UI with `require_auth` ⇒ `token_ref` must be set, or it is a locked
+  door with no key. That was a real trap, shipped and then fixed: the
+  first version demanded auth and provided nothing able to satisfy it.
+
+### The rest of the surface
+
 Off by default, and **enabling it on a non-loopback bind refuses to
 start without `[auth] require_auth`**. `require_auth` defaults false
 because that is right for an API behind a reverse proxy; it is not
@@ -416,6 +453,8 @@ it: without that a clean checkout has no `dist/` at all, which makes
 - **No per-bot notification rate limiting.** Routing routine output to
   the inbox is the mitigation; revisit the first time somebody mutes
   the chief.
-- **No per-bot chat threads in the console.** That needs a session
-  dimension the transcript store does not have, and inventing one in
-  the browser would produce a history the node does not agree with.
+- **No multi-turn history in the console's chat.** Each message is its
+  own turn; the bot does not see the previous one. Conversations filed
+  under the `bot` channel are readable through
+  `/v1/bots/{id}/sessions`, but the console's chat box does not replay
+  them yet.

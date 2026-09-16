@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"net/http"
+	"strings"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
@@ -95,40 +96,47 @@ func (n *Node) wireGateway() error {
 	}
 
 	cfg := gateway.RESTConfig{
-		Notices:          n.notices,
-		QueueMode:        gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
-		QueueDebounce:    n.cfg.Gateway.QueueDebounce,
-		RelatednessJudge: n.newRelatednessJudge(),
-		QueueBurstWindow: n.cfg.Gateway.QueueBurstWindow,
-		QueueBurstReset:  n.cfg.Gateway.QueueBurstReset,
-		Leaser:           n.newSessionLeaser(),
-		Addr:             addr,
-		TypingInterval:   n.cfg.Gateway.TypingInterval,
-		InterimTimeout:   n.cfg.Gateway.InterimTimeout,
-		HardTimeout:      n.cfg.Gateway.HardTimeout,
-		ReadTimeout:      n.cfg.Gateway.ReadTimeout,
-		WriteTimeout:     restWriteTimeout(n.cfg.Gateway),
-		IdleTimeout:      n.cfg.Gateway.IdleTimeout,
-		Soul:             n.soulProvider,
-		TLSCert:          tlsCert,
-		TLSKey:           tlsKey,
-		DefaultScope:     n.cfg.Gateway.UnknownUserScope,
-		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
-		JWTValidator:     n.jwtValidator,
-		RequireAuth:      n.cfg.Auth.RequireAuth,
-		Bots:             botAPIOrNil(n.botSvc),
-		Inbox:            inboxAPIOrNil(n.inboxSvc),
-		UI:               n.webConsole(),
-		Telegram:         tg,
-		Slack:            sl,
-		Webhooks:         webhooks,
-		Prompts:          n.promptRegistry,
-		ConfirmationTTL:  n.cfg.Gateway.ConfirmationTimeout,
-		Plan:             planServiceOrNil(n.planSvc),
-		Sessions:         n.newSessionStore(),
-		Compactor:        n.newSessionCompactor(),
-		Conversation:     n.conversationConfig(),
-		Logger:           n.log,
+		Notices:           n.notices,
+		QueueMode:         gateway.ParseQueueMode(n.cfg.Gateway.QueueMode),
+		QueueDebounce:     n.cfg.Gateway.QueueDebounce,
+		RelatednessJudge:  n.newRelatednessJudge(),
+		QueueBurstWindow:  n.cfg.Gateway.QueueBurstWindow,
+		QueueBurstReset:   n.cfg.Gateway.QueueBurstReset,
+		Leaser:            n.newSessionLeaser(),
+		Addr:              addr,
+		TypingInterval:    n.cfg.Gateway.TypingInterval,
+		InterimTimeout:    n.cfg.Gateway.InterimTimeout,
+		HardTimeout:       n.cfg.Gateway.HardTimeout,
+		ReadTimeout:       n.cfg.Gateway.ReadTimeout,
+		WriteTimeout:      restWriteTimeout(n.cfg.Gateway),
+		IdleTimeout:       n.cfg.Gateway.IdleTimeout,
+		Soul:              n.soulProvider,
+		TLSCert:           tlsCert,
+		TLSKey:            tlsKey,
+		DefaultScope:      n.cfg.Gateway.UnknownUserScope,
+		DefaultBudget:     compute.FromComputeConfig(n.cfg.Compute),
+		JWTValidator:      n.jwtValidator,
+		RequireAuth:       n.cfg.Auth.RequireAuth,
+		Bots:              botAPIOrNil(n.botSvc),
+		Inbox:             inboxAPIOrNil(n.inboxSvc),
+		UI:                n.webConsole(),
+		ConsoleToken:      n.consoleToken(),
+		ConsoleKey:        n.consoleSigningKey(),
+		ConsoleScope:      n.cfg.Gateway.UI.Scope,
+		ConsoleSessionTTL: n.cfg.Gateway.UI.SessionTTL,
+		Transcripts:       n.newTranscriptBrowser(),
+		Turns:             turnRunnerOrNil(n.turnRunner),
+		Config:            n.configView(),
+		Telegram:          tg,
+		Slack:             sl,
+		Webhooks:          webhooks,
+		Prompts:           n.promptRegistry,
+		ConfirmationTTL:   n.cfg.Gateway.ConfirmationTimeout,
+		Plan:              planServiceOrNil(n.planSvc),
+		Sessions:          n.newSessionStore(),
+		Compactor:         n.newSessionCompactor(),
+		Conversation:      n.conversationConfig(),
+		Logger:            n.log,
 	}
 
 	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
@@ -573,4 +581,159 @@ func (n *Node) webConsole() http.Handler {
 	}
 	n.log.Info("gateway: web console mounted", "path", "/")
 	return handler
+}
+
+// consoleToken resolves the shared secret an operator signs in with.
+//
+// A failure is logged and left empty rather than fatal: the login
+// route then answers with what to configure, which is a better outcome
+// than a node that will not boot because a vault was briefly
+// unreachable. The config layer already refuses the genuinely
+// dangerous combination — require_auth with no token_ref at all.
+func (n *Node) consoleToken() string {
+	ref := strings.TrimSpace(n.cfg.Gateway.UI.TokenRef)
+	if ref == "" {
+		return ""
+	}
+	token, err := n.resolveAPIKey(ref)
+	if err != nil {
+		n.log.Warn("gateway: console token_ref could not be resolved; console login is unavailable",
+			"ref", ref, "err", err)
+		return ""
+	}
+	return token
+}
+
+// consoleSigningKey derives the cookie-signing key from the cluster
+// MemoryKey, so a cookie minted by one node is accepted by every
+// other. Nil on a node with no cluster key, which leaves console
+// sessions off rather than signing with something predictable.
+func (n *Node) consoleSigningKey() []byte {
+	if len(n.cfg.MemoryKey) == 0 {
+		return nil
+	}
+	key, err := gateway.DeriveConsoleKey(n.cfg.MemoryKey[:])
+	if err != nil {
+		n.log.Warn("gateway: could not derive the console signing key", "err", err)
+		return nil
+	}
+	return key
+}
+
+// newTranscriptBrowser returns the READ-ONLY view of the transcript
+// store the console reads, or nil where this node has no local state.
+//
+// Constructed separately from newSessionStore even though both wrap
+// the same service: that one is the write path a turn appends to, and
+// handing a read-only view something that can append is how a console
+// feature ends up able to rewrite history.
+func (n *Node) newTranscriptBrowser() gateway.SessionBrowser {
+	if n.raft == nil || n.store == nil {
+		return nil
+	}
+	return memory.NewSessionService(n.raft, n.store, memory.SessionConfig{
+		MaxMessages: n.cfg.Gateway.SessionMaxMessages,
+	})
+}
+
+// turnRunnerOrNil bridges a nil pointer to an interface-typed nil, so
+// the REST layer's "is this wired" check is not defeated by Go's
+// nil-in-an-interface gotcha.
+func turnRunnerOrNil(r *compute.TurnRunner) gateway.BotTurnRunner {
+	if r == nil {
+		return nil
+	}
+	return r
+}
+
+// configView assembles the allowlisted configuration the console may
+// read.
+//
+// Built field by field rather than marshalled: with a denylist you
+// leak whatever nobody thought to redact, and the thing nobody thought
+// to redact is by definition the thing nobody was thinking about. Only
+// what is named here can ever reach a browser.
+func (n *Node) configView() *gateway.ConfigView {
+	functions := make([]string, 0, len(n.cfg.Functions))
+	for _, f := range n.cfg.Functions {
+		functions = append(functions, string(f))
+	}
+
+	providers := make([]gateway.ConfigProviderRow, 0, len(n.cfg.Compute.Providers))
+	for _, p := range n.cfg.Compute.Providers {
+		// Label, tier and roles only. An endpoint would name the host
+		// that holds the API key; the same line list_providers draws.
+		providers = append(providers, gateway.ConfigProviderRow{
+			Label:     p.Label,
+			TrustTier: p.TrustTier.String(),
+			Roles:     n.rolesFor(p.Label),
+		})
+	}
+
+	channels := make([]gateway.ConfigChannelRow, 0, len(n.cfg.Gateway.Channels))
+	for _, c := range n.cfg.Gateway.Channels {
+		// A channel present in config is a channel that runs; there is
+		// no per-channel enable switch, and inventing one in the view
+		// would report a control that does not exist.
+		channels = append(channels, gateway.ConfigChannelRow{Type: c.Type, Enabled: true})
+	}
+
+	var embeddingModel string
+	if n.embedder != nil {
+		embeddingModel = n.embedder.Model()
+	}
+
+	return &gateway.ConfigView{
+		NodeID:    n.cfg.NodeID,
+		Version:   n.cfg.Version,
+		Functions: functions,
+		Gateway: gateway.ConfigGatewayView{
+			Enabled:         n.cfg.Gateway.Enabled,
+			BindAddress:     n.cfg.Gateway.BindAddress,
+			HTTPPort:        n.cfg.Gateway.HTTPPort,
+			RequireAuth:     n.cfg.Auth.RequireAuth,
+			UIEnabled:       n.cfg.Gateway.UI.Enabled,
+			DefaultTimezone: n.cfg.Gateway.DefaultTimezone,
+			QueueMode:       n.cfg.Gateway.QueueMode,
+		},
+		Compute: gateway.ConfigComputeView{
+			Providers:        providers,
+			MaxToolCalls:     compute.FromComputeConfig(n.cfg.Compute).MaxToolCalls,
+			SelfLearningMode: n.cfg.SelfLearningMode,
+		},
+		Memory: gateway.ConfigMemoryView{
+			Enabled:        n.store != nil,
+			DreamSchedule:  n.cfg.MemoryDream.Schedule,
+			EmbeddingModel: embeddingModel,
+		},
+		Bots: gateway.ConfigBotsView{
+			MaxPending:   n.cfg.Bots.MaxPending,
+			DrainEnabled: n.cfg.Bots.DrainEnabled == nil || *n.cfg.Bots.DrainEnabled,
+		},
+		Channels: channels,
+	}
+}
+
+// rolesFor names which compute roles a provider label serves, so the
+// console can answer "which model handles the fast path" rather than
+// leaving an operator to infer it from list order — the confidently
+// wrong answer list_providers' Roles field exists to prevent.
+//
+// Inverted from LabelFor rather than read from a reverse index: the
+// map is four entries, and a second index would be a second thing that
+// can disagree with the first.
+func (n *Node) rolesFor(label string) []string {
+	if n.roleMap == nil || label == "" {
+		return nil
+	}
+	var out []string
+	for _, role := range []compute.Role{
+		compute.RoleMain, compute.RolePreflight,
+		compute.RoleSummariser, compute.RoleReview,
+	} {
+		if n.roleMap.LabelFor(role) == label {
+			out = append(out, string(role))
+		}
+	}
+	return out
 }

@@ -1,14 +1,17 @@
 import { Box, Flex, HStack, Heading, Link, Text } from "@chakra-ui/react";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { LoginGate } from "./components/LoginGate";
 import { Activity } from "./routes/Activity";
 import { BotDetail } from "./routes/BotDetail";
 import { Bots } from "./routes/Bots";
 import { Chat } from "./routes/Chat";
+import { Config } from "./routes/Config";
 
 const NAV = [
   { to: "/activity", label: "Activity" },
   { to: "/bots", label: "Bots" },
   { to: "/chat", label: "Chat" },
+  { to: "/config", label: "Config" },
 ];
 
 export function App() {
@@ -41,8 +44,12 @@ export function App() {
         </Flex>
       </Box>
 
+      {/* Everything below the header is behind the gate. The header
+          stays visible either way, so a signed-out console still looks
+          like lobslaw rather than a bare form on a blank page. */}
       <Box as="main" flex="1" px={6} py={6} maxW="6xl" w="full" mx="auto">
-        <Routes>
+        <LoginGate>
+          <Routes>
           {/* Activity is the front page. The question somebody opens
               this to answer is "what is the team doing", and a bot
               list answers "who exists" — which they usually already
@@ -52,8 +59,10 @@ export function App() {
           <Route path="/bots" element={<Bots />} />
           <Route path="/bots/:botId" element={<BotDetail />} />
           <Route path="/chat" element={<Chat />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+            <Route path="/config" element={<Config />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </LoginGate>
       </Box>
     </Flex>
   );
