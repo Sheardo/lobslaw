@@ -162,6 +162,16 @@ const (
 	// specialists it creates — keyed by the bot's immutable slug,
 	// which is also its principal's identifier.
 	BucketBots = "bots"
+
+	// BucketBotInbox holds each bot's durable work queue, keyed
+	// "<recipient>:<ulid>" so one bot's queue is an ordered prefix
+	// scan and arrival order is the tiebreak within a priority band.
+	//
+	// Status is NOT part of the key. Claiming an item is a
+	// revision-checked CAS against one key, and a status that moved the
+	// record would turn every transition into a delete-and-put — the
+	// read-modify-write the CAS exists to make safe.
+	BucketBotInbox = "bot_inbox"
 )
 
 // ChiefBotID names the bot that owns the human-facing channels: the
@@ -215,6 +225,7 @@ var allBuckets = []string{
 	BucketSelfTaughtHistory,
 	BucketEnrolments,
 	BucketBots,
+	BucketBotInbox,
 }
 
 // SoulTuneRecordIDFor returns the personality-overlay key for one bot.

@@ -48,7 +48,13 @@ type Config struct {
 	//
 	// [self_learning.notify] is still read when this is empty, so an
 	// existing config keeps working.
-	Notify   NotifyConfig   `koanf:"notify"`
+	Notify NotifyConfig `koanf:"notify"`
+
+	// Bots is the team: the chief of staff and the specialists it
+	// creates. Bots themselves are RECORDS, not configuration — they
+	// are created at runtime and replicated — so this block holds only
+	// the operator bounds that apply to all of them.
+	Bots     BotsConfig     `koanf:"bots"`
 	Users    []UserConfig   `koanf:"user"`
 	Binaries []BinaryConfig `koanf:"binary"`
 	// Remotes are the hosts remote_ssh may reach. A
@@ -1831,6 +1837,29 @@ type MTLSConfig struct {
 // the file applies when one file serves several deployments.
 type SoulLoaderConfig struct {
 	Path string `koanf:"path"`
+}
+
+// BotsConfig is the [bots] block: operator bounds over the whole
+// team. Individual bots are runtime records rather than settings, so
+// nothing here names one.
+type BotsConfig struct {
+	// MaxPending bounds one bot's unworked queue. Zero takes the
+	// default of 200.
+	//
+	// Per recipient rather than global, because a runaway producer
+	// should stall the bot it is flooding and not the cluster. A post
+	// past the cap fails to the SENDER — silently dropping it would be
+	// the exact failure a durable queue exists to prevent.
+	MaxPending int `koanf:"max_pending"`
+
+	// DrainEnabled lets bots work their own queues. On by default: a
+	// task handed to a bot that then sits there is indistinguishable
+	// from a broken bot.
+	//
+	// A *bool so "unset" and "explicitly false" are different — the
+	// zero value of a plain bool would make every config that has
+	// never heard of this block switch the team off.
+	DrainEnabled *bool `koanf:"drain_enabled"`
 }
 
 // AuthConfig is the [auth] section: JWT validation for inbound

@@ -91,6 +91,12 @@ type FSM struct {
 	// two-node cluster answers "who is the engineering bot" with
 	// whichever node you happened to ask.
 	botChange func()
+
+	// botInboxChange fires after every successful apply that touches
+	// the bot inbox, waking the drain. It fires on EVERY voter, because
+	// Apply does — which is what lets an item posted on node A be
+	// worked by whichever node is free, with no gossip layer.
+	botInboxChange func()
 }
 
 // NewFSM wraps a Store as a Raft FSM.
@@ -137,6 +143,16 @@ func (f *FSM) SetBotChangeCallback(cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.botChange = cb
+}
+
+// SetBotInboxChangeCallback registers a callback that fires after each
+// FSM.Apply that touches BucketBotInbox. Same rules: it runs under the
+// FSM's lock, so it must not block and must not take any lock a
+// mutator could be holding across raft.Apply.
+func (f *FSM) SetBotInboxChangeCallback(cb func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.botInboxChange = cb
 }
 
 // SetSelfTaughtChangeCallback registers a callback that fires after
@@ -256,6 +272,10 @@ func (f *FSM) Apply(l *raft.Log) any {
 				if f.botChange != nil {
 					f.botChange()
 				}
+			case BucketBotInbox:
+				if f.botInboxChange != nil {
+					f.botInboxChange()
+				}
 			case BucketSelfTaught, BucketSelfTaughtArchive:
 				// Archive too: deactivating a skill moves it out of the
 				// live bucket, and un-materialising it is as much a
@@ -360,6 +380,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 	switch p := m.(type) {
 	case *lobslawv1.BotRecord:
 		return p.Revision, true
+	case *lobslawv1.BotInboxItem:
+		return p.Revision, true
 	case *lobslawv1.SoulTuneRecord:
 		return p.Revision, true
 	case *lobslawv1.ScheduledTaskRecord:
@@ -388,6 +410,8 @@ func revisionOf(m proto.Message) (uint64, bool) {
 func setRevision(m proto.Message, rev uint64) {
 	switch p := m.(type) {
 	case *lobslawv1.BotRecord:
+		p.Revision = rev
+	case *lobslawv1.BotInboxItem:
 		p.Revision = rev
 	case *lobslawv1.SoulTuneRecord:
 		p.Revision = rev
@@ -631,6 +655,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketBotInbox:
+		var r lobslawv1.BotInboxItem
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
@@ -705,7 +735,7 @@ func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
-		BucketBots:
+		BucketBots, BucketBotInbox:
 		return true
 	default:
 		return false
@@ -746,6 +776,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSoulTune, p.SoulTune, nil
 	case *lobslawv1.LogEntry_Bot:
 		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_BotInbox:
+		return BucketBotInbox, p.BotInbox, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:

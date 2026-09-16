@@ -1293,6 +1293,83 @@ message BotRecord {
   string created_by = 15;
 }
 
+// InboxKind is what an item IS, which decides how a bot reads it.
+//
+// A TASK is work to do; a QUESTION wants an answer back; an ANSWER and
+// a RESULT are those coming back, linked by correlation_id; an FYI
+// wants nothing. Without the distinction a bot cannot tell "do this"
+// from "here is what happened when you asked me to do that", and it
+// answers both the same way.
+enum InboxKind {
+  INBOX_KIND_UNSPECIFIED = 0;
+  INBOX_KIND_TASK = 1;
+  INBOX_KIND_QUESTION = 2;
+  INBOX_KIND_ANSWER = 3;
+  INBOX_KIND_RESULT = 4;
+  INBOX_KIND_FYI = 5;
+}
+
+// InboxStatus is where an item is in its life.
+//
+// FAILED is a terminal state that stays VISIBLE, with the error on the
+// record. The whole reason the queue exists is that nothing
+// evaporates; a task that silently disappeared would be worse than one
+// that was never accepted.
+enum InboxStatus {
+  INBOX_STATUS_UNSPECIFIED = 0;
+  INBOX_STATUS_PENDING = 1;
+  INBOX_STATUS_CLAIMED = 2;
+  INBOX_STATUS_DONE = 3;
+  INBOX_STATUS_FAILED = 4;
+  INBOX_STATUS_CANCELLED = 5;
+}
+
+// BotInboxItem is one unit of a bot's durable work queue.
+//
+// The inbox is not a delivery pipe. It is where a bot's work lives:
+// it pulls its next task from here, writes the outcome back here, and
+// the GUI reads it as the honest answer to "what is this bot doing and
+// what has it done". Sessions record what was SAID and traces record
+// what RAN; neither answers what is queued, what is stuck, or what
+// failed.
+//
+// Keyed "<recipient>:<ulid>" so one bot's queue is an ordered prefix
+// scan. Status is deliberately NOT in the key: claiming is a
+// revision-checked CAS against one key, and a status that moved the
+// record would make every transition a delete-and-put, which is
+// exactly the read-modify-write the CAS exists to make safe.
+message BotInboxItem {
+  string id = 1;
+  // recipient is a bot id.
+  string recipient = 2;
+  // sender is a principal — "bot:marketing", "user:alice" — or
+  // "scheduler" for work a routine posted.
+  string sender = 3;
+  InboxKind kind = 4;
+  // subject is one line; it is what a queue listing shows.
+  string subject = 5;
+  string body = 6;
+  // priority orders the queue, higher first. Equal priorities fall
+  // back to id order, which is ULID order, which is arrival order.
+  int32 priority = 7;
+  InboxStatus status = 8;
+  // correlation_id links an ANSWER or RESULT back to the QUESTION or
+  // TASK that caused it, so a bot that delegated work can find out how
+  // it went.
+  string correlation_id = 9;
+  string result = 10;
+  string error = 11;
+  int32 attempts = 12;
+  string claimed_by = 13;
+  google.protobuf.Timestamp claim_expires_at = 14;
+  uint64 revision = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+  // session_id is the conversation the working turn wrote, so the GUI
+  // can deep-link from an item to what the bot actually did.
+  string session_id = 18;
+}
+
 // BotBudget caps one of this bot's turns. Zero on a field takes the
 // node's configured default rather than meaning "unlimited", because a
 // bot record written without thinking about budgets should inherit the
@@ -2030,6 +2107,7 @@ message LogEntry {
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
     BotRecord bot = 37;
+    BotInboxItem bot_inbox = 38;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

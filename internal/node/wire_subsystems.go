@@ -152,6 +152,9 @@ func (n *Node) wireSoulRaft() error {
 // Start beside the other leader-gated seeds.
 func (n *Node) wireBots() error {
 	n.botSvc = memory.NewBotService(n.raft, n.store)
+	n.inboxSvc = memory.NewInboxService(n.raft, n.store, n.cfg.Bots.MaxPending)
+	n.inboxWake = make(chan struct{}, 1)
+	n.fsm.SetBotInboxChangeCallback(n.wakeInboxDrain)
 	return nil
 }
 

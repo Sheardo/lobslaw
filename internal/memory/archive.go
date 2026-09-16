@@ -36,6 +36,7 @@ var archiveKinds = []archiveKind{
 	{BucketPinned, "pinned", &lobslawv1.PinnedMemory{}},
 	{BucketSoulTune, "soul", &lobslawv1.SoulTuneRecord{}},
 	{BucketBots, "bots", &lobslawv1.BotRecord{}},
+	{BucketBotInbox, "bot-inbox", &lobslawv1.BotInboxItem{}},
 	{BucketSkills, "skills", &lobslawv1.SkillRecord{}},
 	{BucketSkillBlobs, "skill-blobs", &lobslawv1.SkillBlob{}},
 	{BucketSelfTaught, "learned", &lobslawv1.SelfTaughtRecord{}},

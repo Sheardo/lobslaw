@@ -682,6 +682,27 @@ signing_policy = "prefer"
 path = "SOUL.md"
 ```
 
+## `[bots]`
+
+Operator bounds over the whole team. The bots themselves are runtime
+records — created through the GUI or by the chief of staff, and
+replicated like any other state — so nothing here names one.
+
+```toml
+[bots]
+max_pending   = 200
+drain_enabled = true
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `max_pending` | 200 | How many unworked items one bot's inbox may hold. A post past it fails to the **sender** rather than being dropped, so a bot that has stopped keeping up is visible to whoever is loading it. Per recipient, so a runaway producer stalls the bot it is flooding and not the cluster. Finished items do not count — the bound is on backlog, not on history. |
+| `drain_enabled` | on | Whether bots work their own queues. Off means items accumulate until something asks a bot to check its inbox, which is a supported way to run but looks exactly like a broken bot if you forget you set it. |
+
+Finished items are readable for 30 days and then pruned. Pending and
+claimed items are never pruned however old: an item nobody worked is a
+problem to surface, not one to tidy away.
+
 ## `[audit.local]`
 
 ```toml

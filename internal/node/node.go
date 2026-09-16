@@ -98,6 +98,10 @@ type Config struct {
 	// values fall back to the seed defaults (enabled, 02:00 daily).
 	MemoryDream config.DreamConfig
 
+	// Bots is the [bots] block: operator bounds over the whole team.
+	// Individual bots are runtime records, so nothing here names one.
+	Bots config.BotsConfig
+
 	// RestoreMode suppresses execution and knowledge seeds during archive recovery.
 	RestoreMode bool
 
@@ -350,6 +354,12 @@ type Node struct {
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
 	botSvc       *memory.BotService
+	inboxSvc     *memory.InboxService
+	// inboxWake coalesces drain nudges from the FSM change callback.
+	// Buffered-of-1: a burst of posts produces one drain, and a send
+	// that finds it full is dropped because the pass it would have
+	// caused is already coming.
+	inboxWake    chan struct{}
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -718,6 +728,11 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 			}
 		}()
 	}
+
+	// The bots' queues. Every node runs one: exactly-once is guaranteed
+	// one level down by the per-item CAS claim, so two nodes draining
+	// at once is throughput rather than a race.
+	go n.runInboxDrain(ctx)
 
 	n.startPromptSweeper(ctx)
 	n.startEnrolmentSweeper(ctx)

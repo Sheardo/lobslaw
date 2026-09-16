@@ -43,6 +43,9 @@ func (n *Node) registerAgentTools(builtins *tools.Builtins, embedder compute.Emb
 		if err := n.wireCommitmentTools(builtins); err != nil {
 			return nil, err
 		}
+		if err := n.wireInboxTools(builtins); err != nil {
+			return nil, err
+		}
 		if err := n.wireCredentialsTools(builtins); err != nil {
 			return nil, err
 		}
@@ -283,6 +286,32 @@ func (n *Node) wireCommitmentTools(builtins *tools.Builtins) error {
 		}
 	}
 	n.log.Debug("compute: commitment_create/list/cancel registered")
+	return nil
+}
+
+// wireInboxTools registers the builtins a bot uses to read its own
+// queue and hand work to another.
+//
+// Skipped without a queue, which is a raft-hosting concern: a
+// compute-only node has no replicated inbox to read, and a tool that
+// answers every call with "not wired" is worse than an absent one
+// because the model keeps trying it.
+func (n *Node) wireInboxTools(builtins *tools.Builtins) error {
+	if n.inboxSvc == nil {
+		return nil
+	}
+	if err := tools.RegisterInboxBuiltins(builtins, tools.InboxConfig{
+		Service: n.inboxSvc,
+		Bots:    botResolverOrNil(n.botSvc),
+	}); err != nil {
+		return fmt.Errorf("register inbox builtins: %w", err)
+	}
+	for _, td := range tools.InboxToolDefs() {
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register inbox tool %q: %w", td.Name, err)
+		}
+	}
+	n.log.Debug("compute: inbox_list/read/post/resolve registered")
 	return nil
 }
 
