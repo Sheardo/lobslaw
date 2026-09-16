@@ -36,6 +36,21 @@ func (s *raftSoulTuneStore) Get(ctx context.Context) (*soul.TuneState, error) {
 	return out, nil
 }
 
+// GetFor satisfies soul.BotTuneStore: one bot's overlay, which for the
+// chief is the pre-existing record every upgraded cluster already has.
+func (s *raftSoulTuneStore) GetFor(ctx context.Context, botID string) (*soul.TuneState, error) {
+	rec, err := s.svc.GetFor(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.Current == nil {
+		return nil, nil
+	}
+	out := tuneStateFromProto(rec.Current)
+	out.Revision = rec.Revision
+	return out, nil
+}
+
 func (s *raftSoulTuneStore) Put(ctx context.Context, state *soul.TuneState) error {
 	if state == nil {
 		return errors.New("soul tune: state nil")

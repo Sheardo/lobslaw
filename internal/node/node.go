@@ -1287,11 +1287,11 @@ func (n *Node) reloadSoul() (*soul.Soul, error) {
 	return loaded, nil
 }
 
-func (n *Node) soulSnapshot(ctx context.Context) (*soul.Soul, error) {
+func (n *Node) soulSnapshot(ctx context.Context, botID string) (*soul.Soul, error) {
 	if n.soulAdjuster == nil {
 		return n.Soul(), nil
 	}
-	snapshot, err := n.soulAdjuster.Snapshot(ctx)
+	snapshot, err := n.soulAdjuster.SnapshotFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

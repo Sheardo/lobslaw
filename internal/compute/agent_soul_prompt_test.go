@@ -18,7 +18,7 @@ func TestResumeKeepsOriginalSoulPrompt(t *testing.T) {
 		}
 		return MockResponse{Content: "42", FinishReason: "stop"}, nil
 	})
-	a, err := NewAgent(AgentConfig{Provider: provider, SoulSnapshot: func(context.Context) (*soul.Soul, error) {
+	a, err := NewAgent(AgentConfig{Provider: provider, SoulSnapshot: func(context.Context, string) (*soul.Soul, error) {
 		return nil, errors.New("resume must not load a new soul")
 	}})
 	if err != nil {
@@ -46,7 +46,7 @@ func TestSoulSnapshotStaysInSystemPrompt(t *testing.T) {
 		return MockResponse{Content: "42", FinishReason: "stop"}, nil
 	})
 	reads := 0
-	a, err := NewAgent(AgentConfig{Provider: provider, SoulSnapshot: func(context.Context) (*soul.Soul, error) {
+	a, err := NewAgent(AgentConfig{Provider: provider, SoulSnapshot: func(context.Context, string) (*soul.Soul, error) {
 		reads++
 		return s, nil
 	}})
@@ -103,7 +103,7 @@ func TestSoulLanguageDetectionUsesOnlyCurrentQuestion(t *testing.T) {
 		}
 		return "es"
 	})
-	a, err := NewAgent(AgentConfig{Provider: NewMockProvider(), LanguageDetector: detector, SoulSnapshot: func(context.Context) (*soul.Soul, error) { return s, nil }})
+	a, err := NewAgent(AgentConfig{Provider: NewMockProvider(), LanguageDetector: detector, SoulSnapshot: func(context.Context, string) (*soul.Soul, error) { return s, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

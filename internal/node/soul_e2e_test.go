@@ -237,7 +237,7 @@ func TestSoulComputeOnlyUsesCluster(t *testing.T) {
 	if !strings.Contains(prompt, "Enjoys strong tea.") {
 		t.Fatal("remote edit absent from prompt")
 	}
-	state, err := leader.soulSnapshot(context.Background())
+	state, err := leader.soulSnapshot(context.Background(), "")
 	if err != nil || len(state.Config.Fragments) != 1 {
 		t.Fatalf("remote edit not in cluster: %v", err)
 	}

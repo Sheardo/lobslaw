@@ -118,7 +118,12 @@ type AgentConfig struct {
 
 	// SoulSnapshot supplies the complete effective soul once per new turn.
 	// Soul remains the inexpensive accessor for runtime trust checks.
-	SoulSnapshot func(context.Context) (*soul.Soul, error)
+	//
+	// Takes the bot id so each bot reads its OWN personality overlay.
+	// Empty means the node default, which is what a channel that has
+	// not been taught about bots passes and what every turn did before
+	// they existed.
+	SoulSnapshot func(ctx context.Context, botID string) (*soul.Soul, error)
 
 	// LanguageDetector is reused across turns and only invoked when the
 	// effective soul enables detection. Nil uses the lazy Lingua detector.
@@ -653,7 +658,7 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		var config *types.SoulConfig
 		var body string
 		if a.cfg.SoulSnapshot != nil {
-			snapshot, err := a.cfg.SoulSnapshot(ctx)
+			snapshot, err := a.cfg.SoulSnapshot(ctx, req.BotID)
 			if err != nil {
 				return fmt.Errorf("load effective soul: %w", err)
 			}
@@ -1686,6 +1691,22 @@ func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 		t.UserID = req.Claims.UserID
 		t.Scope = req.Claims.Scope
 		t.Roles = req.Claims.Roles
+	}
+	t.BotID = req.BotID
+	// A bot's principal is minted, never resolved. The alias map
+	// translates ids that arrived FROM a channel, and Resolve wraps
+	// whatever it is given in the user kind — so putting "bot:devops"
+	// through it yields "user:bot:devops", which owns nothing the bot
+	// owns and matches no policy rule written about it. The same
+	// double-prefix hazard Principal.ID documents, reached from the
+	// other direction.
+	//
+	// Explicit claims still win: a routine alice scheduled is worked by
+	// the devops bot and attributed to alice, so only a turn running as
+	// its own bot takes the bot principal.
+	if req.BotID != "" && req.Claims != nil && req.Claims.UserID == identity.Bot(req.BotID).String() {
+		t.Principal = identity.Bot(req.BotID)
+		return t
 	}
 	// A nil resolver maps every id to itself, which is the correct
 	// behaviour for a deployment that has declared no aliases.

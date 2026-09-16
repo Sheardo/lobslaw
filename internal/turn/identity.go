@@ -104,7 +104,22 @@ type Identity struct {
 	// a model that picks its own zone moves when a schedule appears to
 	// fire.
 	Timezone string
+
+	// BotID names the bot taking this turn, empty for the node's
+	// default assistant.
+	//
+	// Carried separately from Principal even though Principal is
+	// derived from it, because "which bot is this" and "who owns what
+	// this turn writes" are different questions with different answers
+	// on a turn a bot runs FOR somebody: a routine alice scheduled is
+	// worked by the devops bot and attributed to alice.
+	BotID string
 }
+
+// IsBot reports whether a bot is taking this turn rather than the
+// node's default assistant. Read by the places that must attribute a
+// bot's work to it — notification sender labels, inter-bot messaging.
+func (t Identity) IsBot() bool { return t.BotID != "" }
 
 // SessionKey is the conversation this turn is in, as the session store
 // addresses it. Zero when the turn has no channel origin.
