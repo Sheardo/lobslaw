@@ -91,6 +91,10 @@ func newNotifyHandler(svc Notifier) compute.BuiltinFunc {
 			Body:              text,
 			OriginatorChannel: identity.Channel,
 			OriginatorID:      identity.ChannelID,
+			// From the turn, not from args. A bot that could name its
+			// own sender could send you something that looks like it
+			// came from a different one.
+			SenderBot: senderLabel(identity),
 		}
 		if raw := strings.TrimSpace(args["ttl_seconds"]); raw != "" {
 			secs, err := parseTTL(raw)
@@ -127,4 +131,19 @@ func parseTTL(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("must be seconds (\"30\") or duration (\"30s\", \"5m\"): %w", err)
 	}
 	return d, nil
+}
+
+// senderLabel names the bot a notification came from, empty for the
+// assistant itself.
+//
+// The bare id rather than a display name: the display name lives on
+// the bot record, and reaching the registry from inside a tool handler
+// to render a label would put a raft read on the path of every
+// proactive message. An id is what the operator typed and is what the
+// GUI shows beside the queue.
+func senderLabel(identity turn.Identity) string {
+	if !identity.IsBot() {
+		return ""
+	}
+	return identity.BotID
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/memory"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -146,18 +147,27 @@ func newScheduleCreateHandler(raft memoryRaftApplier) compute.BuiltinFunc {
 		}
 
 		id := ids.New()
+		params := map[string]string{
+			"prompt":    prompt,
+			"notify_on": notifyOn,
+		}
+		// A routine a bot sets up runs AS that bot when it fires, so
+		// the devops bot's daily cluster check reads the devops bot's
+		// memory and reaches only the devops bot's tools. Without this
+		// the routine would fire as the node default and quietly have
+		// more reach than the bot that asked for it.
+		if identity, ok := turn.IdentityFrom(ctx); ok && identity.IsBot() {
+			params["bot"] = identity.BotID
+		}
 		task := &lobslawv1.ScheduledTaskRecord{
 			Id:         id,
 			Name:       name,
 			Schedule:   cron,
 			HandlerRef: ScheduleHandlerRef,
-			Params: map[string]string{
-				"prompt":    prompt,
-				"notify_on": notifyOn,
-			},
-			Enabled:   true,
-			CreatedAt: timestamppb.Now(),
-			Owner:     identityOwner(ctx),
+			Params:     params,
+			Enabled:    true,
+			CreatedAt:  timestamppb.Now(),
+			Owner:      identityOwner(ctx),
 		}
 		entry := &lobslawv1.LogEntry{
 			Op: lobslawv1.LogOp_LOG_OP_PUT,

@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -342,4 +343,29 @@ func (b *TurnBudget) stateLocked() BudgetState {
 		SpendUSD:    b.spendUSD,
 		EgressBytes: b.egressBytes,
 	}
+}
+
+// budgetKey carries the turn's budget on the context.
+type budgetKey struct{}
+
+// WithBudget attaches a turn's budget so a builtin that starts a
+// CHILD turn can make it draw on the same reservation.
+//
+// On the context rather than in the tool-argument map, for the reason
+// turn.Identity is: that map is built from the model's own JSON
+// output, so anything read out of it is something the model can
+// choose — and a model that could choose its own budget has none.
+func WithBudget(ctx context.Context, b *TurnBudget) context.Context {
+	if b == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, budgetKey{}, b)
+}
+
+// BudgetFrom returns the turn's budget, or nil when nothing attached
+// one. Nil is usable: a child with no reservation gets a fresh budget
+// from config, which is the behaviour before delegation existed.
+func BudgetFrom(ctx context.Context) *TurnBudget {
+	b, _ := ctx.Value(budgetKey{}).(*TurnBudget)
+	return b
 }

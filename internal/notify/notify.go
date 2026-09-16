@@ -41,6 +41,20 @@ type Notification struct {
 	OriginatorChannel string
 	OriginatorID      string
 	Reason            string
+
+	// SenderBot is the display name of the bot this came from, empty
+	// for the assistant itself. Rendered as a prefix on the body.
+	//
+	// Attribution in the body rather than a separate channel identity
+	// per bot: one Telegram token and one Slack app means a new bot
+	// works the moment it is created, with no token to provision. The
+	// trade is that every bot shares an avatar, and a label is what
+	// stops "deploy finished" arriving with no idea who deployed.
+	//
+	// Stamped by the caller from turn identity, never from a tool
+	// argument — a bot that could name its own sender could send you
+	// something that looks like it came from another one.
+	SenderBot string
 }
 
 // Sink is one channel's delivery adapter. Each gateway channel
@@ -131,6 +145,7 @@ func (s *Service) Send(ctx context.Context, n Notification) error {
 	if strings.TrimSpace(n.Body) == "" {
 		return errors.New("notify: body required")
 	}
+	n.Body = attributeSender(n.SenderBot, n.Body)
 	if n.ExpiresAt.IsZero() {
 		n.ExpiresAt = time.Now().Add(DefaultTTL)
 	}
@@ -234,4 +249,18 @@ func findChannelAddress(prefs *lobslawv1.UserPreferences, channelType string) st
 		}
 	}
 	return ""
+}
+
+// attributeSender prefixes a bot's messages with its name.
+//
+// Sinks render channel-agnostic plaintext, so this is the one place a
+// team of bots becomes legible on a single channel identity. Done in
+// the service rather than in each sink so a new channel inherits it
+// instead of forgetting it.
+func attributeSender(sender, body string) string {
+	sender = strings.TrimSpace(sender)
+	if sender == "" {
+		return body
+	}
+	return sender + ": " + body
 }

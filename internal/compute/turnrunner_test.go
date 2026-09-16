@@ -144,7 +144,7 @@ func TestWithoutRemovesAToolEvenFromAnUnrestrictedBot(t *testing.T) {
 	t.Parallel()
 	unrestricted := &BotProfile{ID: "engineering"}
 	got := advertisedTools(t, nil, TurnRequest{
-		Profile: unrestricted.Without(nodeTools, "ask_bot"),
+		Profile: unrestricted.Without("ask_bot"),
 		Prompt:  "answer this", Origin: "ask", OriginID: "1", Tools: nodeTools,
 	})
 
@@ -157,12 +157,14 @@ func TestWithoutRemovesAToolEvenFromAnUnrestrictedBot(t *testing.T) {
 }
 
 // Subtracting the only tool a bot had must not fall back through the
-// empty-means-everything rule and silently re-grant it.
+// empty-means-everything rule and silently re-grant it. That is why
+// the denial is a separate list subtracted last, rather than a
+// narrowing of the allowlist.
 func TestWithoutEmptyingAnAllowlistDoesNotReGrantEverything(t *testing.T) {
 	t.Parallel()
 	narrow := &BotProfile{ID: "narrow", Tools: []string{"ask_bot"}}
 	got := advertisedTools(t, nil, TurnRequest{
-		Profile: narrow.Without(nodeTools, "ask_bot"),
+		Profile: narrow.Without("ask_bot"),
 		Prompt:  "x", Origin: "ask", OriginID: "1", Tools: nodeTools,
 	})
 	if len(got) != 0 {

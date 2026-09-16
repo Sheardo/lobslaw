@@ -581,6 +581,19 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		return fmt.Errorf("turn runner: %w", err)
 	}
 	n.turnRunner = runner
+
+	// After the runner, because ask_bot starts a child turn through it.
+	// Registering into the tool pass instead would have handed it a nil
+	// runner and left delegation advertised but broken.
+	//
+	// Safe this late: the agent reads Registry.LLMTools() per turn
+	// rather than snapshotting it at construction, so a tool registered
+	// now is advertised on the first turn.
+	if n.builtinsRegistry != nil {
+		if err := n.wireBotTools(n.builtinsRegistry); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -30,6 +30,15 @@ type BotProfile struct {
 	// Tools is the registry filter. Empty means the node's full set —
 	// see FilterTools for why that is not "no tools".
 	Tools []string
+
+	// Denied is subtracted after Tools, whatever Tools says.
+	//
+	// It exists because "empty allowlist means everything" and "this
+	// specific tool must be absent" cannot both be expressed by one
+	// list: removing the only entry from an allowlist would empty it,
+	// and an empty allowlist re-grants the tool being taken away. The
+	// delegation guard depends on the subtraction being unconditional.
+	Denied []string
 	// MayMessage is the declared edge list for inter-bot messaging.
 	MayMessage []string
 	ModelRole  string
@@ -73,58 +82,51 @@ func (p *BotProfile) MayMessageBot(target string) bool {
 // Refusing everything is expressed by a policy rule, which is the
 // thing that says no.
 func (p *BotProfile) FilterTools(all []Tool) []Tool {
-	if p == nil || len(p.Tools) == 0 {
+	if p == nil {
 		return all
 	}
-	allowed := make(map[string]struct{}, len(p.Tools))
-	for _, name := range p.Tools {
-		allowed[strings.TrimSpace(name)] = struct{}{}
+	out := all
+	if len(p.Tools) > 0 {
+		allowed := make(map[string]struct{}, len(p.Tools))
+		for _, name := range p.Tools {
+			allowed[strings.TrimSpace(name)] = struct{}{}
+		}
+		kept := make([]Tool, 0, len(all))
+		for _, t := range all {
+			if _, ok := allowed[t.Name]; ok {
+				kept = append(kept, t)
+			}
+		}
+		out = kept
 	}
-	out := make([]Tool, 0, len(all))
-	for _, t := range all {
-		if _, ok := allowed[t.Name]; ok {
-			out = append(out, t)
+	if len(p.Denied) == 0 {
+		return out
+	}
+	// Subtracted last and unconditionally, so it holds whether the bot
+	// had an allowlist or not.
+	kept := make([]Tool, 0, len(out))
+	for _, t := range out {
+		if !slices.Contains(p.Denied, t.Name) {
+			kept = append(kept, t)
 		}
 	}
-	return out
+	return kept
 }
 
-// Without returns a copy of the profile with named tools removed from
-// whatever it would otherwise be shown.
+// Without returns a copy of the profile that will never be shown the
+// named tools.
 //
 // The delegation guard uses it: a bot reached through ask_bot is
 // handed a profile Without("ask_bot"), so one hop is the depth limit
 // because a second hop is unexpressible. A counter would have been a
 // rule somebody has to keep enforcing; this is a fact about the
 // registry the child was built with.
-//
-// Removing from an EMPTY allowlist has to materialise the full set
-// first, or "empty means everything" would quietly re-grant exactly
-// the tool being taken away.
-func (p *BotProfile) Without(all []Tool, names ...string) *BotProfile {
+func (p *BotProfile) Without(names ...string) *BotProfile {
 	if p == nil {
 		return nil
 	}
 	clone := *p
-	base := clone.Tools
-	if len(base) == 0 {
-		base = make([]string, 0, len(all))
-		for _, t := range all {
-			base = append(base, t.Name)
-		}
-	}
-	kept := make([]string, 0, len(base))
-	for _, name := range base {
-		if !slices.Contains(names, name) {
-			kept = append(kept, name)
-		}
-	}
-	// A profile whose allowlist has been emptied by subtraction must
-	// not fall back through the empty-means-everything rule.
-	if len(kept) == 0 {
-		kept = []string{""}
-	}
-	clone.Tools = kept
+	clone.Denied = append(append([]string(nil), p.Denied...), names...)
 	return &clone
 }
 

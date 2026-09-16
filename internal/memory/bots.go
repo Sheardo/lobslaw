@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/bots"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -130,6 +131,10 @@ func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expected
 		return nil, err
 	}
 
+	if err := s.checkMessageGraph(ctx, rec); err != nil {
+		return nil, err
+	}
+
 	prev, err := s.Get(ctx, rec.GetId())
 	switch {
 	case err == nil:
@@ -245,6 +250,29 @@ func (s *BotService) EnsureChief(ctx context.Context, displayName string) (*lobs
 		Enabled:     true,
 		CreatedBy:   "system",
 	}, 0)
+}
+
+// checkMessageGraph refuses a may_message edge that would close a
+// loop, naming the path.
+//
+// On WRITE rather than at call time, which is the whole reason
+// may_message is declared rather than open. A cycle caught here is one
+// message to one person about a decision they just made; the same
+// cycle caught at call time is a depth counter, a mid-conversation
+// refusal, and a bill for every turn that ran before it tripped.
+func (s *BotService) checkMessageGraph(ctx context.Context, rec *lobslawv1.BotRecord) error {
+	if len(rec.GetMayMessage()) == 0 {
+		return nil
+	}
+	existing, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	graph := make(bots.Graph, len(existing)+1)
+	for _, b := range existing {
+		graph[b.GetId()] = b.GetMayMessage()
+	}
+	return graph.WithEdges(rec.GetId(), rec.GetMayMessage()).Validate()
 }
 
 func validateBot(rec *lobslawv1.BotRecord) error {

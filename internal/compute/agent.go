@@ -602,6 +602,9 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	// Carried so a builtin that starts a CHILD turn — ask_bot — can
+	// make it draw on this reservation rather than minting its own.
+	ctx = WithBudget(ctx, req.Budget)
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
 	// A nil recorder leaves the context untouched, which is what a
@@ -842,6 +845,9 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	// Carried so a builtin that starts a CHILD turn — ask_bot — can
+	// make it draw on this reservation rather than minting its own.
+	ctx = WithBudget(ctx, req.Budget)
 	// This is the same turn. Its system prompt is already part of the
 	// continuation; refreshing the soul here would assemble an unused prompt
 	// and could prevent resumption when a remote store is unavailable.

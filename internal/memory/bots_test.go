@@ -274,3 +274,54 @@ func TestBotsAreExportable(t *testing.T) {
 	}
 	t.Errorf("%q is not in archiveKinds; bots would not survive a backup/restore", BucketBots)
 }
+
+// The cycle check happens on write, so a loop is one error message
+// about a decision somebody just made rather than a depth counter
+// enforced on every message forever.
+func TestBotUpdateRefusesAnEdgeThatClosesALoop(t *testing.T) {
+	t.Parallel()
+	svc := newTestBots(t)
+	ctx := context.Background()
+
+	if _, err := svc.Put(ctx, &lobslawv1.BotRecord{Id: "engineering"}, 0); err != nil {
+		t.Fatalf("create engineering: %v", err)
+	}
+	if _, err := svc.Put(ctx, &lobslawv1.BotRecord{
+		Id: "marketing", MayMessage: []string{"engineering"},
+	}, 0); err != nil {
+		t.Fatalf("create marketing: %v", err)
+	}
+
+	_, err := svc.Put(ctx, &lobslawv1.BotRecord{
+		Id: "engineering", MayMessage: []string{"marketing"},
+	}, 1)
+	if err == nil {
+		t.Fatal("an edge closing a marketing↔engineering loop was accepted")
+	}
+	for _, want := range []string{"marketing", "engineering", "loop"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not name %q: %v", want, err)
+		}
+	}
+
+	// And nothing was written — a refused edit must not half-apply.
+	read, gerr := svc.Get(ctx, "engineering")
+	if gerr != nil {
+		t.Fatalf("Get: %v", gerr)
+	}
+	if len(read.GetMayMessage()) != 0 {
+		t.Errorf("the refused edge was written anyway: %v", read.GetMayMessage())
+	}
+}
+
+// An edge to a bot that does not exist yet is fine: refusing it would
+// make the order two bots are created in matter.
+func TestBotEdgeToAnUnknownBotIsAccepted(t *testing.T) {
+	t.Parallel()
+	svc := newTestBots(t)
+	if _, err := svc.Put(context.Background(), &lobslawv1.BotRecord{
+		Id: "chief", MayMessage: []string{"not-created-yet"},
+	}, 0); err != nil {
+		t.Errorf("an edge to a future bot was refused: %v", err)
+	}
+}

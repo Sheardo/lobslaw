@@ -11,6 +11,7 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/compute/drivers/gemini"
 	"github.com/jmylchreest/lobslaw/internal/egress"
+	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/promptgen"
 )
@@ -313,6 +314,47 @@ func (n *Node) wireInboxTools(builtins *tools.Builtins) error {
 	}
 	n.log.Debug("compute: inbox_list/read/post/resolve registered")
 	return nil
+}
+
+// wireBotTools registers the team-management builtins and ask_bot.
+//
+// Called after the turn runner exists, because ask_bot starts a child
+// turn through it. A node without one registers the management tools
+// and not ask_bot — advertising a delegation tool that cannot delegate
+// teaches the model a capability it does not have.
+func (n *Node) wireBotTools(builtins *tools.Builtins) error {
+	if n.botSvc == nil {
+		return nil
+	}
+	if err := tools.RegisterBotBuiltins(builtins, tools.BotConfig{
+		Registry: n.botSvc,
+		Resolver: botResolverOrNil(n.botSvc),
+		Runner:   n.turnRunner,
+		Inbox:    inboxServiceOrNil(n.inboxSvc),
+	}); err != nil {
+		return fmt.Errorf("register bot builtins: %w", err)
+	}
+	for _, td := range tools.BotToolDefs() {
+		if td.Name == "ask_bot" && n.turnRunner == nil {
+			continue
+		}
+		if err := n.toolRegistry.Register(td); err != nil {
+			return fmt.Errorf("register bot tool %q: %w", td.Name, err)
+		}
+	}
+	n.log.Debug("compute: bot_list/create/update + ask_bot registered")
+	return nil
+}
+
+// inboxServiceOrNil bridges a nil *memory.InboxService to an
+// interface-typed nil — Go's gotcha where a nil pointer in an
+// interface compares as non-nil, and the ask_bot journal branches on
+// "no inbox".
+func inboxServiceOrNil(svc *memory.InboxService) tools.InboxService {
+	if svc == nil {
+		return nil
+	}
+	return svc
 }
 
 // wireCredentialsTools registers the credentials + OAuth builtins.
