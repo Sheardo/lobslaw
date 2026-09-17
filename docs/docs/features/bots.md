@@ -96,23 +96,42 @@ avatar; the label is what tells them apart.
 Reserve `notify` for things that need you now. The inbox is for
 everything else.
 
+## Teams
+
+Bots belong to a team you name, and there can be several. Each team
+has its own coordinator: the bot that answers when you message on
+Telegram or Slack and hands work to the rest of that team. A bot
+belongs to exactly one.
+
+Existing deployments need no migration — a bot record with no team id
+reads as the default team, so upgrading is one record appearing rather
+than every record being rewritten.
+
+See [the console](./console.md) for naming and switching them.
+
+## Who answers on Telegram and Slack
+
+The **coordinator of the default team**, not a separate assistant.
+
+This was not true at first, and the gap was invisible from either
+side: five code paths build a turn — Telegram, Slack, REST, the
+inbound webhook, the console — and only the console named a bot. Every
+other channel ran the pre-bot assistant, so you could build a team in
+the browser, message Telegram, and reach somebody who had never heard
+of them.
+
+The resolution now happens in one place rather than at each channel,
+so a channel added later cannot forget it.
+
+You always talk to the coordinator; it delegates and the specialists
+report back. There is no way to address a specialist directly from a
+channel — one conversation to follow is the intended shape. In the
+console you can talk to anyone directly.
+
 ## The web console
 
-```toml
-[gateway]
-bind_address = "127.0.0.1"
-
-[gateway.ui]
-enabled = true
-```
-
-Then open `http://127.0.0.1:8080/`. It shows the whole team on one
-page: what each bot is working on, what it finished, what failed and
-why. Assign work, retry something, edit a brief, or chat to **any**
-bot — not just the coordinator.
-
-Open a finished item and you can read the turn that produced it, not
-only its result.
+[Its own page](./console.md) — teams, the desk, receipts, approvals,
+and signing in as more than one person.
 
 :::warning Exposing it requires auth
 The console can rewrite a bot's instructions, read every conversation
@@ -156,9 +175,10 @@ else normally.
 
 - **The coordinator cannot be deleted.** It is what answers your messages.
   You can re-brief it.
-- **A bot cannot ask you to approve something mid-delegation.** A task
-  needing a confirmation fails and says so; ask the bot directly and
-  approve it there.
+- **A queued task cannot ask you to approve something.** Nobody is
+  watching a task that drains at 3am, so it fails and says so. A turn
+  you started — in the console, or by messaging a channel — *can* ask,
+  and waits while you answer.
 - **A queue has a depth limit** (200 unworked items by default). Past
   it, whoever is loading the bot is told — rather than the work being
   quietly dropped.

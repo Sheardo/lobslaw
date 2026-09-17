@@ -192,6 +192,53 @@ audience = "<application-aud>"
 
 The validator pulls JWKS, verifies signature, extracts standard claims (sub, scope, iss, aud), maps to lobslaw's `Claims` struct via `gateway.user_scopes` overrides.
 
+## Bots in Slack {#bots-in-slack}
+
+Bots post through **one** Slack app and name themselves per message,
+using `chat.postMessage`'s `username` and `icon_emoji`. Grant the app
+the `chat:write.customize` scope and DevOps and Engineering arrive in
+a channel looking like two different people.
+
+One app rather than one per bot, deliberately. A Slack app per bot
+would make each a real member — @-mentionable, invited to channels —
+but a newly created bot could not speak until somebody provisioned a
+token for it, which turns "make me a devops bot" from a sentence into
+a project.
+
+Without the scope Slack ignores the fields rather than failing, so a
+workspace that has not granted it sees the previous behaviour: one
+identity, with the sender named at the start of the message.
+
+You always talk to the **coordinator**; it delegates and the
+specialists report back. There is no way to address a specialist
+directly from Slack, and that is the intended shape — one conversation
+to follow rather than several.
+
+## Webhooks (outbound) {#outbound-webhooks}
+
+The cheapest way to let a bot ping you. Set a user's notification
+address to an incoming-webhook URL — Slack, Discord and Teams all
+accept the same shape — and `notify` posts `{"text": "..."}` to it.
+
+This exists because the alternative was a whole Slack app: a bot
+token, socket mode and an event subscription, which is a great deal of
+ceremony for "deploy finished". Use the Slack channel above when you
+want lobslaw to *listen* on Slack; use a webhook when you only want it
+to *speak*.
+
+Two rules the code enforces rather than documents:
+
+- **`https` only.** A webhook URL is a bearer credential — anyone
+  holding it can post as you — so sending one over plaintext would
+  hand it to every hop on the path.
+- **Errors name the host, never the URL.** The path segment is the
+  secret, and failure text reaches both the node log and the tool
+  result the model reads.
+
+Attribution is stamped from the turn's identity and there is no
+parameter for it: marketing cannot send you something that reads as
+though engineering said it.
+
 ## Webhooks (inbound)
 
 ```toml

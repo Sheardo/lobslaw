@@ -58,6 +58,7 @@ const sidebars: SidebarsConfig = {
       label: "Features",
       items: [
         "features/bots",
+        "features/console",
         "features/skills",
         "features/clawhub",
         "features/binary-install",

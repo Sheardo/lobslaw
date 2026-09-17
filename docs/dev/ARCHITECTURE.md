@@ -19,9 +19,9 @@ flowchart TB
   end
 
   subgraph Team["Bots (Phase 12)"]
-    Runner["compute.TurnRunner<br/>the ONE headless turn entry"]
+    Runner["compute.TurnRunner<br/>the ONE headless turn entry<br/>persists the transcript, can ask"]
     BotReg["memory.BotService<br/>BotRecord + CAS"]
-    InboxSvc["memory.InboxService<br/>durable queue, LOG_OP_CLAIM"]
+    InboxSvc["memory.InboxService<br/>durable queue, LOG_OP_CLAIM<br/>records tools, tokens, session"]
     Drain["node inbox drain<br/>woken by the FSM callback"]
   end
 
@@ -30,7 +30,7 @@ flowchart TB
     Resolver["compute.Resolver<br/>pick provider chain"]
     Promptgen["promptgen<br/>build system prompt"]
     Budget["compute.Budget<br/>turn spend/tools"]
-    LLMClient["compute.LLMClient<br/>OpenAI-compat /chat/completions"]
+    LLMClient["compute.LLMClient<br/>OpenAI-compat /chat/completions<br/>streams when OnDelta is set"]
   end
 
   subgraph Compute["Tool execution (Phase 4)"]

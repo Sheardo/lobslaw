@@ -105,9 +105,84 @@ enabled = true
 
 Then open `http://127.0.0.1:8080/`.
 
-It gives you the whole team on one page: what each bot is working on,
-what it finished, what failed and why. You can assign work, retry
-something, edit a brief, or chat to the coordinator.
+## Teams
+
+Bots belong to a team, and you name it. Click the title on the desk and
+type; the switcher above the roster moves between teams and creates
+new ones.
+
+Each team has its own **coordinator** — the one that answers when you
+message on Telegram or Slack, and the one that hands work to the rest
+of that team. That is the reason teams exist rather than tags: "who
+replies when I message" needs an answer per team, not one answer
+globally.
+
+A bot is in exactly one team. Move it from its Settings panel. The
+coordinator is the exception and cannot be moved: it is what an
+inbound message reaches, and moving it would leave that team
+unreachable.
+
+Upgrading needs nothing: existing bots land in a default team named
+after your assistant, which you can rename immediately.
+
+## The console
+
+It opens on your team's desk. On the left, the
+coordinator with everyone who reports to it, each showing its remit,
+whether it is working or idle, and who it is allowed to brief. On the
+right, what the team has actually been doing, newest first.
+
+An entry marked `← Coordinator` is work one bot handed to another.
+That is the coordinator doing its job: you asked for one thing, it
+broke it up and gave the pieces to the right people. You can follow
+the same handoffs inside a bot's own thread, where work it delegated
+appears indented underneath the task that prompted it.
+
+Under each reply is a **receipt**: the tools that turn actually ran,
+and what it cost. It is there because a bot's account of its own work
+is a claim, not a record — one coordinator turn reported setting a
+reminder it had never set, and only the receipt would have caught it.
+Each finished queue item links to the full transcript of the turn.
+
+Replies stream in as they are written rather than landing in one block
+at the end, and a turn that needs your approval asks **in the console**
+with Approve and Deny, instead of telling you to go and find another
+channel.
+
+A bot's Settings panel also shows its **routines** — what it has
+scheduled for itself — and **what it remembers**, read-only. The
+routines list earns its place mainly by making an absence visible: a
+routine that was never created looks exactly like one that was, until
+you have somewhere to look.
+
+Anything that failed is pulled to the top under **Needs you**, with
+the error and a retry button. Click any bot to open its conversation,
+assign it work, edit its brief, or chat to it directly — you are not
+required to go through the coordinator.
+
+### More than one person
+
+Give each person their own login in `[[user]]`:
+
+```toml
+[[user]]
+id                = "james"
+display_name      = "James"
+roles             = ["operator"]
+console_token_ref = "env:JAMES_CONSOLE_TOKEN"
+```
+
+Their session then carries *them* — `user:james`, plus the roles you
+declared — so the policy engine decides against who is asking, and the
+console shows who is signed in. Those roles were already declarable
+and previously had nowhere to apply, because every console session was
+the same anonymous subject.
+
+A person without `console_token_ref` cannot sign in. That is
+deliberate: `[[user]]` is also where a Telegram chat id is bound, and
+binding a chat must not hand out a login that can rewrite what every
+bot does. The single shared `[gateway.ui] token_ref` still works and
+stays anonymous.
 
 ### Signing in from anywhere but this machine
 

@@ -204,6 +204,36 @@ Adding to it is fine — it just has to be a decision somebody wrote
 down. The failure mode it prevents is not one anybody notices: a fourth
 copy works perfectly and drifts later, one forgotten budget at a time.
 
+### It also writes the transcript, and can ask
+
+Two things live here because there is exactly one of it.
+
+**Sessions.** `SessionWriter` persists the finished turn and returns
+the id, which the inbox item records — and reads the conversation back
+before the turn runs. Reading matters as much as writing: persisting a
+transcript nothing loads gives a bot that answers every message as
+though it were the first. The console showed that as a thread
+vanishing on refresh; the worse half was invisible, because the model
+had no history either. Headless turns wrote no
+transcript at all: only the channel path stored a conversation, so a
+turn started from Telegram was recorded and the identical turn started
+by the inbox drain was not. Every "what did the bot actually do" link
+in the console pointed at nothing. The proto field, the route and the
+UI all existed — the write did not. A failed write is logged and the
+turn still returns: the work has happened and been paid for, so
+failing it would retry completed work to fix a logging problem.
+
+**Confirmations.** `TurnRequest.Confirm` is how a turn asks a human.
+Nil means fail closed, which is what every headless caller did
+unconditionally — a turn that reached a guarded tool stopped and
+reported that it had nobody to ask, even with the operator on the
+other end of an open stream. The console supplies one; a 3am routine
+does not. An error from it abandons the turn: a broken prompt channel
+is an unanswered question, never consent.
+
+Both are on the runner rather than at the call sites so a future
+caller cannot forget them the way each existing one did.
+
 ### Tool reach is structural
 
 ```go
@@ -375,11 +405,37 @@ Routine output goes to the **inbox** rather than to `notify`, so a
 daily cluster check accumulates a readable history instead of a stream
 of pings, and `notify` stays reserved for things that need you now.
 
+### Webhooks, and a synthetic channel that broke them
+
+`WebhookSink` posts `{"text": ...}` to an incoming-webhook URL, which
+is what Slack and everything that copied it accept. It exists because
+the alternative was a whole Slack app — bot token, socket mode, event
+subscription — for "deploy finished". `CallbackSink` sends
+`{"body": ...}` and is for machine receivers; the two are not
+interchangeable. The URL is a bearer credential, so the sink refuses
+plaintext and its errors name the host and never the path.
+
+Its hosts come from the same `[[user]].channels` block as callback
+hosts and share the egress allowlist. They did not at first, and a
+correctly-configured webhook produced `Request rejected by proxy` — a
+message naming neither the allowlist it failed nor the fact that one
+exists.
+
+Persisting bot transcripts then broke this a second way. Those turns
+gained a channel name, `turn.ChannelBot`, where they had none, and
+`notify` routes an originating channel back to itself — so "tell the
+user however they asked to be told" silently became "reply into a
+transcript", failing with `no sink registered for channel "bot"`.
+`Identity.IsHumanChannel` is the distinction that was missing: a
+synthetic channel names a transcript, not a place a person is waiting.
+Nothing registers a sink for it and nothing should.
+
 ---
 
 ## 8 · Web console
 
-React 19 + Chakra UI v3, built by Vite straight into
+React 19 + hand-written CSS (Chakra was tried and removed), built by
+Vite straight into
 `internal/gateway/ui/dist` and `go:embed`'d. Served by the gateway's
 own listener — one binary, one port, no CORS, and no way for a front
 end and an API to drift apart in version.
@@ -442,6 +498,39 @@ it: without that a clean checkout has no `dist/` at all, which makes
 
 ---
 
+## 9 · Streaming, and the receipt
+
+**Streaming is a side-channel, not a second code path.** When a caller
+sets `OnDelta`, `LLMClient.Chat` reads the response incrementally,
+hands out text as it arrives, and assembles the *same*
+`*ChatResponse`. The tool loop, the failover chain, budget accounting
+and tool reassembly are untouched and cannot tell which transport ran.
+The obvious alternative — a streaming variant of the whole loop —
+would have meant a second copy of all four.
+
+Two things that would have broken quietly:
+
+- `stream_options.include_usage` must be set or a streamed response
+  carries no usage block, and every streamed turn silently costs zero
+  while the budget continues to look like it is counting.
+- Tool calls arrive as fragments keyed by index, the name usually in
+  the first and the arguments dribbled across the rest. Appending
+  instead of keying produces JSON that fails to parse with no clue
+  why; two interleaved calls is the case that catches it.
+
+**The receipt** is `ToolsUsed` / `TokensUsed` / `CostUSD` on the inbox
+item, and the same three on the chat reply. A bot's account of its own
+work is a claim; this is the record. The two are not always the same:
+a coordinator turn reported setting a reminder, `schedule_create` was
+called zero times, and nothing in the system contradicted it. The SSE
+already carried a tool-call *count* — a count says a turn was busy,
+only the names say whether the thing it claims it did is among them.
+
+`InvokedToolNames` is shared with the inbox drain's no-summary
+fallback, so the two cannot disagree about what ran.
+
+---
+
 ## Deliberate limits
 
 - **No per-bot channel identity.** One token, attribution in the body.
@@ -453,8 +542,8 @@ it: without that a clean checkout has no `dist/` at all, which makes
 - **No per-bot notification rate limiting.** Routing routine output to
   the inbox is the mitigation; revisit the first time somebody mutes
   the coordinator.
-- **No multi-turn history in the console's chat.** Each message is its
-  own turn; the bot does not see the previous one. Conversations filed
-  under the `bot` channel are readable through
-  `/v1/bots/{id}/sessions`, but the console's chat box does not replay
-  them yet.
+- **Approximate placement of replayed history.** SessionMessage has a
+  sequence number and no timestamp, so a stored message cannot be
+  ordered against a queue item's clock. The console anchors history to
+  the session's `updated_at`; exact interleaving needs a timestamp on
+  the record.

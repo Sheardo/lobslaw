@@ -129,3 +129,49 @@ To add a new sink, implement the interface and register it from `wire_gateway.go
 - `internal/gateway/notify_sinks.go` — TelegramSink, RESTSink
 - `internal/compute/builtin_notify.go` — agent-facing builtin
 - `internal/memory/user_prefs.go` — user → channel binding lookup
+
+## Who sent it, and who asked
+
+Two different facts, both stamped from the turn and never from a tool
+argument — a sender or requester the model can name is one it can
+invent.
+
+**Who sent it** is the bot. On a channel that can show it, Slack does:
+the message arrives under that bot's own display name and icon. On one
+that cannot, it is a prefix — `DevOps: deploy finished`.
+
+**Who asked** is the person the work traces back to, and it appears
+only when that is somebody other than the reader:
+
+```
+Weekly report: all queues clear, 4 bots active.
+
+(Sam asked me to send you this)
+```
+
+This matters as soon as more than one person can talk to the same
+team. "Prepare a report and send it to James" is an ordinary request,
+and without provenance James receives a message from a bot with no way
+to tell whether he asked for it, a colleague did, or it arrived
+unprompted. The last reading is the dangerous one: anybody able to
+talk to a bot could otherwise make it send messages that read as
+though the system originated them.
+
+### It survives delegation
+
+The requester is carried on the queue item, so it outlives the hop
+that would otherwise destroy it:
+
+```
+Sam → coordinator          turn runs as Sam, requester = Sam
+  → inbox_post to research item records requested_by = user:sam
+    → research works it    turn runs as bot:research, requester still Sam
+      → notify james       "(Sam asked me to send you this)"
+```
+
+`sender` on a queue item says who *put it there*, which after one hop
+is another bot. `requested_by` stays the human at the start of the
+chain.
+
+Nothing is added when nobody asked — a routine firing at 3am has no
+requester, and inventing one would be worse than having none.
