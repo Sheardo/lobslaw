@@ -121,7 +121,11 @@ the browser, message Telegram, and reach somebody who had never heard
 of them.
 
 The resolution now happens in one place rather than at each channel,
-so a channel added later cannot forget it.
+so a channel added later cannot forget it. Both inbound paths are
+covered by tests that drive the real webhook and Socket Mode handlers
+and fail if a turn stops asking which bot it is — the failure this
+guards against is silent, because the turn still answers, just as
+somebody who has never heard of your team.
 
 You always talk to the coordinator; it delegates and the specialists
 report back. There is no way to address a specialist directly from a
