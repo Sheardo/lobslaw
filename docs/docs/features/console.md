@@ -44,6 +44,8 @@ make web && make build
 
 ## Teams
 
+![The team switcher, with bot counts per team](/img/console/teams.png)
+
 Bots belong to a **team**, and you name it. Click the title on the
 desk and type; the switcher above the roster moves between teams and
 creates new ones.
@@ -66,6 +68,8 @@ upgrade is one record appearing, not every record being rewritten.
 
 ## The desk
 
+![The desk: the team, their state, and what they have been doing](/img/console/desk.png)
+
 The landing view, in three parts.
 
 **Needs you.** Anything that failed, pulled to the top with the error
@@ -83,10 +87,14 @@ coordinator breaking your ask into pieces and giving them out.
 
 ## Talking to a bot
 
+![A bot's thread: queue items, a handoff, the reply and its receipt](/img/console/room.png)
+
 Click anyone to open their room. Replies stream in as they are
 written; a turn against a real model routinely takes thirty to a
 hundred seconds, so the indicator names who is working and counts
 elapsed time rather than animating silently.
+
+![A reply arriving, with the elapsed-time indicator](/img/console/streaming.png)
 
 A bot's own thread interleaves three things in the order they
 happened: what you said, work in its queue, and work it handed to
@@ -115,6 +123,8 @@ if the prompt cannot be raised the turn stops and says so.
 
 ### Settings, routines and memory
 
+![A bot's settings, with its routines and what it remembers](/img/console/settings.png)
+
 Each bot's Settings panel holds its brief, its tool allowlist, who it
 may message — and two read-only views:
 
@@ -127,6 +137,8 @@ may message — and two read-only views:
   rewrite the evidence would be a worse answer to it.
 
 ## From your phone
+
+![The console on a phone](/img/console/mobile.png)
 
 The console is built for a phone as well as a desktop: the sidebar
 becomes a drawer, the layout goes single-column, and the composer
