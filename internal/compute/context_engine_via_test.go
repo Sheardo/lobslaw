@@ -107,7 +107,7 @@ func TestRecallBoundsRenderedProvenance(t *testing.T) {
 
 func TestInvokedToolNamesIsSortedAndDeduplicated(t *testing.T) {
 	t.Parallel()
-	got := invokedToolNames([]ToolInvocation{
+	got := InvokedToolNames([]ToolInvocation{
 		{ToolName: "shell_run"},
 		{ToolName: "kitchenowl_list"},
 		{ToolName: "shell_run"},
@@ -126,7 +126,7 @@ func TestInvokedToolNamesIsSortedAndDeduplicated(t *testing.T) {
 	// A turn that called nothing yields nil rather than an empty
 	// slice, so the proto field stays absent instead of present-and-
 	// empty.
-	if invokedToolNames(nil) != nil {
+	if InvokedToolNames(nil) != nil {
 		t.Error("a turn with no tool calls should produce nil")
 	}
 }

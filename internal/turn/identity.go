@@ -82,8 +82,27 @@ type Identity struct {
 	// happening in — "telegram" and a chat id, say. Both empty for
 	// turns with no channel origin: the scheduler, commitment fires,
 	// research workers.
+	//
+	// Channel may also be SYNTHETIC — see ChannelBot. A synthetic
+	// channel names a transcript, not a place a person is waiting, and
+	// the difference matters to anything that tries to reply on it.
 	Channel   string
 	ChannelID string
+
+	// RequestedBy is the person this work traces back to, when that is
+	// not the caller of this turn.
+	//
+	// It exists because delegation loses the requester. "Prepare a
+	// report and send it to James" reaches the coordinator as Sam,
+	// becomes a queue item for research, and by the time research
+	// sends anything the turn is running as bot:research — Sam is
+	// gone, and James receives a message with no idea who asked for
+	// it. Carried through the hop so provenance survives the thing
+	// that destroys it.
+	//
+	// Empty for work nobody asked for: a routine firing at 3am has no
+	// requester, and inventing one would be worse than having none.
+	RequestedBy string
 
 	// Shared marks a conversation MORE THAN ONE PERSON CAN READ — a
 	// Slack channel or group DM, a Telegram group. False for a 1:1 DM
@@ -181,4 +200,33 @@ func IdentityFrom(ctx context.Context) (Identity, bool) {
 type SessionKey struct {
 	Channel   string
 	ChannelID string
+}
+
+// ChannelBot is the synthetic channel a bot's own working transcripts
+// are filed under.
+//
+// Synthetic because there is nobody on the other end of it: it exists
+// so an inbox turn's conversation can be stored and linked to, not so
+// anything can be delivered there. Nothing registers a sink for it and
+// nothing should.
+//
+// Named here rather than in the gateway because the distinction is
+// about identity, and the code that most needs it — notify, deciding
+// whether to reply on the originating channel or broadcast — cannot
+// import the gateway.
+const ChannelBot = "bot"
+
+// IsHumanChannel reports whether this turn arrived somewhere a person
+// could be waiting for a reply.
+//
+// False for a synthetic channel and for no channel at all. The two
+// cases behave identically on purpose: a 3am routine and an inbox item
+// both have an audience of nobody, and before bot transcripts were
+// persisted they were indistinguishable because both had an empty
+// Channel. Giving inbox turns a channel name is what made this
+// necessary — it silently turned "notify whoever asked to be told"
+// into "reply into a transcript", and notify started failing with
+// "no sink registered for channel \"bot\"".
+func (i Identity) IsHumanChannel() bool {
+	return i.Channel != "" && i.Channel != ChannelBot
 }

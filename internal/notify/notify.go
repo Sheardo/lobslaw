@@ -55,6 +55,24 @@ type Notification struct {
 	// argument — a bot that could name its own sender could send you
 	// something that looks like it came from another one.
 	SenderBot string
+
+	// RequestedBy is the principal who asked for this — the person
+	// whose turn it was, when that is somebody other than the
+	// recipient.
+	//
+	// Needed the moment more than one person can talk to the same
+	// team. "Prepare a report and send it to James" is a perfectly
+	// ordinary request, and without provenance James receives a
+	// message from a bot with no way to tell whether he asked for it,
+	// whether a colleague did, or whether it arrived unprompted. That
+	// last reading is the dangerous one: anybody who can talk to a bot
+	// could otherwise make it send messages that read as though the
+	// system originated them.
+	//
+	// Stamped from turn identity like SenderBot, and for the same
+	// reason: a requester the model could name is a requester the
+	// model could invent.
+	RequestedBy string
 }
 
 // Sink is one channel's delivery adapter. Each gateway channel
@@ -62,6 +80,62 @@ type Notification struct {
 type Sink interface {
 	ChannelType() string
 	Deliver(ctx context.Context, address, body string) error
+}
+
+// SenderAware is an optional Sink capability: a channel that can show
+// WHO a message is from gets told, and renders it however that channel
+// does identity.
+//
+// Optional rather than part of Sink so existing sinks are unaffected.
+// The distinction matters because attribution is otherwise a text
+// prefix — "devops: deploy finished" — and a channel that can put the
+// name in the message header would then show it twice.
+type SenderAware interface {
+	DeliverFrom(ctx context.Context, address, body, senderBot string) error
+}
+
+// deliverTo sends through a sink, giving it the sender if it can use
+// one and a prefixed body if it cannot.
+//
+// Provenance goes in the BODY either way. A channel that can render a
+// sender renders the bot — "DevOps" in the message header — and the
+// requester is a different fact that no channel has a slot for.
+func deliverTo(ctx context.Context, sink Sink, address, body, senderBot, requestedBy string) error {
+	body = attributeRequest(body, requestedBy)
+	if aware, ok := sink.(SenderAware); ok {
+		return aware.DeliverFrom(ctx, address, body, senderBot)
+	}
+	return sink.Deliver(ctx, address, attributeSender(senderBot, body))
+}
+
+// describeRequester turns a requesting principal into a name worth
+// printing, or empty when there is nothing to say.
+//
+// Empty when the requester IS the recipient — you asked for it, so
+// being told you asked for it is noise — and when nothing was
+// recorded, which is every self-generated notification: a routine
+// firing at 3am was requested by nobody.
+func (s *Service) describeRequester(ctx context.Context, requestedBy, recipient string) string {
+	requestedBy = strings.TrimSpace(requestedBy)
+	if requestedBy == "" {
+		return ""
+	}
+	// Principals arrive as "user:sam"; the recipient id is bare.
+	id := strings.TrimPrefix(requestedBy, "user:")
+	if strings.EqualFold(id, recipient) {
+		return ""
+	}
+	// A display name if we have one. Best-effort: a requester with no
+	// prefs record is still worth naming by id, and failing the whole
+	// notification over a missing display name would be absurd.
+	if s.prefs != nil {
+		if p, err := s.prefs.Get(ctx, id); err == nil && p != nil {
+			if name := strings.TrimSpace(p.GetDisplayName()); name != "" {
+				return name
+			}
+		}
+	}
+	return id
 }
 
 // PrefsLookup is the subset of memory.UserPrefsService the notify
@@ -145,7 +219,6 @@ func (s *Service) Send(ctx context.Context, n Notification) error {
 	if strings.TrimSpace(n.Body) == "" {
 		return errors.New("notify: body required")
 	}
-	n.Body = attributeSender(n.SenderBot, n.Body)
 	if n.ExpiresAt.IsZero() {
 		n.ExpiresAt = time.Now().Add(DefaultTTL)
 	}
@@ -159,6 +232,10 @@ func (s *Service) Send(ctx context.Context, n Notification) error {
 	if err != nil {
 		return err
 	}
+
+	// Resolve the requester to something a person recognises, and drop
+	// it when they are the recipient.
+	n.RequestedBy = s.describeRequester(ctx, n.RequestedBy, n.UserID)
 
 	if n.OriginatorChannel != "" {
 		return s.deliverOriginator(ctx, n, prefs)
@@ -198,7 +275,13 @@ func (s *Service) deliverOriginator(ctx context.Context, n Notification, prefs *
 	if sink == nil {
 		return fmt.Errorf("notify: no sink registered for channel %q", n.OriginatorChannel)
 	}
-	return sink.Deliver(ctx, addr, n.Body)
+	if err := deliverTo(ctx, sink, addr, n.Body, n.SenderBot, n.RequestedBy); err != nil {
+		return err
+	}
+	s.logger.Info("notify: delivered",
+		"user", n.UserID, "channel", n.OriginatorChannel,
+		"from", n.SenderBot, "requested_by", n.RequestedBy)
+	return nil
 }
 
 // broadcast handles the self-generated path: deliver on every
@@ -218,11 +301,18 @@ func (s *Service) broadcast(ctx context.Context, n Notification, prefs *lobslawv
 				"user", n.UserID, "channel", c.Type)
 			continue
 		}
-		if err := sink.Deliver(ctx, c.Address, n.Body); err != nil {
+		if err := deliverTo(ctx, sink, c.Address, n.Body, n.SenderBot, n.RequestedBy); err != nil {
 			s.logger.Warn("notify: sink delivery failed",
 				"user", n.UserID, "channel", c.Type, "err", err)
 			continue
 		}
+		// Success was silent, so "did it actually send?" could only be
+		// answered by asking the person whether their phone buzzed.
+		// With several channels bound and some of them failing, the
+		// log showed only the failures and read like total failure.
+		s.logger.Info("notify: delivered",
+			"user", n.UserID, "channel", c.Type,
+			"from", n.SenderBot, "requested_by", n.RequestedBy)
 		delivered++
 	}
 	if delivered == 0 {
@@ -263,4 +353,19 @@ func attributeSender(sender, body string) string {
 		return body
 	}
 	return sender + ": " + body
+}
+
+// attributeRequest appends who asked, when that is somebody other than
+// the person reading it.
+//
+// Appended rather than prefixed: the message is the point and the
+// provenance is the footnote. Omitted entirely when the requester is
+// the recipient, because "asked by you" on something you asked for is
+// noise that trains people to stop reading the line that matters.
+func attributeRequest(body, requestedBy string) string {
+	requestedBy = strings.TrimSpace(requestedBy)
+	if requestedBy == "" {
+		return body
+	}
+	return body + "\n\n(" + requestedBy + " asked me to send you this)"
 }

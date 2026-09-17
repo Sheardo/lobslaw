@@ -42,7 +42,8 @@ type botJSON struct {
 	DisplayName   string   `json:"display_name"`
 	Description   string   `json:"description"`
 	Instructions  string   `json:"instructions"`
-	IsCoordinator bool     `json:"is_chief"`
+	IsCoordinator bool     `json:"is_coordinator"`
+	GroupID       string   `json:"group_id"`
 	Enabled       bool     `json:"enabled"`
 	Tools         []string `json:"tools"`
 	MayMessage    []string `json:"may_message"`
@@ -65,8 +66,14 @@ type inboxItemJSON struct {
 	Attempts      int32  `json:"attempts"`
 	CorrelationID string `json:"correlation_id,omitempty"`
 	SessionID     string `json:"session_id,omitempty"`
-	CreatedAt     string `json:"created_at,omitempty"`
-	CompletedAt   string `json:"completed_at,omitempty"`
+	// Who asked for this, as against who put it in the queue.
+	RequestedBy string `json:"requested_by,omitempty"`
+	// What the turn actually did, as against what its result claims.
+	ToolsUsed   []string `json:"tools_used,omitempty"`
+	TokensUsed  uint64   `json:"tokens_used,omitempty"`
+	CostUSD     float64  `json:"cost_usd,omitempty"`
+	CreatedAt   string   `json:"created_at,omitempty"`
+	CompletedAt string   `json:"completed_at,omitempty"`
 }
 
 func botToJSON(rec *lobslawv1.BotRecord) botJSON {
@@ -76,10 +83,13 @@ func botToJSON(rec *lobslawv1.BotRecord) botJSON {
 		Description:   rec.GetDescription(),
 		Instructions:  rec.GetInstructions(),
 		IsCoordinator: rec.GetIsCoordinator(),
-		Enabled:       rec.GetEnabled(),
-		Tools:         rec.GetTools(),
-		MayMessage:    rec.GetMayMessage(),
-		Revision:      rec.GetRevision(),
+		// Resolved, never raw: an empty group_id means the default,
+		// and a console that had to know that would get it wrong.
+		GroupID:    groupOfBot(rec),
+		Enabled:    rec.GetEnabled(),
+		Tools:      rec.GetTools(),
+		MayMessage: rec.GetMayMessage(),
+		Revision:   rec.GetRevision(),
 	}
 	if ts := rec.GetCreatedAt(); ts != nil {
 		out.CreatedAt = ts.AsTime().UTC().Format(rfc3339)
@@ -112,6 +122,10 @@ func inboxToJSON(item *lobslawv1.BotInboxItem, withBody bool) inboxItemJSON {
 		Attempts:      item.GetAttempts(),
 		CorrelationID: item.GetCorrelationId(),
 		SessionID:     item.GetSessionId(),
+		RequestedBy:   item.GetRequestedBy(),
+		ToolsUsed:     item.GetToolsUsed(),
+		TokensUsed:    item.GetTokensUsed(),
+		CostUSD:       item.GetCostUsd(),
 	}
 	if withBody {
 		out.Body = item.GetBody()
@@ -155,6 +169,10 @@ func (s *Server) handleBots(w http.ResponseWriter, r *http.Request) {
 		s.handleBotChat(w, r, strings.TrimSuffix(rest, "/messages"))
 	case strings.HasSuffix(rest, "/sessions"):
 		s.handleBotSessions(w, r, strings.TrimSuffix(rest, "/sessions"))
+	case strings.HasSuffix(rest, "/routines"):
+		s.handleBotRoutines(w, r, strings.TrimSuffix(rest, "/routines"))
+	case strings.HasSuffix(rest, "/memory"):
+		s.handleBotMemory(w, r, strings.TrimSuffix(rest, "/memory"))
 	default:
 		s.handleBotItem(w, r, rest)
 	}
@@ -236,6 +254,7 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 		Tools        *[]string `json:"tools"`
 		MayMessage   *[]string `json:"may_message"`
 		Enabled      *bool     `json:"enabled"`
+		GroupID      *string   `json:"group_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
@@ -264,11 +283,25 @@ func (s *Server) patchBot(w http.ResponseWriter, r *http.Request, id string) {
 	if body.Enabled != nil {
 		current.Enabled = *body.Enabled
 	}
+	if body.GroupID != nil {
+		// Moving a bot between teams is an ordinary edit. The
+		// coordinator is the exception: it is what a channel reaches
+		// for its group, so moving it would leave that team
+		// unreachable and the next inbound message unanswered.
+		if current.GetIsCoordinator() {
+			s.jsonErr(w, http.StatusBadRequest,
+				"the coordinator belongs to its own team and cannot be moved; "+
+					"make another bot the coordinator there first")
+			return
+		}
+		current.GroupId = *body.GroupID
+	}
 	updated, err := s.cfg.Bots.Put(r.Context(), current, current.GetRevision())
 	if err != nil {
 		s.jsonErr(w, botStatusFor(err), err.Error())
 		return
 	}
+	s.auditRegistry(r, "bot:update", id, updated.GetDisplayName())
 	respondJSON(w, http.StatusOK, botToJSON(updated))
 }
 
@@ -319,16 +352,24 @@ func (s *Server) handleBotInbox(w http.ResponseWriter, r *http.Request, botID st
 			s.jsonErr(w, http.StatusBadRequest, "unknown kind "+strconv.Quote(body.Kind))
 			return
 		}
+		// Who assigned this, from the session rather than the body:
+		// the browser is not the authority on who is asking. Now that
+		// the console can tell people apart, an operator has a name,
+		// and it follows the work — so a report this produces can say
+		// who asked for it even after it has changed hands.
+		requester := "operator"
+		if claims, aerr := s.authenticate(r); aerr == nil && claims != nil && claims.UserID != "" {
+			requester = claims.UserID
+		}
 		item, err := s.cfg.Inbox.Post(r.Context(), &lobslawv1.BotInboxItem{
 			Recipient: botID,
 			// An operator assigning work from the GUI is the sender.
-			// Stamped here, not read from the body: the browser is not
-			// the authority on who is asking.
-			Sender:   "operator",
-			Kind:     kind,
-			Subject:  body.Subject,
-			Body:     body.Body,
-			Priority: body.Priority,
+			Sender:      "operator",
+			RequestedBy: requester,
+			Kind:        kind,
+			Subject:     body.Subject,
+			Body:        body.Body,
+			Priority:    body.Priority,
 		})
 		if err != nil {
 			s.jsonErr(w, inboxStatusFor(err), err.Error())

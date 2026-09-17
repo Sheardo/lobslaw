@@ -242,3 +242,41 @@ func TestBudgetSmokeWithRealCostRecord(t *testing.T) {
 		t.Errorf("state.SpendUSD should be ~0.02; got %f", state.SpendUSD)
 	}
 }
+
+// Tokens accumulate only for token-billed calls, survive a resume, and
+// never move backwards.
+//
+// The forward-only rule is the load-bearing part: Restore exists for a
+// turn resuming after a confirmation, and a counter that could be
+// restored DOWNWARD would make confirmation a way to launder usage —
+// pause near the cap, resume with a smaller figure, spend it twice.
+func TestBudgetTokenAccounting(t *testing.T) {
+	t.Parallel()
+
+	b, err := NewTurnBudget(BudgetCaps{})
+	if err != nil {
+		t.Fatalf("NewTurnBudget: %v", err)
+	}
+
+	b.RecordCostUSD(CostRecord{Usage: TokenUsage(Usage{TotalTokens: 120}, 0.01)})
+	b.RecordCostUSD(CostRecord{Usage: TokenUsage(Usage{TotalTokens: 80}, 0.01)})
+	if got := b.State().Tokens; got != 200 {
+		t.Errorf("after two token calls Tokens = %d, want 200", got)
+	}
+
+	// A non-token charge has a Quantity too. Counting it would produce
+	// a "token" total that is part tokens and part seconds of video.
+	b.RecordCostUSD(CostRecord{Usage: ModalUsage{Unit: UnitVideoSeconds, Quantity: 42}})
+	if got := b.State().Tokens; got != 200 {
+		t.Errorf("a video-seconds-billed call changed the token count to %d, want 200", got)
+	}
+
+	b.Restore(BudgetState{Tokens: 500})
+	if got := b.State().Tokens; got != 500 {
+		t.Errorf("Restore did not carry the higher figure: %d, want 500", got)
+	}
+	b.Restore(BudgetState{Tokens: 1})
+	if got := b.State().Tokens; got != 500 {
+		t.Errorf("Restore moved the counter BACKWARDS to %d; usage can be laundered", got)
+	}
+}

@@ -32,7 +32,7 @@ type ACLInputs struct {
 	// a session aimed anywhere else is refused by the proxy.
 	Remotes []config.RemoteConfig
 
-	// CallbackHosts are the hosts of every operator-declared callback
+	// CallbackHosts are the hosts of every operator-declared outbound
 	// address in [[user]].channels. Derived, never written by hand.
 	//
 	// A callback aimed at something on the local network — the obvious
@@ -168,6 +168,11 @@ func Build(in ACLInputs) Rules {
 	// proxy rather than by nothing.
 	if len(in.CallbackHosts) > 0 {
 		rules.Roles["gateway/callback"] = in.CallbackHosts
+		// The webhook sink dials the same operator-declared hosts and
+		// is derived from the same config block, so it gets the same
+		// allowlist. A separate role with no hosts would deny every
+		// request while looking configured.
+		rules.Roles["gateway/webhook"] = in.CallbackHosts
 	}
 
 	for _, ch := range in.Channels {

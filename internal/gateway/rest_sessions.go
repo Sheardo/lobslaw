@@ -88,11 +88,18 @@ const botChannel = "bot"
 
 // belongsToBot reports whether a channel id is one of this bot's.
 //
-// Prefix match on "<bot>:" rather than HasPrefix(id, bot), because
+// Prefix match on a separator rather than HasPrefix(id, bot), because
 // "eng" would otherwise claim "engineering"'s conversations — the kind
 // of leak that only shows up once somebody names two bots similarly.
+//
+// The separator is "." and not ":" because a session id is built as
+// channel + ":" + channelID and memory.sessionID REFUSES a channelID
+// containing a colon. The ':' form this function used to check was
+// therefore unreachable: no such channel id could ever be stored. It
+// went unnoticed for as long as nothing wrote a sub-scoped id at all,
+// which is to say for as long as headless turns wrote no session.
 func belongsToBot(channelID, botID string) bool {
-	return channelID == botID || strings.HasPrefix(channelID, botID+":")
+	return channelID == botID || strings.HasPrefix(channelID, botID+".")
 }
 
 // handleSession serves GET /v1/sessions/{id} — one transcript.

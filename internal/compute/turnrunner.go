@@ -157,10 +157,40 @@ var ErrBotDisabled = errors.New("turnrunner: bot is disabled")
 // wants to run a turn — the inbox drain, ask_bot — is a caller here
 // and not a fourth copy.
 type TurnRunner struct {
-	agent TurnLoop
-	bots  BotResolver
-	caps  BudgetCaps
-	log   *slog.Logger
+	agent    TurnLoop
+	bots     BotResolver
+	caps     BudgetCaps
+	sessions SessionWriter
+	log      *slog.Logger
+}
+
+// SessionWriter persists a finished headless turn.
+//
+// Headless turns wrote no transcript at all. The console carried a
+// deep-link from every queue item to "what the bot actually did" and
+// every one of them pointed at nothing, because the only code that
+// persisted a conversation lived on the channel path — so a turn you
+// started from Telegram was recorded and the identical turn started by
+// the inbox was not.
+//
+// Declared here, on the one place every headless turn passes through,
+// so a future caller cannot forget it the way each existing one did.
+type SessionWriter interface {
+	// AppendTurn stores msgs and returns the id of the session they
+	// landed in, for the caller to record alongside the work.
+	AppendTurn(ctx context.Context, channel, channelID, turnID string, msgs []Message) (string, error)
+
+	// LoadTurns returns the conversation so far for the same address,
+	// capped at n verbatim messages, plus the summary standing in for
+	// anything older.
+	//
+	// Reading matters as much as writing: persisting a transcript
+	// nothing loads gives you a bot that answers every message as
+	// though it were the first. The console showed that as a
+	// conversation that vanished on refresh, but the more serious half
+	// was invisible — the MODEL had no history either, so a follow-up
+	// question landed with no idea what it followed.
+	LoadTurns(ctx context.Context, channel, channelID string, n int) (history []Message, summary string, err error)
 }
 
 // TurnLoop is the agent loop the runner drives. *Agent implements it.
@@ -172,20 +202,33 @@ type TurnRunner struct {
 // LLM to reach them tends not to get written.
 type TurnLoop interface {
 	RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) (*ProcessMessageResponse, error)
+	// ResumeFromConfirmation continues a turn that stopped to ask, once
+	// somebody has answered. Part of the loop rather than a separate
+	// capability because a runner that can start a turn and not finish
+	// one can only ever fail closed.
+	ResumeFromConfirmation(ctx context.Context, req ProcessMessageRequest, prior []Message) (*ProcessMessageResponse, error)
 }
 
 // NewTurnRunner constructs the runner. A nil resolver is usable and
 // means every turn runs as the node's default assistant, which is
 // exactly the behaviour before bots existed.
-func NewTurnRunner(agent TurnLoop, bots BotResolver, caps BudgetCaps, log *slog.Logger) (*TurnRunner, error) {
+func NewTurnRunner(agent TurnLoop, bots BotResolver, caps BudgetCaps, sessions SessionWriter, log *slog.Logger) (*TurnRunner, error) {
 	if agent == nil {
 		return nil, errors.New("turnrunner: agent required")
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &TurnRunner{agent: agent, bots: bots, caps: caps, log: log}, nil
+	return &TurnRunner{agent: agent, bots: bots, caps: caps, sessions: sessions, log: log}, nil
 }
+
+// defaultHistoryTurns bounds how much of a conversation a headless
+// turn replays.
+//
+// Bounded because the context budget is: an unbounded replay makes the
+// oldest message in a long thread silently evict the system prompt.
+// The summary covers anything past it.
+const defaultHistoryTurns = 40
 
 // TurnRequest is one unit of headless work.
 type TurnRequest struct {
@@ -219,6 +262,27 @@ type TurnRequest struct {
 	// than a fresh one. Delegation passes the parent's here so a tree
 	// of turns is bounded by one number — see TurnBudget.Sub.
 	Reservation *TurnBudget
+
+	// RequestedBy is the person this work traces back to, carried
+	// across a delegation hop. See turn.Identity.RequestedBy.
+	RequestedBy string
+
+	// OnDelta streams assistant text to whoever started this turn.
+	// Nil for work nobody is watching, which is most of it.
+	OnDelta func(string)
+
+	// Confirm is how this turn asks a human for permission.
+	//
+	// Nil means fail closed, which is what every headless caller did
+	// unconditionally: a turn that reached a guarded tool stopped and
+	// reported that it could not ask. Supplying this lets a caller
+	// that HAS somebody watching — the console, with the person who
+	// started the turn still on the other end of the stream — put the
+	// question to them and carry on.
+	//
+	// Returning false denies. Returning an error abandons the turn
+	// rather than treating a broken prompt channel as consent.
+	Confirm func(ctx context.Context, reason, action, resource string) (bool, error)
 
 	// Caps tighten this one turn's budget beyond the bot's and the
 	// node's. A fan-out sets it to one worker's share of the
@@ -279,20 +343,102 @@ func (r *TurnRunner) Run(ctx context.Context, req TurnRequest) (*ProcessMessageR
 	if turnID == "" {
 		turnID = fmt.Sprintf("%s-%s-%d", req.Origin, req.OriginID, time.Now().UnixNano())
 	}
-	resp, err := r.agent.RunToolCallLoop(ctx, ProcessMessageRequest{
-		Message:      req.Prompt,
-		Claims:       claims,
-		TurnID:       turnID,
-		Budget:       budget,
-		Channel:      req.Channel,
-		ChannelID:    req.ChannelID,
-		BotID:        profile.botID(),
-		Bot:          profile,
-		SystemPrompt: req.SystemPrompt,
-		Tools:        req.Tools,
-	})
+	// The conversation so far, when this turn has an address to have
+	// one at. An inbox item gets its own session per item, so there is
+	// nothing prior and it stays a clean single-shot — which is what
+	// an independent task should be.
+	var history []Message
+	var summary string
+	if r.sessions != nil && req.Channel != "" && req.ChannelID != "" {
+		h, sum, herr := r.sessions.LoadTurns(ctx, req.Channel, req.ChannelID, defaultHistoryTurns)
+		if herr != nil {
+			// A turn with no history is worse than one with it, and
+			// far better than no turn at all.
+			r.log.Warn("turnrunner: could not load the conversation; answering without it",
+				"origin", req.Origin, "origin_id", req.OriginID, "err", herr)
+		} else {
+			history, summary = h, sum
+		}
+	}
+
+	agentReq := ProcessMessageRequest{
+		Message:             req.Prompt,
+		ConversationHistory: history,
+		ConversationSummary: summary,
+		Claims:              claims,
+		TurnID:              turnID,
+		Budget:              budget,
+		Channel:             req.Channel,
+		ChannelID:           req.ChannelID,
+		BotID:               profile.botID(),
+		Bot:                 profile,
+		SystemPrompt:        req.SystemPrompt,
+		Tools:               req.Tools,
+		OnDelta:             req.OnDelta,
+		RequestedBy:         req.RequestedBy,
+	}
+	resp, err := r.agent.RunToolCallLoop(ctx, agentReq)
 	if err != nil {
 		return nil, fmt.Errorf("turnrunner: %s %q: %w", req.Origin, req.OriginID, err)
+	}
+
+	// Ask, if this caller has somebody to ask. A turn may stop more
+	// than once, so this loops until the turn either finishes or is
+	// refused.
+	for resp.NeedsConfirmation && req.Confirm != nil {
+		approved, cerr := req.Confirm(ctx, resp.ConfirmationReason,
+			resp.ConfirmationAction, resp.ConfirmationResource)
+		if cerr != nil {
+			// A prompt channel that failed is not a "no" and certainly
+			// not a "yes" — it is an unanswered question, and the turn
+			// stops with the reason intact for the caller to report.
+			r.log.Warn("turnrunner: could not put the confirmation to anyone",
+				"origin", req.Origin, "origin_id", req.OriginID,
+				"bot", profile.botID(), "err", cerr)
+			break
+		}
+		if !approved {
+			resp.Reply = "Not done — you declined: " + resp.ConfirmationReason
+			resp.NeedsConfirmation = false
+			resp.ConfirmationReason = ""
+			break
+		}
+
+		// Approved: lift the caps for the operation that was just
+		// authorised and re-enter where the turn stopped.
+		agentReq.Budget.Relax()
+		resumeCtx := WithTurnApproval(ctx, resp.ConfirmationAction, resp.ConfirmationResource)
+		resumed, rerr := r.agent.ResumeFromConfirmation(resumeCtx, agentReq, resp.Messages)
+		if rerr != nil {
+			return nil, fmt.Errorf("turnrunner: %s %q: resume after approval: %w",
+				req.Origin, req.OriginID, rerr)
+		}
+		// Carry the earlier tool calls forward: the receipt for a
+		// resumed turn must cover the whole turn, not just the half
+		// that ran after the question.
+		resumed.ToolCalls = append(resp.ToolCalls, resumed.ToolCalls...)
+		resp = resumed
+	}
+
+	// Persist before returning, so the id is on the response the caller
+	// records. A turn that cannot be written is still a turn that
+	// happened: log it and carry on rather than failing work that has
+	// already been done and paid for.
+	if r.sessions != nil && req.Channel != "" && req.ChannelID != "" {
+		newTurn := resp.Messages
+		if resp.TurnStartIndex > 0 && resp.TurnStartIndex <= len(resp.Messages) {
+			newTurn = resp.Messages[resp.TurnStartIndex:]
+		}
+		if len(newTurn) > 0 {
+			sessionID, serr := r.sessions.AppendTurn(ctx, req.Channel, req.ChannelID, turnID, newTurn)
+			if serr != nil {
+				r.log.Warn("turnrunner: could not persist the transcript",
+					"origin", req.Origin, "origin_id", req.OriginID,
+					"bot", profile.botID(), "err", serr)
+			} else {
+				resp.SessionID = sessionID
+			}
+		}
 	}
 
 	r.log.Info("turnrunner: turn completed",

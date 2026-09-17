@@ -228,6 +228,7 @@ func newInboxResolveHandler(svc InboxService) compute.BuiltinFunc {
 
 func newInboxPostHandler(svc InboxService, bots compute.BotResolver) compute.BuiltinFunc {
 	return func(ctx context.Context, args map[string]string) ([]byte, int, error) {
+		turnIdentity, _ := turn.IdentityFrom(ctx)
 		me, err := callerBot(ctx)
 		if err != nil {
 			return nil, 2, fmt.Errorf("inbox_post: %w", err)
@@ -262,11 +263,17 @@ func newInboxPostHandler(svc InboxService, bots compute.BotResolver) compute.Bui
 		item, err := svc.Post(ctx, &lobslawv1.BotInboxItem{
 			Recipient: target,
 			// Sender is stamped here from the turn, never from args.
-			Sender:   "bot:" + me,
-			Kind:     kind,
-			Subject:  args["subject"],
-			Body:     body,
-			Priority: int32(priority),
+			Sender: "bot:" + me,
+			// And who ASKED, carried forward so the chain survives.
+			// Sender becomes another bot after one hop; this stays the
+			// person at the start of it. Also from the turn, for the
+			// same reason — a requester the model can name is one it
+			// can invent.
+			RequestedBy: requesterLabel(turnIdentity),
+			Kind:        kind,
+			Subject:     args["subject"],
+			Body:        body,
+			Priority:    int32(priority),
 		})
 		if err != nil {
 			return nil, 1, fmt.Errorf("inbox_post: %w", err)

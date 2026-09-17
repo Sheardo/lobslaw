@@ -125,6 +125,22 @@ type AgentConfig struct {
 	// they existed.
 	SoulSnapshot func(ctx context.Context, botID string) (*soul.Soul, error)
 
+	// DefaultBot resolves the bot a turn runs as when the caller names
+	// none — in practice the coordinator of the default team.
+	//
+	// It exists because bots were a console-only feature by accident.
+	// Five code paths build a turn (Telegram, Slack, REST, the inbound
+	// webhook, the console) and only the console ever set BotID, so
+	// every other channel ran the pre-bot assistant: you could build a
+	// team in the browser and then message Telegram and reach someone
+	// who had never heard of them.
+	//
+	// Resolved here rather than at each call site so a channel added
+	// later cannot forget, which is exactly how the first four did.
+	// Returning nil is fine and means "no bot", preserving the old
+	// behaviour on a node with no registry.
+	DefaultBot func(ctx context.Context) (*BotProfile, error)
+
 	// LanguageDetector is reused across turns and only invoked when the
 	// effective soul enables detection. Nil uses the lazy Lingua detector.
 	LanguageDetector soul.Detector
@@ -389,6 +405,19 @@ type ProcessMessageRequest struct {
 	// Message is the user's text for this turn.
 	Message string
 
+	// RequestedBy is the principal this work traces back to, carried
+	// across a delegation hop. See turn.Identity.RequestedBy.
+	RequestedBy string
+
+	// OnDelta, when set, receives assistant text as it is generated.
+	//
+	// An observation hook: it changes how the completion is
+	// transported and nothing about what the turn produces. Carried
+	// per turn rather than configured per node because whether anybody
+	// is watching is a property of the caller — a 3am routine has no
+	// audience, the same turn from the console has one.
+	OnDelta func(string)
+
 	// Claims identifies the user (for policy evaluation + audit).
 	Claims *types.Claims
 
@@ -530,6 +559,10 @@ type ProcessMessageResponse struct {
 	// is not where the turn starts.
 	TurnStartIndex int
 
+	// SessionID is the conversation this turn was written to, set when
+	// the runner persisted it. Empty for a turn nobody stored.
+	SessionID string
+
 	// BudgetState is a snapshot of the TurnBudget at turn end.
 	BudgetState BudgetState
 
@@ -648,6 +681,23 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// crosses ~100 we swap to semantic top-K retrieval against
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
+	}
+	// A turn that names no bot runs as the default team's coordinator.
+	// Before the resolve, so the filter below and the soul lookup
+	// further down both see it.
+	if req.Bot == nil && req.BotID == "" && a.cfg.DefaultBot != nil {
+		bot, err := a.cfg.DefaultBot(ctx)
+		if err != nil {
+			// Not fatal. A turn that cannot find the coordinator
+			// should still answer as the node default — the failure
+			// mode being avoided is an unanswered Telegram message,
+			// and refusing the turn is a worse version of it.
+			a.cfg.Logger.Warn("agent: could not resolve the default bot; running as the node assistant",
+				"err", err)
+		} else if bot != nil {
+			req.Bot = bot
+			req.BotID = bot.botID()
+		}
 	}
 	// The bot's registry filter runs HERE, before the turn starts and
 	// before the tool list reaches promptgen — so the model is never
@@ -772,7 +822,7 @@ func (a *Agent) maybeIngestTurn(ctx context.Context, req ProcessMessageRequest, 
 		AssistReply: reply,
 		TurnID:      req.TurnID,
 		CompletedAt: time.Now(),
-		Via:         invokedToolNames(calls),
+		Via:         InvokedToolNames(calls),
 	}
 	if req.Claims != nil {
 		episode.UserID = req.Claims.UserID
@@ -1359,6 +1409,12 @@ func (a *Agent) callLLM(ctx context.Context, req ProcessMessageRequest, messages
 		Messages: messages,
 		Model:    req.Model,
 		Tools:    req.Tools,
+		// Carried per turn rather than configured per node: whether
+		// anybody is watching is a property of the caller, not of the
+		// deployment. A scheduled 3am routine has no audience and
+		// streams to nobody; the same turn started from the console
+		// streams to the person who started it.
+		OnDelta: req.OnDelta,
 	}
 	dispatched, err := a.dispatchWithBackup(ctx, chatReq)
 	if err != nil {
@@ -1576,7 +1632,7 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 				trace.OutcomeAborted, nil, err))
 			return nil, err
 		}
-		a.cfg.Health.RecordFailure(entry.Label, ClassifyFailure(err))
+		a.cfg.Health.RecordFailureAfter(entry.Label, ClassifyFailure(err), retryAfterFrom(err))
 		LogProviderFailure(a.cfg.Logger, err, "failed_label", entry.Label)
 		rec.Record(attemptSpan(turnID, entry, elapsed, started, attempt,
 			trace.OutcomeAdvanced, nil, err))
@@ -1595,9 +1651,19 @@ func (a *Agent) dispatchWithBackup(ctx context.Context, req ChatRequest) (*dispa
 		// tried. Reported distinctly: "all providers failed" with no
 		// error to show would read as a bug in the chain rather than
 		// as the chain protecting itself.
+		// Name the providers and why, rather than sending the reader
+		// to a log.
+		//
+		// "check the logs" is the wrong answer here twice over: this
+		// string is what an inbox item records as its failure and what
+		// the console shows, and neither the person reading a queue
+		// nor the bot that was told the task failed has the node's
+		// stderr to hand. The health tracker already knows the class
+		// and the remaining cooldown — withholding them was the only
+		// problem.
 		return nil, fmt.Errorf(
-			"agent: every provider in the chain is in cooldown (%d demoted); "+
-				"check the logs for credential or quota errors", skipped)
+			"agent: every provider in the chain is in cooldown (%d demoted): %s",
+			skipped, describeDemotions(a.cfg.Health))
 	}
 	return nil, fmt.Errorf("agent: all providers in chain failed; last error: %w", lastErr)
 }
@@ -1687,11 +1753,12 @@ func IsRetryableProviderError(ctx context.Context, err error) bool {
 // work is being done for (see Node.schedulerClaims), not of a chat.
 func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	t := turn.Identity{
-		TurnID:    req.TurnID,
-		Channel:   req.Channel,
-		ChannelID: req.ChannelID,
-		Shared:    req.SharedConversation,
-		Timezone:  req.UserTimezone,
+		TurnID:      req.TurnID,
+		Channel:     req.Channel,
+		ChannelID:   req.ChannelID,
+		Shared:      req.SharedConversation,
+		Timezone:    req.UserTimezone,
+		RequestedBy: req.RequestedBy,
 	}
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID
@@ -2161,7 +2228,7 @@ func confirmationOperation(err error, toolName string) (action, resource string,
 	return "tool:exec", toolName, true, nil
 }
 
-// invokedToolNames reduces a turn's invocations to the distinct tool
+// InvokedToolNames reduces a turn's invocations to the distinct tool
 // names, sorted.
 //
 // Sorted so the same set of calls always produces the same record —
@@ -2173,7 +2240,7 @@ func confirmationOperation(err error, toolName string) (action, resource string,
 // the shopping list four times is the same KIND of memory as one that
 // read it once: derived from that tool, and stale when that tool's
 // data changes.
-func invokedToolNames(calls []ToolInvocation) []string {
+func InvokedToolNames(calls []ToolInvocation) []string {
 	if len(calls) == 0 {
 		return nil
 	}

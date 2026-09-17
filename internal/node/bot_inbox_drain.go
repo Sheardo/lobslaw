@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -152,6 +153,20 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 		Prompt:   inboxPrompt(item),
 		Origin:   "inbox",
 		OriginID: item.GetId(),
+		// Who asked, carried across the hop. Without it the chain
+		// ends here: this turn runs as the bot, and the person at the
+		// start of it is gone.
+		RequestedBy: item.GetRequestedBy(),
+		// One session per item, not one per bot: it is what the
+		// console's deep-link wants (this item's work, not a bot's
+		// entire history), it keeps a failure to one transcript, and
+		// it means re-running an item cannot rewrite the record of the
+		// previous attempt.
+		// "bot" matches gateway's botChannel (rest_sessions.go), which
+		// is what makes these turns visible to the console's session
+		// browser.
+		Channel:   "bot",
+		ChannelID: recipient + ".inbox." + item.GetId(),
 	})
 
 	// A disabled or deleted bot will never succeed, so retrying it
@@ -165,7 +180,15 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 
 	outcome := memory.InboxOutcome{Err: runErr, MaxAttempts: maxAttempts}
 	if runErr == nil {
-		outcome.Result = resp.Reply
+		outcome.Result = inboxResult(resp)
+		// The evidence, recorded beside the bot's own account of the
+		// work. These three answer "what did it actually do", "what
+		// did that cost", and "show me the conversation" — none of
+		// which the result text can be trusted to answer itself.
+		outcome.ToolsUsed = compute.InvokedToolNames(resp.ToolCalls)
+		outcome.TokensUsed = uint64(max(resp.BudgetState.Tokens, 0))
+		outcome.CostUSD = resp.BudgetState.SpendUSD
+		outcome.SessionID = resp.SessionID
 	}
 	resolved, err := n.inboxSvc.Resolve(ctx, recipient, item.GetId(), outcome)
 	if err != nil {
@@ -183,6 +206,36 @@ func (n *Node) drainOneInboxItem(ctx context.Context, recipient string) error {
 //
 // The kind is stated because a bot that cannot tell "do this" from
 // "here is what happened when you asked me to do that" answers both
+// inboxResult is what the item records as its outcome.
+//
+// A turn can succeed and still say nothing: the model spends the turn
+// on tool calls and never writes a closing message. Storing that empty
+// string marked the item DONE with a blank body, which in the console
+// is indistinguishable from an item that never ran — the exact
+// disappearance the queue exists to prevent. It is also the least
+// recoverable failure shape, because nothing looks wrong.
+//
+// So an empty reply gets an honest description instead. Deliberately
+// not a retry: the tools already ran, and running them again to
+// obtain a nicer summary would repeat their side effects.
+func inboxResult(resp *compute.ProcessMessageResponse) string {
+	if resp == nil {
+		return "The turn finished but returned nothing."
+	}
+	if reply := strings.TrimSpace(resp.Reply); reply != "" {
+		return reply
+	}
+	if len(resp.ToolCalls) == 0 {
+		return "Finished without doing anything or saying anything. " +
+			"Worth re-sending with more detail."
+	}
+
+	return fmt.Sprintf(
+		"Did the work but wrote no summary. Ran %d tool call(s): %s.",
+		len(resp.ToolCalls),
+		strings.Join(compute.InvokedToolNames(resp.ToolCalls), ", "))
+}
+
 // the same way — it starts doing the work described in a result it
 // merely received. The sender is stated for the same reason a person
 // wants to know who asked.

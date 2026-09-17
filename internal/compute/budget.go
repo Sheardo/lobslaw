@@ -42,6 +42,7 @@ type TurnBudget struct {
 	mu          sync.Mutex
 	toolCalls   int
 	spendUSD    float64
+	tokens      int64
 	egressBytes int64
 	records     []CostRecord
 }
@@ -107,6 +108,11 @@ type BudgetState struct {
 	ToolCalls   int
 	SpendUSD    float64
 	EgressBytes int64
+	// Tokens is the running total across every token-billed call in
+	// the turn. Surfaced because spend alone is unreadable on a plan
+	// that bills a flat rate — the cost stays zero while the usage
+	// that will eventually exhaust the plan goes unrecorded.
+	Tokens int64
 }
 
 // ErrBudgetConfigInvalid fires when NewTurnBudget receives caps
@@ -204,6 +210,12 @@ func (b *TurnBudget) recordCostUSDLocal(rec CostRecord) BudgetDecision {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.spendUSD += rec.CostUSD
+	// Tokens only when the charge is actually token-billed. A
+	// per-second video charge has a Quantity too, and adding it to a
+	// token count would produce a number that means nothing.
+	if rec.Usage.Unit == UnitTokens && rec.Usage.Tokens != nil {
+		b.tokens += int64(rec.Usage.Tokens.TotalTokens)
+	}
 	b.records = append(b.records, rec)
 	if b.caps.MaxSpendUSD > 0 && b.spendUSD > b.caps.MaxSpendUSD {
 		return b.exceededLocked("spend")
@@ -297,6 +309,11 @@ func (b *TurnBudget) Restore(state BudgetState) {
 	if state.EgressBytes > b.egressBytes {
 		b.egressBytes = state.EgressBytes
 	}
+	// Forward-only for the same reason as the rest: a resumed turn
+	// must not be able to under-report what it has already used.
+	if state.Tokens > b.tokens {
+		b.tokens = state.Tokens
+	}
 }
 
 // Relax lifts every cap for the rest of this turn — all three
@@ -341,6 +358,7 @@ func (b *TurnBudget) stateLocked() BudgetState {
 	return BudgetState{
 		ToolCalls:   b.toolCalls,
 		SpendUSD:    b.spendUSD,
+		Tokens:      b.tokens,
 		EgressBytes: b.egressBytes,
 	}
 }

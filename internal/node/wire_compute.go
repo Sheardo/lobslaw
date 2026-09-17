@@ -531,6 +531,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Executor:             n.executor,
 		Registry:             n.toolRegistry,
 		SoulSnapshot:         n.soulSnapshot,
+		DefaultBot:           n.defaultBot,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {
@@ -575,6 +576,10 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		a,
 		botResolverOrNil(n.botSvc),
 		compute.FromComputeConfig(n.cfg.Compute),
+		// Nil on a node with no local memory state, which is the same
+		// condition that leaves channels on their in-memory buffer —
+		// headless turns then behave exactly as they did before.
+		sessionWriterOrNil(n.newSessionStore()),
 		n.log,
 	)
 	if err != nil {
@@ -1498,4 +1503,49 @@ func disabledToolPatterns(configured *[]string) []string {
 		return tools.DefaultDisabledTools
 	}
 	return *configured
+}
+
+// sessionWriterOrNil hands the turn runner a session writer only when
+// there is a real store behind it.
+//
+// newSessionStore returns a nil INTERFACE holding a nil pointer on a
+// node without memory state, and passing that through would give the
+// runner a non-nil interface whose calls panic — the classic shape of
+// this bug. Checking the concrete type is what avoids it.
+func sessionWriterOrNil(store gateway.SessionStore) compute.SessionWriter {
+	adapter, ok := store.(*sessionStoreAdapter)
+	if !ok || adapter == nil {
+		return nil
+	}
+	return adapter
+}
+
+// defaultBot resolves the coordinator of the default team, for a turn
+// that names no bot.
+//
+// Every channel except the console goes through here, so this is what
+// makes the team exist outside the browser: message Telegram and you
+// reach the coordinator you built, not the pre-bot assistant.
+//
+// Nil, nil on a node with no registry — the caller treats that as "no
+// bot" and runs exactly as it did before bots existed.
+func (n *Node) defaultBot(ctx context.Context) (*compute.BotProfile, error) {
+	if n.botSvc == nil {
+		return nil, nil
+	}
+	coordinator := memory.CoordinatorBotID
+	// The default GROUP names its coordinator, so a deployment that
+	// renamed or replaced it still resolves. Falling back to the
+	// well-known id rather than failing: a node mid-upgrade has bots
+	// and no group yet, and that is not a reason to stop answering.
+	if n.groupSvc != nil {
+		if g, err := n.groupSvc.Default(ctx, ""); err == nil && g.GetCoordinatorBotId() != "" {
+			coordinator = g.GetCoordinatorBotId()
+		}
+	}
+	profile, err := botResolverOrNil(n.botSvc).ResolveBot(ctx, coordinator)
+	if err != nil {
+		return nil, err
+	}
+	return profile, nil
 }

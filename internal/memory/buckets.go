@@ -172,15 +172,27 @@ const (
 	// record would turn every transition into a delete-and-put — the
 	// read-modify-write the CAS exists to make safe.
 	BucketBotInbox = "bot_inbox"
+
+	// BucketGroups holds the teams, keyed by group id. A group owns a
+	// coordinator and the bots that report to it.
+	BucketGroups = "groups"
 )
 
 // CoordinatorBotID names the bot that owns the human-facing channels: the
 // one a Telegram or Slack message reaches when it names nobody.
 //
-// A fixed id rather than a lookup for is_chief, because the key it
+// A fixed id rather than a lookup for is_coordinator, because the key it
 // derives (see SoulTuneRecordIDFor) has to be stable across an upgrade
 // on a cluster whose bots bucket is still empty.
 const CoordinatorBotID = "coordinator"
+
+// DefaultGroupID is the team a bot belongs to when its record names
+// none, and the one a channel reaches when nothing says otherwise.
+//
+// A constant rather than "whichever group sorts first": every bot
+// written before groups existed has an empty group_id, and they all
+// have to land in the same place or the team fragments on upgrade.
+const DefaultGroupID = "default"
 
 // SoulTuneRecordID is the constant key under BucketSoulTune for the
 // CHIEF's personality overlay.
@@ -226,6 +238,7 @@ var allBuckets = []string{
 	BucketEnrolments,
 	BucketBots,
 	BucketBotInbox,
+	BucketGroups,
 }
 
 // SoulTuneRecordIDFor returns the personality-overlay key for one bot.

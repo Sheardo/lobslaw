@@ -279,9 +279,16 @@ func skillNetworks(n *Node) map[string][]string {
 	return out
 }
 
-// callbackEgressHosts derives the gateway/callback role from the
-// callback addresses operators bound in [[user]].channels, and warns
-// about the deployment shape where a correct allowlist still fails.
+// callbackEgressHosts derives the gateway/callback and gateway/webhook
+// roles from the outbound addresses operators bound in
+// [[user]].channels, and warns about the deployment shape where a
+// correct allowlist still fails.
+//
+// Both channel types, because the reasoning is identical and splitting
+// them is how one gets forgotten: the webhook sink shipped without its
+// hosts here, so a correctly-configured webhook address produced
+// "Request rejected by proxy" — a message that names neither the
+// allowlist it failed nor the fact that one exists.
 //
 // That shape is a callback aimed at the operator's own tooling, which
 // lands on a private address most of the time and is exactly what this
@@ -295,13 +302,13 @@ func callbackEgressHosts(n *Node) []string {
 	seen := map[string]struct{}{}
 	for _, u := range n.cfg.Users {
 		for _, c := range u.Channels {
-			if c.Type != gateway.ChannelCallback {
+			if c.Type != gateway.ChannelCallback && c.Type != gateway.ChannelWebhook {
 				continue
 			}
 			host := egress.HostOf(c.Address)
 			if host == "" {
-				n.log.Warn("egress: callback address has no host and will never be reachable",
-					"user", u.ID, "address", c.Address)
+				n.log.Warn("egress: outbound address has no host and will never be reachable",
+					"user", u.ID, "type", c.Type, "address", c.Address)
 				continue
 			}
 			if _, dup := seen[host]; dup {
@@ -310,9 +317,9 @@ func callbackEgressHosts(n *Node) []string {
 			seen[host] = struct{}{}
 			hosts = append(hosts, host)
 			if !privateOK && isPrivateHost(host) {
-				n.log.Warn("egress: callback host is a private address that smokescreen will refuse; "+
+				n.log.Warn("egress: outbound host is a private address that smokescreen will refuse; "+
 					"set security.egress_allow_ranges to the network it is on",
-					"user", u.ID, "host", host)
+					"user", u.ID, "type", c.Type, "host", host)
 			}
 		}
 	}

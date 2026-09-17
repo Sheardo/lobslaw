@@ -91,7 +91,7 @@ func FailoverBuiltin(modality string, log *slog.Logger, health *ProviderHealth, 
 			if !IsRetryableProviderError(ctx, err) {
 				return out, code, err
 			}
-			health.RecordFailure(h.Label, ClassifyFailure(err))
+			health.RecordFailureAfter(h.Label, ClassifyFailure(err), retryAfterFrom(err))
 			LogProviderFailure(log, err, "modality", modality,
 				"provider_index", i, "label", h.Label)
 			lastOut, lastCode, lastErr = out, code, err

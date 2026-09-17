@@ -59,6 +59,12 @@ type consoleSessionInfo struct {
 	Subject string `json:"sub"`
 	Scope   string `json:"scope"`
 	Expires int64  `json:"exp"`
+	// Roles are the policy subjects this person holds, carried in the
+	// session so a request decides against who is making it rather
+	// than against "the console".
+	Roles []string `json:"roles,omitempty"`
+	// Name is for display only — the console shows who is signed in.
+	Name string `json:"name,omitempty"`
 }
 
 // DeriveConsoleKey derives the token-signing key from the cluster
@@ -157,7 +163,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.cfg.ConsoleToken == "" || len(s.cfg.ConsoleKey) == 0 {
+	if (s.cfg.ConsoleToken == "" && len(s.cfg.ConsoleUsers) == 0) || len(s.cfg.ConsoleKey) == 0 {
 		s.jsonErr(w, http.StatusNotImplemented,
 			"console login is not configured; set [gateway.ui] token_ref to a secret reference "+
 				"(for example env:LOBSLAW_CONSOLE_TOKEN) and restart")
@@ -171,9 +177,28 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.jsonErr(w, http.StatusBadRequest, "malformed JSON: "+err.Error())
 		return
 	}
-	// Constant-time, because a length-or-prefix comparison on a shared
-	// secret reachable over the network is a timing oracle.
-	if !hmac.Equal([]byte(body.Token), []byte(s.cfg.ConsoleToken)) {
+	// Who signed in. A per-user token wins; the shared one still works
+	// and stays anonymous, so a single-machine setup is unchanged.
+	//
+	// Constant-time throughout, because a length-or-prefix comparison
+	// on a secret reachable over the network is a timing oracle.
+	session := consoleSessionInfo{Subject: consoleSubject, Scope: s.consoleScope()}
+	switch user, ok := matchConsoleUser(s.cfg.ConsoleUsers, body.Token); {
+	case ok:
+		// The principal form, so a console session and a Telegram
+		// message from the same person resolve to one identity and
+		// their memory and ownership follow them between the two.
+		session.Subject = "user:" + user.ID
+		session.Name = user.DisplayName
+		session.Roles = user.Roles
+		if user.Scope != "" {
+			session.Scope = user.Scope
+		}
+	case s.cfg.ConsoleToken != "" && hmac.Equal([]byte(body.Token), []byte(s.cfg.ConsoleToken)):
+		// The shared token. Left in place deliberately: it is the
+		// supported single-machine setup and removing it would break
+		// every existing install on upgrade.
+	default:
 		s.log.Warn("console: failed login", "remote", r.RemoteAddr)
 		s.jsonErr(w, http.StatusUnauthorized, "that token is not right")
 		return
@@ -184,11 +209,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		ttl = DefaultConsoleSessionTTL
 	}
 	expires := time.Now().Add(ttl)
-	token, err := mintConsoleToken(s.cfg.ConsoleKey, consoleSessionInfo{
-		Subject: consoleSubject,
-		Scope:   s.consoleScope(),
-		Expires: expires.Unix(),
-	})
+	session.Expires = expires.Unix()
+	token, err := mintConsoleToken(s.cfg.ConsoleKey, session)
 	if err != nil {
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -212,8 +234,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Expires: expires,
 	})
 	respondJSON(w, http.StatusOK, map[string]any{
-		"scope":      s.consoleScope(),
+		"scope":      session.Scope,
 		"expires_at": expires.UTC().Format(rfc3339),
+		"user":       session.Subject,
+		"name":       session.Name,
 	})
 }
 
@@ -229,7 +253,7 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, map[string]any{
 			"authenticated": false,
 			// Whether a login form is worth showing at all.
-			"login_available": s.cfg.ConsoleToken != "" && len(s.cfg.ConsoleKey) > 0,
+			"login_available": (s.cfg.ConsoleToken != "" || len(s.cfg.ConsoleUsers) > 0) && len(s.cfg.ConsoleKey) > 0,
 			"reason":          err.Error(),
 		})
 		return
@@ -289,5 +313,37 @@ func (s *Server) consoleSessionClaims(r *http.Request) *types.Claims {
 		s.log.Debug("console: rejecting session cookie", "err", err)
 		return nil
 	}
-	return &types.Claims{UserID: info.Subject, Scope: info.Scope}
+	return &types.Claims{UserID: info.Subject, Scope: info.Scope, Roles: info.Roles}
+}
+
+// ConsoleUser is one person who can sign in to the console.
+type ConsoleUser struct {
+	// ID is the canonical user id — the same string [[user]].id
+	// carries, so a console session and a Telegram message resolve to
+	// one person rather than two.
+	ID          string
+	DisplayName string
+	Token       string
+	Roles       []string
+	Scope       string
+}
+
+// matchConsoleUser finds the person a presented token belongs to.
+//
+// Every candidate is compared even after a match, and in constant
+// time. Returning early would leak which prefix was right through
+// timing, and the set being compared is small enough that the cost of
+// not doing so is nothing.
+func matchConsoleUser(users []ConsoleUser, token string) (ConsoleUser, bool) {
+	var found ConsoleUser
+	var ok bool
+	for _, u := range users {
+		if u.Token == "" {
+			continue
+		}
+		if hmac.Equal([]byte(token), []byte(u.Token)) {
+			found, ok = u, true
+		}
+	}
+	return found, ok
 }

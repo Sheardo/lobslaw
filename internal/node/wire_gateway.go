@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jmylchreest/lobslaw/internal/audit"
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
@@ -118,13 +119,18 @@ func (n *Node) wireGateway() error {
 		JWTValidator:      n.jwtValidator,
 		RequireAuth:       n.cfg.Auth.RequireAuth,
 		Bots:              botAPIOrNil(n.botSvc),
+		Groups:            groupAPIOrNil(n.groupSvc),
+		Audit:             registryAuditorOrNil(n.auditLog),
 		Inbox:             inboxAPIOrNil(n.inboxSvc),
 		UI:                n.webConsole(),
 		ConsoleToken:      n.consoleToken(),
+		ConsoleUsers:      n.consoleUsers(),
 		ConsoleKey:        n.consoleSigningKey(),
 		ConsoleScope:      n.cfg.Gateway.UI.Scope,
 		ConsoleSessionTTL: n.cfg.Gateway.UI.SessionTTL,
 		Transcripts:       n.newTranscriptBrowser(),
+		Routines:          n.newRoutineBrowser(),
+		Memory:            n.newBotMemoryBrowser(),
 		Turns:             turnRunnerOrNil(n.turnRunner),
 		Config:            n.configView(),
 		Telegram:          tg,
@@ -201,6 +207,14 @@ func (n *Node) wireNotifySinks(tg *gateway.TelegramHandler, sl *gateway.SlackHan
 	// address, and registering it only when one already exists would
 	// leave a node that gains a user later with no sink for them until
 	// it restarted.
+	// Registered unconditionally, same reasoning as the callback sink:
+	// it costs nothing until a user has a webhook address on file.
+	if err := notifySvc.RegisterSink(&gateway.WebhookSink{
+		Client: egress.For("gateway/webhook").HTTPClient(),
+		Logger: n.log,
+	}); err != nil {
+		n.log.Warn("notify: webhook sink register failed", "err", err)
+	}
 	if err := notifySvc.RegisterSink(&gateway.CallbackSink{
 		Client: egress.For("gateway/callback").HTTPClient(),
 		Logger: n.log,
@@ -548,6 +562,13 @@ func restWriteTimeout(g config.GatewayConfig) time.Duration {
 // botAPIOrNil / inboxAPIOrNil bridge nil pointers to interface-typed
 // nils, so the REST layer's "is this node hosting the registry" check
 // is not defeated by Go's nil-in-an-interface gotcha.
+func groupAPIOrNil(svc *memory.GroupService) gateway.GroupAPI {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
 func botAPIOrNil(svc *memory.BotService) gateway.BotAPI {
 	if svc == nil {
 		return nil
@@ -602,6 +623,44 @@ func (n *Node) consoleToken() string {
 		return ""
 	}
 	return token
+}
+
+// consoleUsers resolves a console login for every [[user]] that
+// declares one.
+//
+// A person without console_token_ref is skipped rather than given a
+// derived token: [[user]] is also how a Telegram chat id is bound, and
+// binding a chat must not silently hand out a console login that can
+// rewrite what every bot does.
+func (n *Node) consoleUsers() []gateway.ConsoleUser {
+	var out []gateway.ConsoleUser
+	for _, u := range n.cfg.Users {
+		ref := strings.TrimSpace(u.ConsoleTokenRef)
+		if ref == "" {
+			continue
+		}
+		token, err := n.resolveAPIKey(ref)
+		if err != nil {
+			n.log.Warn("gateway: console_token_ref could not be resolved; this person cannot sign in",
+				"user", u.ID, "ref", ref, "err", err)
+			continue
+		}
+		if strings.TrimSpace(token) == "" {
+			n.log.Warn("gateway: console_token_ref resolved to an empty secret; this person cannot sign in",
+				"user", u.ID, "ref", ref)
+			continue
+		}
+		out = append(out, gateway.ConsoleUser{
+			ID:          u.ID,
+			DisplayName: u.DisplayName,
+			Token:       token,
+			Roles:       u.Roles,
+		})
+	}
+	if len(out) > 0 {
+		n.log.Info("gateway: per-user console logins available", "users", len(out))
+	}
+	return out
 }
 
 // consoleSigningKey derives the cookie-signing key from the cluster
@@ -736,4 +795,34 @@ func (n *Node) rolesFor(label string) []string {
 		}
 	}
 	return out
+}
+
+// newRoutineBrowser exposes scheduled work to the console, or nil on a
+// node with no scheduler — where the route says so rather than
+// returning an empty list, because "none scheduled" and "this node
+// cannot see them" need different responses from whoever is reading.
+func (n *Node) newRoutineBrowser() gateway.RoutineAPI {
+	if n.scheduler == nil {
+		return nil
+	}
+	return n.scheduler
+}
+
+// newBotMemoryBrowser exposes a bot's own memory read-only, or nil
+// when this node holds no memory state.
+func (n *Node) newBotMemoryBrowser() gateway.MemoryAPI {
+	if n.store == nil {
+		return nil
+	}
+	return &botMemoryAdapter{store: n.store}
+}
+
+// registryAuditorOrNil hands the gateway an auditor only when one
+// exists. A nil *AuditLog in a non-nil interface would panic on the
+// first console edit — the same shape as sessionWriterOrNil.
+func registryAuditorOrNil(log *audit.AuditLog) gateway.RegistryAuditor {
+	if log == nil {
+		return nil
+	}
+	return log
 }

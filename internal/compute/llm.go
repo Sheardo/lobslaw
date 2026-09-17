@@ -44,6 +44,17 @@ type ChatRequest struct {
 	// default (usually 1.0).
 	Temperature float32
 
+	// OnDelta, when set, receives assistant text as it is generated.
+	//
+	// Purely an observation hook: setting it changes how the response
+	// is transported, never what it contains. The caller still gets
+	// one complete ChatResponse, so failover, budget accounting and
+	// tool reassembly are identical either way.
+	//
+	// It is called from the read loop, so it must not block — a slow
+	// consumer here stalls the completion it is watching.
+	OnDelta func(string)
+
 	// Tools are the tool-call definitions the model may invoke.
 	// Empty slice → text-only completion (no tool calling).
 	Tools []Tool

@@ -177,10 +177,49 @@ func (a *slackAPI) authTest(ctx context.Context) (userID, teamID string, err err
 // postMessage sends text to a channel. threadTS empty posts to the
 // channel; set, it replies inside that thread.
 func (a *slackAPI) postMessage(ctx context.Context, channel, threadTS, text string) error {
+	return a.postMessageAs(ctx, channel, threadTS, text, slackIdentity{})
+}
+
+// slackIdentity is who a message appears to be from.
+//
+// Slack lets one app post under different display names and icons per
+// message, given the chat:write.customize scope. That is what makes a
+// team legible in a channel without a Slack app per bot: DevOps and
+// Engineering arrive looking like two people, from one token, and a
+// bot created thirty seconds ago can speak immediately — which a
+// per-bot app cannot, because it has to be provisioned first.
+//
+// Zero value posts as the app itself, which is what every non-bot
+// message should do.
+type slackIdentity struct {
+	Username string
+	// IconEmoji is a :shortcode:. Chosen over icon_url because it
+	// needs no hosting: a bot has a colour and a mascot in the
+	// console, and neither is reachable from Slack's servers.
+	IconEmoji string
+}
+
+func (i slackIdentity) apply(body map[string]any) {
+	if i.Username != "" {
+		body["username"] = i.Username
+	}
+	if i.IconEmoji != "" {
+		body["icon_emoji"] = i.IconEmoji
+	}
+}
+
+// postMessageAs posts under a given identity.
+//
+// A missing chat:write.customize scope makes Slack ignore the
+// username and icon rather than fail, so a workspace that has not
+// granted it sees the old behaviour — one identity, attribution in
+// the body — instead of an error.
+func (a *slackAPI) postMessageAs(ctx context.Context, channel, threadTS, text string, as slackIdentity) error {
 	body := map[string]any{"channel": channel, "text": text}
 	if threadTS != "" {
 		body["thread_ts"] = threadTS
 	}
+	as.apply(body)
 	_, err := a.call(ctx, "chat.postMessage", a.botToken, body)
 	return err
 }

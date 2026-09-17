@@ -3,6 +3,7 @@ package compute
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -168,5 +169,135 @@ func TestBadRequestStillAbortsTheChain(t *testing.T) {
 	err := &DriverError{Class: FailurePermanent, Err: errors.New("unknown model")}
 	if IsRetryableProviderError(t.Context(), err) {
 		t.Error("a 400 walked the chain; every provider will reject it identically")
+	}
+}
+
+// A provider that says when to come back is believed — upward only.
+//
+// The exponential backoff starts at a few seconds. A provider asking
+// for a minute therefore got retried several more times before the
+// guess caught up, and every one of those retries counted against the
+// limit being waited out. Honouring the header turns that from a
+// self-sustaining problem into one wait.
+//
+// Upward only because the hint must not be able to SHORTEN a cooldown
+// that repeated failures have earned: a provider — or a proxy in front
+// of it — answering "Retry-After: 0" would otherwise reset the penalty
+// on every attempt.
+func TestRetryAfterLengthensButNeverShortensACooldown(t *testing.T) {
+	t.Parallel()
+
+	// A fixed clock, because the package already provides one and the
+	// alternative is asserting a duration against wall time: the
+	// wall-clock version passed in isolation and failed once under a
+	// loaded full-suite run, which is the least useful way for a test
+	// to tell you something.
+	frozen := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a longer hint wins over the computed backoff", func(t *testing.T) {
+		h := NewProviderHealth()
+		atFixed(h, frozen)
+		h.RecordFailureAfter("alibaba", FailureTransient, 90*time.Second)
+		if got := h.CooldownRemaining("alibaba"); got != 90*time.Second {
+			t.Errorf("cooldown = %v, want exactly the 90s the provider asked for", got)
+		}
+	})
+
+	t.Run("a shorter hint does not undercut it", func(t *testing.T) {
+		h := NewProviderHealth()
+		atFixed(h, frozen)
+		// Earn a long cooldown the hard way.
+		for range 6 {
+			h.RecordFailure("alibaba", FailureTransient)
+		}
+		earned := h.CooldownRemaining("alibaba")
+		h.RecordFailureAfter("alibaba", FailureTransient, time.Millisecond)
+		if got := h.CooldownRemaining("alibaba"); got < earned {
+			t.Errorf("a 1ms hint cut an earned %v cooldown down to %v", earned, got)
+		}
+	})
+
+	t.Run("no hint behaves exactly as before", func(t *testing.T) {
+		a, b := NewProviderHealth(), NewProviderHealth()
+		atFixed(a, frozen)
+		atFixed(b, frozen)
+		a.RecordFailure("x", FailureTransient)
+		b.RecordFailureAfter("x", FailureTransient, 0)
+		if a.CooldownRemaining("x") != b.CooldownRemaining("x") {
+			t.Error("passing no hint changed the existing backoff")
+		}
+	})
+}
+
+// Retry-After arrives in two legal shapes, and a skewed clock must not
+// turn a date in the past into "retry immediately" via a negative wait.
+func TestParseRetryAfterAcceptsBothFormsAndNeverGoesNegative(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		header string
+		want   time.Duration
+	}{
+		{"", 0},
+		{"30", 30 * time.Second},
+		{"0", 0},
+		{"-5", 0},
+		{"not-a-number", 0},
+		{now.Add(45 * time.Second).Format(http.TimeFormat), 45 * time.Second},
+		{now.Add(-time.Hour).Format(http.TimeFormat), 0},
+	}
+	for _, tc := range cases {
+		h := http.Header{}
+		if tc.header != "" {
+			h.Set("Retry-After", tc.header)
+		}
+		if got := parseRetryAfter(h, now); got != tc.want {
+			t.Errorf("Retry-After %q -> %v, want %v", tc.header, got, tc.want)
+		}
+	}
+}
+
+// A failure message has to be readable where it is actually read.
+//
+// "every provider is in cooldown; check the logs for credential or
+// quota errors" is the string an inbox item records as its failure and
+// the string the console shows. Neither the person reading a queue nor
+// the bot that was told its task failed has the node's stderr to hand,
+// so that sentence sent them somewhere they could not go — while the
+// health tracker already held the answer.
+func TestDemotionsAreDescribedWhereTheyWillBeRead(t *testing.T) {
+	t.Parallel()
+
+	h := NewProviderHealth()
+	h.RecordFailureAfter("alibaba-fast", FailureTransient, 45*time.Second)
+	h.RecordFailure("alibaba-pro", FailureCredential)
+
+	got := describeDemotions(h)
+	for _, want := range []string{
+		"alibaba-fast", "transient failures",
+		"alibaba-pro", "credentials rejected",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("description is missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "check the logs") {
+		t.Errorf("still deferring to the logs: %s", got)
+	}
+
+	// Stable ordering: the same outage twice must read as one problem,
+	// not two. Map iteration order would otherwise vary per call.
+	if second := describeDemotions(h); second != got {
+		t.Errorf("description is not stable:\n  %s\n  %s", got, second)
+	}
+}
+
+// Nothing demoted is a contradiction at this call site, and saying so
+// beats an empty clause that reads like a truncated message.
+func TestDescribeDemotionsWithNothingDemoted(t *testing.T) {
+	t.Parallel()
+	if got := describeDemotions(NewProviderHealth()); got == "" {
+		t.Error("produced an empty description")
 	}
 }

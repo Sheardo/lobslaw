@@ -102,11 +102,15 @@ func TestOneBotDoesNotClaimAnothersSessions(t *testing.T) {
 func TestBelongsToBotMatchesOnTheSeparator(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
-		"engineering":          true,
-		"engineering:thread-1": true,
-		"engineering-old":      false,
-		"eng":                  false,
-		"":                     false,
+		"engineering": true,
+		// The separator is "." — memory.sessionID refuses a channelID
+		// containing ":", so the colon form asserted here could never
+		// be written and this case was testing an unreachable branch.
+		"engineering.inbox.01ABC": true,
+		"engineering:thread-1":    false,
+		"engineering-old":         false,
+		"eng":                     false,
+		"":                        false,
 	}
 	for id, want := range cases {
 		if got := belongsToBot(id, "engineering"); got != want {

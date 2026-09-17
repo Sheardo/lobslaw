@@ -270,6 +270,10 @@ func (s *InboxService) Resolve(ctx context.Context, recipient, id string, outcom
 	next := proto.Clone(item).(*lobslawv1.BotInboxItem)
 	next.Result = truncate(outcome.Result, MaxInboxResult)
 	next.SessionId = outcome.SessionID
+	// What the turn actually did, beside what it says it did.
+	next.ToolsUsed = outcome.ToolsUsed
+	next.TokensUsed = outcome.TokensUsed
+	next.CostUsd = outcome.CostUSD
 	next.ClaimedBy = ""
 	next.ClaimExpiresAt = nil
 
@@ -299,6 +303,13 @@ func (s *InboxService) Resolve(ctx context.Context, recipient, id string, outcom
 type InboxOutcome struct {
 	Result    string
 	SessionID string
+	// ToolsUsed is the distinct tools the turn invoked. Recorded
+	// because Result is the bot's account of its work and this is the
+	// record of it — the two are not always the same, and only one of
+	// them is evidence.
+	ToolsUsed  []string
+	TokensUsed uint64
+	CostUSD    float64
 	// Err non-nil means the turn failed. Retried while attempts remain.
 	Err         error
 	MaxAttempts int

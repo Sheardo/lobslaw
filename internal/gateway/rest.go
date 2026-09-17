@@ -166,6 +166,24 @@ type RESTConfig struct {
 	// read-only console view ends up holding something that can append.
 	Transcripts SessionBrowser
 
+	// Routines lists a bot's scheduled work. Nil on a node that does
+	// not run the scheduler, where the route reports that rather than
+	// rendering an empty list — "no routines" and "this node cannot
+	// see them" are different answers.
+	// Groups is the teams registry. Nil leaves the routes reporting
+	// that this node does not host it, rather than an empty list —
+	// "no groups" and "cannot see them" need different responses.
+	Groups GroupAPI
+
+	// Audit records who changed a bot or a team. Nil disables the
+	// recording rather than the edit.
+	Audit RegistryAuditor
+
+	Routines RoutineAPI
+
+	// Memory backs the read-only per-bot memory view.
+	Memory MemoryAPI
+
 	// Turns runs a turn as a named bot, for the console's per-bot chat.
 	// The coordinator is reachable through /v1/messages like every other
 	// channel; this is how a specialist becomes something you can
@@ -182,6 +200,13 @@ type RESTConfig struct {
 	// with what to configure — which is a better answer than 401 to
 	// somebody who has no way of knowing a token was never set.
 	ConsoleToken string
+
+	// ConsoleUsers are per-person logins, resolved from each
+	// [[user]].console_token_ref. A session minted from one carries
+	// that person's principal and roles rather than a shared
+	// anonymous subject, so the policy engine can finally decide
+	// against the roles the operator already wrote down.
+	ConsoleUsers []ConsoleUser
 
 	// ConsoleKey signs session cookies, derived from the cluster
 	// MemoryKey so any node validates a cookie any other node minted.
@@ -274,6 +299,8 @@ func (s *Server) Start(ctx context.Context) error {
 		mux.HandleFunc("/v1/plan", s.handlePlan)
 	}
 	if s.cfg.Bots != nil {
+		mux.HandleFunc("/v1/groups", s.handleGroups)
+		mux.HandleFunc("/v1/groups/", s.handleGroups)
 		mux.HandleFunc("/v1/bots", s.handleBots)
 		mux.HandleFunc("/v1/bots/", s.handleBots)
 	}

@@ -87,14 +87,28 @@ func newNotifyHandler(svc Notifier) compute.BuiltinFunc {
 		}
 
 		n := notify.Notification{
-			UserID:            userID,
-			Body:              text,
-			OriginatorChannel: identity.Channel,
-			OriginatorID:      identity.ChannelID,
+			UserID: userID,
+			Body:   text,
+			// Only when a person could actually be waiting there.
+			// A synthetic channel has no sink and never will, and
+			// naming it here turns "tell the user however they asked
+			// to be told" into "reply into a transcript" — which
+			// fails, and takes the notification with it.
+			OriginatorChannel: humanChannel(identity),
+			OriginatorID:      humanChannelID(identity),
 			// From the turn, not from args. A bot that could name its
 			// own sender could send you something that looks like it
 			// came from a different one.
 			SenderBot: senderLabel(identity),
+			// Who asked. From the turn's principal, never from args:
+			// a requester the model can name is a requester it can
+			// invent, and the whole value of the line is that it is
+			// true.
+			//
+			// Only when somebody else is being messaged — the service
+			// drops it when the requester is the recipient, so the
+			// common "tell me when it's done" stays clean.
+			RequestedBy: requesterLabel(identity),
 		}
 		if raw := strings.TrimSpace(args["ttl_seconds"]); raw != "" {
 			secs, err := parseTTL(raw)
@@ -146,4 +160,60 @@ func senderLabel(identity turn.Identity) string {
 		return ""
 	}
 	return identity.BotID
+}
+
+// humanChannel is the turn's channel, or empty when nobody is waiting
+// there. Empty is what makes notify broadcast to the user's bound
+// addresses instead of trying to reply in place.
+func humanChannel(identity turn.Identity) string {
+	if !identity.IsHumanChannel() {
+		return ""
+	}
+	return identity.Channel
+}
+
+// humanChannelID goes with it: the fallback address notify uses when
+// prefs hold nothing for the originating channel is only meaningful
+// if that channel was real.
+func humanChannelID(identity turn.Identity) string {
+	if !identity.IsHumanChannel() {
+		return ""
+	}
+	return identity.ChannelID
+}
+
+// requesterLabel is the principal who asked for a notification.
+//
+// A bot's own principal is not a requester: when DevOps notifies as
+// part of working an inbox item, nobody asked it in the sense that
+// matters here, and "bot:devops asked me to send you this" beside
+// "DevOps" in the header says the same thing twice. The person who
+// put the work in the queue is the interesting answer, and that is
+// not available at this layer.
+func requesterLabel(identity turn.Identity) string {
+	// A requester carried across a delegation hop wins: it is the
+	// person who actually asked, and the bot running this turn is only
+	// the one doing it.
+	if r := strings.TrimSpace(identity.RequestedBy); r != "" {
+		return r
+	}
+	// The PRINCIPAL decides, not Identity.IsBot().
+	//
+	// IsBot() is `BotID != ""`, and since channel turns resolve to the
+	// default team's coordinator, every turn now has a BotID —
+	// including one a person is driving. Testing it here discarded the
+	// requester in exactly the case where there was one: Sam asks the
+	// coordinator to send James a report, the turn runs as the
+	// coordinator, and Sam disappeared.
+	//
+	// A turn whose principal is a bot really has no requester: that is
+	// a bot acting on its own, and anything it was asked to do arrives
+	// through RequestedBy above.
+	if identity.Principal.IsBot() {
+		return ""
+	}
+	if p := identity.Principal.String(); p != "" {
+		return p
+	}
+	return identity.UserID
 }

@@ -363,6 +363,41 @@ func (a *sessionStoreAdapter) Append(ctx context.Context, ref gateway.SessionRef
 	return translateSessionErr(err)
 }
 
+// LoadTurns implements compute.SessionWriter, reusing the same
+// transcript load the channel path uses so a console conversation and
+// a Telegram one are read identically.
+func (a *sessionStoreAdapter) LoadTurns(ctx context.Context, channel, channelID string, n int) ([]compute.Message, string, error) {
+	t, err := a.LoadTranscript(ctx, gateway.SessionRef{Channel: channel, ChannelID: channelID}, n)
+	if err != nil {
+		return nil, "", translateSessionErr(err)
+	}
+	return t.Messages, t.Summary, nil
+}
+
+// AppendTurn implements compute.SessionWriter, so a headless turn is
+// recorded the same way and in the same place as a channel turn.
+//
+// Separate from Append only because the caller needs the session id
+// back: a queue item stores it so the console can link from the work
+// to the conversation that produced it. Same conversion, same store —
+// deliberately not a second write path.
+func (a *sessionStoreAdapter) AppendTurn(ctx context.Context, channel, channelID, turnID string, msgs []compute.Message) (string, error) {
+	out := make([]memory.TranscriptMessage, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, memory.TranscriptMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  toTranscriptToolCalls(m.ToolCalls),
+			ToolCallID: m.ToolCallID,
+		})
+	}
+	rec, err := a.inner.Append(ctx, memory.SessionRef{Channel: channel, ChannelID: channelID}, turnID, out)
+	if err != nil {
+		return "", translateSessionErr(err)
+	}
+	return rec.GetId(), nil
+}
+
 // Forget drops the transcript AND the conversation's approval grants.
 //
 // Both, because "forget this conversation" is a statement about what

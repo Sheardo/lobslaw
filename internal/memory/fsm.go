@@ -722,6 +722,12 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketGroups:
+		var r lobslawv1.GroupRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 	default:
 		return nil, fmt.Errorf("bucket %q not claimable", bucket)
 	}
@@ -735,7 +741,7 @@ func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
-		BucketBots, BucketBotInbox:
+		BucketBots, BucketBotInbox, BucketGroups:
 		return true
 	default:
 		return false
@@ -778,6 +784,8 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketBots, p.Bot, nil
 	case *lobslawv1.LogEntry_BotInbox:
 		return BucketBotInbox, p.BotInbox, nil
+	case *lobslawv1.LogEntry_Group:
+		return BucketGroups, p.Group, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:

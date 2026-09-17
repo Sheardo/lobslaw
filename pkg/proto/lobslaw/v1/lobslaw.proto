@@ -1291,6 +1291,64 @@ message BotRecord {
   // created_by is a principal — the coordinator that proposed this
   // bot, or the operator who added it in the GUI.
   string created_by = 15;
+
+  // group_id is the team this bot belongs to. Exactly one: a bot with
+  // two managers has two sets of instructions about what matters, and
+  // the whole point of the record is that there is one answer to that.
+  //
+  // Empty means the default group, which is what every bot written
+  // before groups existed reads as — so an upgrade needs no migration
+  // pass and no bot is orphaned by one that half-ran.
+  string group_id = 16;
+}
+
+// GroupRecord is one team: a coordinator and the specialists under it.
+//
+// Groups exist because "your company" was a name the console chose for
+// you, and because one person runs more than one thing. A group owns
+// its own coordinator, so "who answers when I message on Telegram" has
+// an answer per group rather than one answer globally.
+message GroupRecord {
+  // id is the slug, immutable. name is what you call it and can be
+  // changed whenever you like — the two are separate precisely so
+  // renaming a team does not rewrite every bot's group_id.
+  string id = 1;
+  string name = 2;
+  string description = 3;
+
+  // coordinator_bot_id is the bot that answers for this group and
+  // hands work out. Every group has exactly one; deleting it is
+  // refused the same way deleting the coordinator always was.
+  string coordinator_bot_id = 4;
+
+  // is_default marks the group a channel reaches when nothing else
+  // says otherwise. Exactly one group holds it.
+  bool is_default = 5;
+
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string created_by = 9;
+
+  // claimed_by is part of the CAS protocol every registry shares, not
+  // a feature of groups: the FSM's claim path requires it to compare
+  // holders under the lock. Unused in practice — nothing leases a
+  // group — but omitting it makes the record unclaimable, and the
+  // symptom is that creating one works and editing it does not.
+  string claimed_by = 10;
+
+  // owner is the principal who created this team.
+  //
+  // Multi-user made this necessary the moment it landed: before, one
+  // anonymous console session owned everything and ownership was a
+  // distinction without a difference. With two people signed in, a
+  // team with no owner is one anybody can rename or delete.
+  //
+  // Empty means unowned — which is what the seeded default team is,
+  // and what every team created before this field existed reads as.
+  // Unowned teams stay editable by anyone who can sign in, so an
+  // upgrade locks nobody out of their own default.
+  string owner = 11;
 }
 
 // InboxKind is what an item IS, which decides how a bot reads it.
@@ -1368,6 +1426,30 @@ message BotInboxItem {
   // session_id is the conversation the working turn wrote, so the GUI
   // can deep-link from an item to what the bot actually did.
   string session_id = 18;
+
+  // tools_used names the distinct tools the working turn actually
+  // invoked, in sorted order.
+  //
+  // Recorded because a bot's own account of its work cannot be taken
+  // at face value: a coordinator turn reported setting a reminder it
+  // never set, and nothing in the record contradicted it. The result
+  // text is the bot's claim; this is what happened.
+  repeated string tools_used = 19;
+
+  // tokens_used and cost_usd are what this item cost to work.
+  // Per-item rather than only per-turn because the inbox is where
+  // delegated work accumulates, and a routine that quietly becomes
+  // expensive is invisible until it is itemised.
+  uint64 tokens_used = 20;
+  double cost_usd = 21;
+
+  // requested_by is the person this work traces back to.
+  //
+  // sender says who put the item in the queue, which after one hop is
+  // another bot. This says who ASKED — the human at the start of the
+  // chain — so a report prepared by research and sent to James can
+  // still say that Sam asked for it.
+  string requested_by = 22;
 }
 
 // BotBudget caps one of this bot's turns. Zero on a field takes the
@@ -2108,6 +2190,7 @@ message LogEntry {
     ArchiveBatch archive_batch = 36;
     BotRecord bot = 37;
     BotInboxItem bot_inbox = 38;
+    GroupRecord group = 39;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.
@@ -2325,6 +2408,19 @@ message SessionGrant {
   google.protobuf.Timestamp expires_at = 8;
   uint64 revision = 9;
   string claimed_by = 10;
+
+  // owner is the principal who created this team.
+  //
+  // Multi-user made this necessary the moment it landed: before, one
+  // anonymous console session owned everything and ownership was a
+  // distinction without a difference. With two people signed in, a
+  // team with no owner is one anybody can rename or delete.
+  //
+  // Empty means unowned — which is what the seeded default team is,
+  // and what every team created before this field existed reads as.
+  // Unowned teams stay editable by anyone who can sign in, so an
+  // upgrade locks nobody out of their own default.
+  string owner = 11;
 }
 
 // Continuation is everything needed to resume a turn on a different

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -1067,4 +1068,32 @@ func extractClaimer(claimedBy string, expiresAt *timestamppb.Timestamp, now time
 		return ""
 	}
 	return claimedBy
+}
+
+// TasksForOwner returns the scheduled tasks belonging to one principal,
+// oldest first.
+//
+// Exported for the console, which needs to show a bot's routines. That
+// need is not cosmetic: a coordinator turn reported setting a reminder
+// it had never set, and nobody noticed for the plain reason that there
+// was nowhere to look. A routine you cannot see is one you cannot
+// discover the absence of.
+//
+// An empty owner returns everything, which is what an operator view
+// wants; ownership filtering elsewhere already works this way.
+func (s *Scheduler) TasksForOwner(owner string) ([]*lobslawv1.ScheduledTaskRecord, error) {
+	all, err := s.listScheduledTasks()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*lobslawv1.ScheduledTaskRecord, 0, len(all))
+	for _, t := range all {
+		if owner == "" || t.GetOwner() == owner {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].GetCreatedAt().AsTime().Before(out[j].GetCreatedAt().AsTime())
+	})
+	return out, nil
 }

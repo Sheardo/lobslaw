@@ -409,6 +409,24 @@ max_egress_bytes_per_turn = 10000000
 enabled              = true
 http_port            = {{.GatewayHTTPPort}}
 confirmation_timeout = "5m"
+# Loopback only. Change to "0.0.0.0" to reach this node — and the web
+# console below — from another machine. Doing so forces
+# [auth] require_auth = true; the node refuses to start otherwise,
+# because an unauthenticated console can rewrite what your bots do.
+bind_address = "127.0.0.1"
+
+# The web console: your team, their queues, and what they have done.
+# Off by default — it is an admin surface, and one you have not asked
+# for should not be listening.
+#
+#   lobslaw serve --config <this file>
+#   then open http://127.0.0.1:{{.GatewayHTTPPort}}/
+#
+# token_ref is required once bind_address is not loopback. It takes the
+# same ref forms as every other secret here (env:, file:, vault:).
+[gateway.ui]
+enabled = false
+# token_ref = "env:LOBSLAW_CONSOLE_TOKEN"
 
 [[gateway.channels]]
 type = "rest"

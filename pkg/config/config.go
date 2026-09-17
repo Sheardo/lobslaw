@@ -1625,6 +1625,21 @@ type UserConfig struct {
 	// property of the policy the operator wrote rather than of the
 	// string "operator" appearing in the code.
 	Roles []string `koanf:"roles,omitempty"`
+
+	// ConsoleTokenRef is this person's own console login, as a secret
+	// reference like every other credential here.
+	//
+	// The console began as a single shared secret for a
+	// single-machine setup, which meant every session was the same
+	// anonymous subject: no attribution on who changed a bot's brief,
+	// and no way for the policy engine's roles to apply to anybody in
+	// particular — they were already declared right above and had
+	// nowhere to be used.
+	//
+	// Empty leaves this person unable to sign in, which is the right
+	// default: [[user]] is also how channel addresses are bound, and
+	// binding a Telegram chat must not hand out a console login.
+	ConsoleTokenRef string `koanf:"console_token_ref,omitempty"`
 }
 
 // UserChannelAddrConfig binds one (channel, address) pair for a user.

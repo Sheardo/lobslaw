@@ -47,6 +47,17 @@ type SlackSink struct {
 func (s *SlackSink) ChannelType() string { return ChannelSlack }
 
 func (s *SlackSink) Deliver(ctx context.Context, address, body string) error {
+	return s.DeliverFrom(ctx, address, body, "")
+}
+
+// DeliverFrom implements notify.SenderAware: the bot posts under its
+// own name and icon rather than as a text prefix on the app's.
+//
+// This is what makes a team legible in a Slack channel — DevOps and
+// Engineering arrive looking like two people — without a Slack app per
+// bot, which would mean provisioning a token before a newly created
+// bot could say anything.
+func (s *SlackSink) DeliverFrom(ctx context.Context, address, body, senderBot string) error {
 	if s.Handler == nil {
 		return errors.New("slack sink: handler not wired")
 	}
@@ -55,7 +66,41 @@ func (s *SlackSink) Deliver(ctx context.Context, address, body string) error {
 	}
 	// No thread: a notification is a new topic, not a reply to
 	// whatever the last conversation happened to be about.
-	return s.Handler.api.postMessage(ctx, address, "", body)
+	return s.Handler.api.postMessageAs(ctx, address, "", body, botIdentity(senderBot))
+}
+
+// botIdentity renders a bot id as a Slack display name and icon.
+//
+// An emoji rather than an avatar URL: a bot's mascot and colour live
+// in the console and are not reachable from Slack's servers, and a
+// broken image is worse than a consistent shape. Derived from the id
+// so a bot created a moment ago already has one — the same reasoning
+// as the console's colours.
+func botIdentity(senderBot string) slackIdentity {
+	name := strings.TrimSpace(senderBot)
+	if name == "" {
+		return slackIdentity{}
+	}
+	// Title-case the slug: "devops" is an id, "Devops" is a name.
+	display := strings.ToUpper(name[:1]) + name[1:]
+	return slackIdentity{Username: display, IconEmoji: botEmoji(name)}
+}
+
+// botEmoji picks a stable icon for a bot.
+//
+// A small fixed set rather than a hash over every emoji: the point is
+// that two bots look different at a glance, and most emoji are not
+// legible at Slack's avatar size.
+func botEmoji(id string) string {
+	icons := []string{
+		":robot_face:", ":gear:", ":satellite:", ":telescope:",
+		":hammer_and_wrench:", ":mag:", ":rocket:", ":chart_with_upwards_trend:",
+	}
+	var h uint32
+	for i := 0; i < len(id); i++ {
+		h = h*31 + uint32(id[i])
+	}
+	return icons[int(h%uint32(len(icons)))]
 }
 
 // RESTSink is a placeholder — REST is request/response and can't
@@ -153,6 +198,73 @@ func (s *CallbackSink) Deliver(ctx context.Context, address, body string) error 
 
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("callback sink: %s answered HTTP %d", u.Host, resp.StatusCode)
+	}
+	return nil
+}
+
+// ChannelWebhook is an incoming-webhook URL — Slack, Discord, Teams,
+// or anything that accepts the same shape.
+const ChannelWebhook = "webhook"
+
+// WebhookSink posts to an incoming webhook.
+//
+// Distinct from CallbackSink, which exists for machine-to-machine
+// delivery and sends {"body": ...}. Slack and everything that copied
+// its webhook format want {"text": ...}, so the callback sink could
+// not reach one: a bot could be told to ping Slack and the only route
+// there was a full Slack app with a bot token, socket mode and an
+// event subscription — a lot of ceremony for "deploy finished".
+//
+// The payload is deliberately the lowest common denominator. Slack
+// blocks, Discord embeds and Teams cards are all richer and none of
+// them is compatible with the others; plain text reaches all three.
+type WebhookSink struct {
+	// Client routes through the egress proxy, so an operator's
+	// declared hosts remain the only reachable ones.
+	Client *http.Client
+	Logger *slog.Logger
+}
+
+func (s *WebhookSink) ChannelType() string { return ChannelWebhook }
+
+type webhookPayload struct {
+	Text string `json:"text"`
+}
+
+func (s *WebhookSink) Deliver(ctx context.Context, address, body string) error {
+	if s.Client == nil {
+		return errors.New("webhook sink: no http client wired")
+	}
+	u, err := url.Parse(strings.TrimSpace(address))
+	if err != nil {
+		return fmt.Errorf("webhook sink: address %q: %w", address, err)
+	}
+	// https only. A webhook URL IS the credential — anyone holding it
+	// can post as you — so sending one over plaintext http would leak
+	// the secret to every hop on the path.
+	if u.Scheme != "https" {
+		return fmt.Errorf("webhook sink: address must be https (a webhook URL is a credential), got %q", u.Scheme)
+	}
+
+	payload, err := json.Marshal(webhookPayload{Text: body})
+	if err != nil {
+		return fmt.Errorf("webhook sink: marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("webhook sink: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("webhook sink: post to %s: %w", u.Host, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		// The host, never the full URL: the path carries the secret
+		// and this string ends up in logs and in a bot's tool result.
+		return fmt.Errorf("webhook sink: %s returned HTTP %d", u.Host, resp.StatusCode)
 	}
 	return nil
 }

@@ -45,6 +45,37 @@ func (n *Node) seedCoordinatorBot(ctx context.Context) error {
 	}
 	n.log.Info("bots: coordinator ready",
 		"id", rec.GetId(), "display_name", rec.GetDisplayName(), "revision", rec.GetRevision())
+	return n.seedDefaultGroup(ctx, rec.GetDisplayName())
+}
+
+// seedDefaultGroup makes sure there is a team for the coordinator to
+// run, creating it on first boot after groups existed.
+//
+// Done here rather than as a migration pass because the state that
+// needs it — bots present, no group — is exactly what every existing
+// deployment upgrades into, and a migration that half ran would leave
+// bots belonging to a team that does not exist. memory.GroupOf treats
+// an empty group_id as the default, so no bot record has to be
+// rewritten at all: the upgrade is this one record appearing.
+func (n *Node) seedDefaultGroup(ctx context.Context, coordinatorName string) error {
+	if n.groupSvc == nil || n.raft == nil || !n.raft.IsLeader() {
+		return nil
+	}
+	// Named after whatever the operator already called the assistant,
+	// falling back to something neutral. "Your company" was a name the
+	// console picked, which is the thing groups exist to stop.
+	name := strings.TrimSpace(coordinatorName)
+	if name == "" {
+		name = "Your team"
+	} else {
+		name += "'s team"
+	}
+	rec, err := n.groupSvc.Default(ctx, name)
+	if err != nil {
+		return fmt.Errorf("groups: seed default: %w", err)
+	}
+	n.log.Info("groups: default ready",
+		"id", rec.GetId(), "name", rec.GetName(), "coordinator", rec.GetCoordinatorBotId())
 	return nil
 }
 
@@ -408,17 +439,17 @@ func (n *Node) seedUserPrefsFromConfig(ctx context.Context) error {
 		// conversation id, and posted into channel_not_found. Adding
 		// the binding to config and restarting changed nothing.
 		if existing, err := n.userPrefsSvc.Get(ctx, u.ID); err == nil && existing != nil {
-			added := mergeMissingChannels(existing, u.Channels)
-			if len(added) == 0 {
+			added, removed := reconcileChannels(existing, u.Channels)
+			if len(added) == 0 && len(removed) == 0 {
 				continue
 			}
 			if err := n.userPrefsSvc.Put(ctx, existing); err != nil {
-				n.log.Warn("user_prefs: adding newly configured channels failed",
-					"id", u.ID, "channels", added, "err", err)
+				n.log.Warn("user_prefs: reconciling configured channels failed",
+					"id", u.ID, "added", added, "removed", removed, "err", err)
 				continue
 			}
-			n.log.Info("user_prefs: bound newly configured channels",
-				"id", u.ID, "channels", added)
+			n.log.Info("user_prefs: channels reconciled with config",
+				"id", u.ID, "added", added, "removed", removed)
 			continue
 		}
 		channels := make([]*lobslawv1.UserChannelAddress, 0, len(u.Channels))
@@ -506,6 +537,54 @@ func (n *Node) seedDreamTask(ctx context.Context) error {
 // have been corrected at runtime and config is not entitled to
 // overwrite it. A type that is absent entirely was never a decision
 // anybody made — it is a binding the operator has just written down.
+// reconcileChannels makes the record match the config: adds bindings
+// the config declares and the record lacks, and DROPS ones the record
+// has and the config no longer declares.
+//
+// It only added before, which left a removed channel bound forever.
+// The failure was quiet and permanent: delete a webhook from the
+// config, restart, and every notification still tries it, logs a
+// delivery failure, and carries on — for a channel the operator had
+// already deleted. The old comment justified add-only with "runtime
+// edits via builtins win", except no such builtin exists, so operator
+// config is the only source there is and it should be authoritative
+// in both directions.
+//
+// Returns what was added and what was removed, for the log.
+func reconcileChannels(rec *lobslawv1.UserPreferences, configured []config.UserChannelAddrConfig) (added, removed []string) {
+	if rec == nil {
+		return nil, nil
+	}
+	want := make(map[string]string, len(configured))
+	for _, c := range configured {
+		t := normaliseChannelType(c.Type)
+		if t == "" || strings.TrimSpace(c.Address) == "" {
+			continue
+		}
+		want[t] = strings.TrimSpace(c.Address)
+	}
+
+	kept := rec.Channels[:0]
+	for _, c := range rec.Channels {
+		t := normaliseChannelType(c.GetType())
+		addr, ok := want[t]
+		if !ok {
+			removed = append(removed, t)
+			continue
+		}
+		// An address that changed in config wins too, for the same
+		// reason: config is the source.
+		if c.GetAddress() != addr {
+			c.Address = addr
+		}
+		kept = append(kept, c)
+	}
+	rec.Channels = kept
+
+	added = mergeMissingChannels(rec, configured)
+	return added, removed
+}
+
 func mergeMissingChannels(rec *lobslawv1.UserPreferences, configured []config.UserChannelAddrConfig) []string {
 	if rec == nil {
 		return nil

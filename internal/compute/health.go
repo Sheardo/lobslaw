@@ -1,6 +1,10 @@
 package compute
 
 import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -105,6 +109,19 @@ func (h *ProviderHealth) CooldownRemaining(label string) time.Duration {
 // malformed turn take a healthy provider out of the chain for
 // everybody else.
 func (h *ProviderHealth) RecordFailure(label string, class FailureClass) {
+	h.RecordFailureAfter(label, class, 0)
+}
+
+// RecordFailureAfter is RecordFailure with the provider's own answer
+// to "when should I come back".
+//
+// retryAfter wins over the computed backoff whenever it is longer.
+// Longer only, in both directions for a reason: a provider asking for
+// sixty seconds knows something the exponential guess does not, and
+// one asking for zero — or one asked for by a misconfigured proxy —
+// must not be able to shorten a cooldown that repeated failures have
+// earned.
+func (h *ProviderHealth) RecordFailureAfter(label string, class FailureClass, retryAfter time.Duration) {
 	if h == nil || label == "" || class == FailurePermanent {
 		return
 	}
@@ -130,6 +147,9 @@ func (h *ProviderHealth) RecordFailure(label string, class FailureClass) {
 		// in seconds and one that fails ten times in a row is not
 		// retried every thirty seconds forever.
 		d = min(cooldownTransient<<min(st.consecutive-1, 8), maxCooldown)
+	}
+	if retryAfter > d {
+		d = min(retryAfter, maxCooldown)
 	}
 	if until := h.now().Add(d); until.After(st.until) {
 		st.until = until
@@ -172,4 +192,62 @@ func (h *ProviderHealth) Demoted() map[string]DemotionInfo {
 type DemotionInfo struct {
 	Remaining time.Duration
 	Class     FailureClass
+}
+
+// retryAfterFrom extracts a provider's Retry-After hint from an error,
+// or zero when it carried none.
+//
+// Kept beside the health tracker because both failover paths need the
+// same three lines, and two copies of "dig the hint out of the error"
+// is how one of them ends up not doing it.
+func retryAfterFrom(err error) time.Duration {
+	var de *DriverError
+	if errors.As(err, &de) {
+		return de.RetryAfter
+	}
+	return 0
+}
+
+// describeDemotions renders the current cooldowns as one readable
+// clause: "alibaba-fast: rate limited, 47s left; alibaba-pro:
+// credentials rejected, 4m left".
+//
+// Sorted so the same outage produces the same sentence twice running —
+// a message that reorders itself between two failures reads as two
+// different problems.
+func describeDemotions(h *ProviderHealth) string {
+	demoted := h.Demoted()
+	if len(demoted) == 0 {
+		return "no provider is currently demoted, which should not happen here — " +
+			"the chain may have been reconfigured mid-turn"
+	}
+	labels := make([]string, 0, len(demoted))
+	for label := range demoted {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+
+	parts := make([]string, 0, len(labels))
+	for _, label := range labels {
+		info := demoted[label]
+		parts = append(parts, fmt.Sprintf("%s: %s, %s left",
+			label, describeClass(info.Class), info.Remaining.Round(time.Second)))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// describeClass says what a failure class means to somebody who is not
+// reading the source. "quota_exhausted" is a token; "the plan is spent"
+// is an answer.
+func describeClass(c FailureClass) string {
+	switch c {
+	case FailureCredential:
+		return "credentials rejected"
+	case FailureQuotaExhausted:
+		return "quota or plan exhausted"
+	case FailurePermanent:
+		return "permanently failing"
+	default:
+		return "transient failures"
+	}
 }

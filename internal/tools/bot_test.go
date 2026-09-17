@@ -53,7 +53,7 @@ func (l *spyLoop) last() compute.ProcessMessageRequest {
 
 func askBotHandler(t *testing.T, loop *spyLoop, bots fakeBotResolver) compute.BuiltinFunc {
 	t.Helper()
-	runner, err := compute.NewTurnRunner(loop, bots, compute.BudgetCaps{},
+	runner, err := compute.NewTurnRunner(loop, bots, compute.BudgetCaps{}, nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewTurnRunner: %v", err)
@@ -277,4 +277,8 @@ func (r *recordingInbox) List(context.Context, string, memory.InboxFilter) ([]*l
 
 func (r *recordingInbox) Resolve(context.Context, string, string, memory.InboxOutcome) (*lobslawv1.BotInboxItem, error) {
 	return nil, nil
+}
+
+func (l *spyLoop) ResumeFromConfirmation(_ context.Context, _ compute.ProcessMessageRequest, _ []compute.Message) (*compute.ProcessMessageResponse, error) {
+	return nil, errors.New("ResumeFromConfirmation: not expected in this test")
 }

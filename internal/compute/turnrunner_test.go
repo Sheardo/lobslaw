@@ -50,7 +50,7 @@ func (m mapResolver) ResolveBot(_ context.Context, id string) (*BotProfile, erro
 
 func testRunner(t *testing.T, loop TurnLoop, bots BotResolver, caps BudgetCaps) *TurnRunner {
 	t.Helper()
-	r, err := NewTurnRunner(loop, bots, caps, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r, err := NewTurnRunner(loop, bots, caps, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewTurnRunner: %v", err)
 	}
@@ -358,5 +358,375 @@ func TestMayMessageIsAnAllowlist(t *testing.T) {
 	}
 	if (&BotProfile{ID: "lonely"}).MayMessageBot("anyone") {
 		t.Error("a bot with no declared edges could reach one")
+	}
+}
+
+// fixedLoop returns one prepared response. recordingLoop cannot be
+// used here: it replies "ok" with no Messages, and the thing under
+// test is precisely which messages get persisted.
+type fixedLoop struct{ resp *ProcessMessageResponse }
+
+func (l *fixedLoop) RunToolCallLoop(_ context.Context, _ ProcessMessageRequest) (*ProcessMessageResponse, error) {
+	return l.resp, nil
+}
+
+// recordingWriter captures what the runner persists.
+type recordingWriter struct {
+	channel, channelID, turnID string
+	msgs                       []Message
+	id                         string
+	err                        error
+	history                    []Message
+	summary                    string
+	loadErr                    error
+}
+
+func (w *recordingWriter) AppendTurn(_ context.Context, channel, channelID, turnID string, msgs []Message) (string, error) {
+	w.channel, w.channelID, w.turnID, w.msgs = channel, channelID, turnID, msgs
+	return w.id, w.err
+}
+
+func (w *recordingWriter) LoadTurns(_ context.Context, _, _ string, _ int) ([]Message, string, error) {
+	return w.history, w.summary, w.loadErr
+}
+
+// A headless turn must be written to a session and report where.
+//
+// It was not. Only the channel path persisted a conversation, so a
+// turn started from Telegram was recorded and the identical turn
+// started by the inbox drain was not — which left every "what did it
+// actually do" link in the console pointing at nothing. The field, the
+// route and the UI all existed; the write did not.
+func TestHeadlessTurnIsPersistedAndReportsItsSession(t *testing.T) {
+	t.Parallel()
+
+	writer := &recordingWriter{id: "sess-123"}
+	loop := &fixedLoop{resp: &ProcessMessageResponse{
+		Reply:    "done",
+		Messages: []Message{{Role: "user", Content: "do it"}, {Role: "assistant", Content: "done"}},
+	}}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{}, writer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+
+	resp, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "inbox", OriginID: "item-1",
+		Channel: "bot", ChannelID: "devops:inbox:item-1",
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if resp.SessionID != "sess-123" {
+		t.Errorf("SessionID = %q, want the id the writer returned", resp.SessionID)
+	}
+	if writer.channel != "bot" || writer.channelID != "devops:inbox:item-1" {
+		t.Errorf("persisted to %q/%q, want bot/devops:inbox:item-1", writer.channel, writer.channelID)
+	}
+	if len(writer.msgs) != 2 {
+		t.Errorf("persisted %d messages, want the turn's 2", len(writer.msgs))
+	}
+}
+
+// A store that is down must not lose work that already happened.
+//
+// The turn has been run and paid for by the time it is written, so a
+// failed append is a missing transcript, not a failed task. Returning
+// the error here would mark completed work as failed and retry it —
+// spending a second provider call to fix a logging problem.
+func TestATurnSurvivesAFailedTranscriptWrite(t *testing.T) {
+	t.Parallel()
+
+	writer := &recordingWriter{err: errors.New("raft: not leader")}
+	loop := &fixedLoop{resp: &ProcessMessageResponse{
+		Reply:    "done anyway",
+		Messages: []Message{{Role: "assistant", Content: "done anyway"}},
+	}}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{}, writer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+
+	resp, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "inbox", OriginID: "item-2",
+		Channel: "bot", ChannelID: "devops:inbox:item-2",
+	})
+	if err != nil {
+		t.Fatalf("a failed transcript write failed the whole turn: %v", err)
+	}
+	if resp.Reply != "done anyway" {
+		t.Errorf("Reply = %q, want the work's actual result", resp.Reply)
+	}
+	if resp.SessionID != "" {
+		t.Errorf("SessionID = %q, want empty when nothing was stored", resp.SessionID)
+	}
+}
+
+func (l *recordingLoop) ResumeFromConfirmation(_ context.Context, _ ProcessMessageRequest, _ []Message) (*ProcessMessageResponse, error) {
+	return nil, errors.New("ResumeFromConfirmation: not expected in this test")
+}
+
+func (l *fixedLoop) ResumeFromConfirmation(_ context.Context, _ ProcessMessageRequest, _ []Message) (*ProcessMessageResponse, error) {
+	return nil, errors.New("ResumeFromConfirmation: not expected in this test")
+}
+
+// askingLoop stops once to ask, then succeeds when resumed.
+type askingLoop struct {
+	resumed  bool
+	relaxed  bool
+	priorLen int
+}
+
+func (l *askingLoop) RunToolCallLoop(_ context.Context, req ProcessMessageRequest) (*ProcessMessageResponse, error) {
+	return &ProcessMessageResponse{
+		NeedsConfirmation:    true,
+		ConfirmationReason:   "shell_command is guarded",
+		ConfirmationAction:   "shell",
+		ConfirmationResource: "rm -rf /tmp/x",
+		ToolCalls:            []ToolInvocation{{ToolName: "glob"}},
+		Messages:             []Message{{Role: "user", Content: "do it"}},
+	}, nil
+}
+
+func (l *askingLoop) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRequest, prior []Message) (*ProcessMessageResponse, error) {
+	l.resumed = true
+	l.priorLen = len(prior)
+	// The caps must be lifted before re-entry, or the resumed half
+	// re-trips the same bound the user just authorised past.
+	l.relaxed = req.Budget.Caps().MaxToolCalls == 0
+	// The approval has to reach the tools, not just the runner.
+	// turnApprovalPending rather than turnApproved: the latter SPENDS
+	// the approval, so asserting with it would consume the very thing
+	// the resumed tool call needs.
+	if !turnApprovalPending(ctx) {
+		return nil, errors.New("resumed without the turn approval in context")
+	}
+	return &ProcessMessageResponse{
+		Reply:     "done",
+		ToolCalls: []ToolInvocation{{ToolName: "shell_command"}},
+		Messages:  prior,
+	}, nil
+}
+
+// A headless turn can now ask the person who started it.
+//
+// Before, every caller failed closed unconditionally: a turn that
+// reached a guarded tool stopped and reported that it had nobody to
+// ask, even when the operator was sitting on the other end of an open
+// stream. Confirm is how a caller that HAS somebody says so.
+func TestATurnCanAskAndCarryOnWhenApproved(t *testing.T) {
+	t.Parallel()
+
+	loop := &askingLoop{}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{MaxToolCalls: 3}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+
+	var askedReason string
+	resp, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "console", OriginID: "t1",
+		Confirm: func(_ context.Context, reason, _, _ string) (bool, error) {
+			askedReason = reason
+			return true, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if askedReason != "shell_command is guarded" {
+		t.Errorf("the reason put to the user was %q", askedReason)
+	}
+	if !loop.resumed {
+		t.Fatal("approved, but the turn was never resumed")
+	}
+	if !loop.relaxed {
+		t.Error("resumed without relaxing the budget; the approved call re-trips the cap")
+	}
+	if resp.NeedsConfirmation {
+		t.Error("response still reports NeedsConfirmation after approval")
+	}
+	// The receipt has to cover the whole turn, not just the half that
+	// ran after the question — otherwise approving a turn hides what
+	// it did beforehand.
+	if got := InvokedToolNames(resp.ToolCalls); len(got) != 2 {
+		t.Errorf("tool calls = %v, want both halves of the turn", got)
+	}
+}
+
+// Declining stops the turn and says so plainly.
+func TestADeclinedTurnStopsAndSaysWhy(t *testing.T) {
+	t.Parallel()
+
+	r, err := NewTurnRunner(&askingLoop{}, nil, BudgetCaps{}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+	resp, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "console", OriginID: "t2",
+		Confirm: func(context.Context, string, string, string) (bool, error) { return false, nil },
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if resp.NeedsConfirmation {
+		t.Error("a declined turn still reports NeedsConfirmation")
+	}
+	if !strings.Contains(resp.Reply, "declined") {
+		t.Errorf("Reply = %q, want it to say the request was declined", resp.Reply)
+	}
+}
+
+// A prompt channel that breaks is an unanswered question, never a yes.
+func TestABrokenPromptChannelIsNotConsent(t *testing.T) {
+	t.Parallel()
+
+	loop := &askingLoop{}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+	resp, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "console", OriginID: "t3",
+		Confirm: func(context.Context, string, string, string) (bool, error) {
+			return false, errors.New("prompt registry is down")
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if loop.resumed {
+		t.Fatal("a failed prompt was treated as approval and the turn carried on")
+	}
+	if !resp.NeedsConfirmation {
+		t.Error("the turn should still report that it is waiting on an answer")
+	}
+}
+
+// A conversation has to be READ back, not only written.
+//
+// Persisting a transcript nothing loads gives a bot that answers every
+// message as though it were the first. The console showed that as a
+// thread vanishing on refresh; the worse half was invisible, because
+// the MODEL had no history either and a follow-up landed with no idea
+// what it followed.
+func TestATurnRepliesWithTheConversationSoFar(t *testing.T) {
+	t.Parallel()
+
+	prior := []Message{
+		{Role: "user", Content: "my cluster is called nova"},
+		{Role: "assistant", Content: "noted"},
+	}
+	writer := &recordingWriter{id: "s1", history: prior, summary: "earlier: setup talk"}
+	loop := &recordingLoop{}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{}, writer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "what is it called?", Origin: "console", OriginID: "t1",
+		Channel: "bot", ChannelID: "coordinator",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := loop.last()
+	if len(got.ConversationHistory) != 2 {
+		t.Errorf("history = %d messages, want the 2 already on record", len(got.ConversationHistory))
+	}
+	if got.ConversationSummary != "earlier: setup talk" {
+		t.Errorf("summary = %q, want the stored one", got.ConversationSummary)
+	}
+}
+
+// A turn with no address has no conversation, and must not invent one.
+// An inbox item gets its own session per item, which is what keeps an
+// independent task independent.
+func TestATurnWithNoAddressHasNoHistory(t *testing.T) {
+	t.Parallel()
+
+	writer := &recordingWriter{history: []Message{{Role: "user", Content: "should not appear"}}}
+	loop := &recordingLoop{}
+	r, _ := NewTurnRunner(loop, nil, BudgetCaps{}, writer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if _, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "do it", Origin: "scheduler", OriginID: "t2",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(loop.last().ConversationHistory) != 0 {
+		t.Error("a turn with no channel picked up somebody else's conversation")
+	}
+}
+
+// A transcript that cannot be read must not take the turn with it.
+func TestAFailedHistoryLoadStillAnswers(t *testing.T) {
+	t.Parallel()
+
+	writer := &recordingWriter{loadErr: errors.New("raft: not leader")}
+	loop := &recordingLoop{}
+	r, _ := NewTurnRunner(loop, nil, BudgetCaps{}, writer,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if _, err := r.Run(context.Background(), TurnRequest{
+		Prompt: "hello", Origin: "console", OriginID: "t3",
+		Channel: "bot", ChannelID: "coordinator",
+	}); err != nil {
+		t.Fatalf("a failed history load failed the turn: %v", err)
+	}
+}
+
+// Every field the runner accepts has to reach the turn.
+//
+// RequestedBy was declared on TurnRequest and never copied into the
+// agent request, so provenance died silently one hop short of the
+// tool that needed it: the queue item held "user:sam", the turn ran,
+// the notification went out attributed to nobody. Nothing failed —
+// the field was simply dropped.
+//
+// Asserting the plumbing rather than one field, because this is a
+// struct copied by hand and the next addition can be forgotten the
+// same way.
+func TestTheRunnerPassesItsRequestThrough(t *testing.T) {
+	t.Parallel()
+
+	loop := &recordingLoop{}
+	r, err := NewTurnRunner(loop, nil, BudgetCaps{}, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewTurnRunner: %v", err)
+	}
+
+	if _, err := r.Run(context.Background(), TurnRequest{
+		Prompt:       "do it",
+		Origin:       "inbox",
+		OriginID:     "item-1",
+		Channel:      "bot",
+		ChannelID:    "research",
+		SystemPrompt: "you are research",
+		RequestedBy:  "user:sam",
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	got := loop.last()
+	for _, c := range []struct{ name, want, have string }{
+		{"Message", "do it", got.Message},
+		{"Channel", "bot", got.Channel},
+		{"ChannelID", "research", got.ChannelID},
+		{"SystemPrompt", "you are research", got.SystemPrompt},
+		{"RequestedBy", "user:sam", got.RequestedBy},
+	} {
+		if c.have != c.want {
+			t.Errorf("%s = %q, want %q — the runner dropped it", c.name, c.have, c.want)
+		}
 	}
 }

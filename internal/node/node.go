@@ -354,6 +354,7 @@ type Node struct {
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
 	botSvc       *memory.BotService
+	groupSvc     *memory.GroupService
 	inboxSvc     *memory.InboxService
 	// inboxWake coalesces drain nudges from the FSM change callback.
 	// Buffered-of-1: a burst of posts produces one drain, and a send

@@ -2,7 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/jmylchreest/lobslaw/internal/identity"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"testing"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -105,5 +108,142 @@ func TestNotifyWithoutAServiceRegistersNothing(t *testing.T) {
 	_ = RegisterNotifyBuiltins(b, NotifyConfig{})
 	if _, ok := b.Get("notify"); ok {
 		t.Error("notify registered with no service behind it")
+	}
+}
+
+// A bot cannot name its own sender.
+//
+// Attribution is stamped from the turn identity, and the schema is
+// closed so the model has no field to put one in. Both halves matter:
+// if a sender parameter ever appears, marketing could send you
+// something that reads as though engineering said it — and the whole
+// value of attributing a ping is that the attribution is true.
+func TestNotifyOffersNoWayToClaimADifferentSender(t *testing.T) {
+	t.Parallel()
+
+	var schema struct {
+		Properties           map[string]any `json:"properties"`
+		AdditionalProperties *bool          `json:"additionalProperties"`
+	}
+	var found bool
+	for _, td := range NotifyToolDefs() {
+		if td.Name != "notify" {
+			continue
+		}
+		found = true
+		if err := json.Unmarshal(td.ParametersSchema, &schema); err != nil {
+			t.Fatalf("notify schema does not parse: %v", err)
+		}
+	}
+	if !found {
+		t.Fatal("no notify tool definition")
+	}
+
+	for _, banned := range []string{"sender", "sender_bot", "from", "as_bot", "bot_id"} {
+		if _, ok := schema.Properties[banned]; ok {
+			t.Errorf("notify accepts %q — a bot can attribute a message to somebody else", banned)
+		}
+	}
+	// Closed schema, so an unlisted field cannot slip through either.
+	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+		t.Error("notify's schema is open; an arbitrary field can be smuggled in")
+	}
+}
+
+// A bot working its inbox must still be able to reach you.
+//
+// Persisting headless transcripts gave those turns a channel name
+// ("bot") where they previously had none. notify routes an originating
+// channel back to itself, so what had been "tell the user however they
+// asked to be told" silently became "reply into a transcript" — and
+// failed with `no sink registered for channel "bot"`. Nothing else
+// changed; a feature that had worked stopped, because a field that had
+// been empty stopped being empty.
+func TestNotifyBroadcastsWhenTheChannelIsSynthetic(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		identity turn.Identity
+		want     string // expected OriginatorChannel
+	}{
+		{
+			name:     "a real channel is replied to in place",
+			identity: turn.Identity{Channel: "telegram", ChannelID: "-100123"},
+			want:     "telegram",
+		},
+		{
+			name:     "the synthetic bot channel broadcasts instead",
+			identity: turn.Identity{Channel: turn.ChannelBot, ChannelID: "devops.inbox.01ABC"},
+			want:     "",
+		},
+		{
+			name:     "no channel at all broadcasts, as it always did",
+			identity: turn.Identity{},
+			want:     "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := humanChannel(tc.identity); got != tc.want {
+				t.Errorf("OriginatorChannel = %q, want %q", got, tc.want)
+			}
+			// The id has to travel with it. Left behind, notify would
+			// fall back to a channel id for a channel it is no longer
+			// delivering on.
+			if tc.want == "" && humanChannelID(tc.identity) != "" {
+				t.Error("channel id survived a channel that did not")
+			}
+		})
+	}
+}
+
+// Who asked is decided by the principal, not by whether a bot is
+// running the turn.
+//
+// Identity.IsBot() is `BotID != ""`, and since channel turns resolve
+// to the default team's coordinator, EVERY turn has a BotID now —
+// including one a person is driving. Testing that here discarded the
+// requester in exactly the case where there was one.
+func TestTheRequesterIsTheHumanEvenWhenABotRunsTheTurn(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   turn.Identity
+		want string
+	}{
+		{
+			name: "a person talking to the coordinator",
+			id: turn.Identity{
+				BotID:     "coordinator",
+				Principal: identity.Principal("user:sam"),
+			},
+			want: "user:sam",
+		},
+		{
+			name: "a bot working on its own asked nobody",
+			id: turn.Identity{
+				BotID:     "devops",
+				Principal: identity.Bot("devops"),
+			},
+			want: "",
+		},
+		{
+			name: "a carried requester wins over everything",
+			id: turn.Identity{
+				BotID:       "research",
+				Principal:   identity.Bot("research"),
+				RequestedBy: "user:sam",
+			},
+			want: "user:sam",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := requesterLabel(tc.id); got != tc.want {
+				t.Errorf("requesterLabel = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

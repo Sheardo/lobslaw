@@ -152,11 +152,11 @@ func newBotListHandler(reg BotRegistry) compute.BuiltinFunc {
 		out := make([]map[string]any, 0, len(records))
 		for _, rec := range records {
 			entry := map[string]any{
-				"id":           rec.GetId(),
-				"display_name": rec.GetDisplayName(),
-				"description":  rec.GetDescription(),
-				"enabled":      rec.GetEnabled(),
-				"is_chief":     rec.GetIsCoordinator(),
+				"id":             rec.GetId(),
+				"display_name":   rec.GetDisplayName(),
+				"description":    rec.GetDescription(),
+				"enabled":        rec.GetEnabled(),
+				"is_coordinator": rec.GetIsCoordinator(),
 			}
 			if len(rec.GetTools()) > 0 {
 				entry["tools"] = rec.GetTools()

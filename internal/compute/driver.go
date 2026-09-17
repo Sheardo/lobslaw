@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // The provider layer grew one modality at a time and each reinvented
@@ -111,6 +112,16 @@ func (c FailureClass) String() string {
 type DriverError struct {
 	Class FailureClass
 	Err   error
+
+	// RetryAfter is what the provider asked for, from the Retry-After
+	// header. Zero when it did not say.
+	//
+	// Worth carrying because the alternative is guessing: the health
+	// tracker's exponential backoff starts at a few seconds, so a
+	// provider asking for sixty gets hammered five more times before
+	// the guess catches up — and each of those is a request that
+	// counts against the very limit being waited out.
+	RetryAfter time.Duration
 }
 
 func (e *DriverError) Error() string {

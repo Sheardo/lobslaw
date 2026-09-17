@@ -3,6 +3,7 @@ package research
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -62,7 +63,7 @@ func (g *greedyAgent) total() int {
 
 func (g *greedyAgent) runner(t *testing.T) *compute.TurnRunner {
 	t.Helper()
-	r, err := compute.NewTurnRunner(g, nil, compute.BudgetCaps{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r, err := compute.NewTurnRunner(g, nil, compute.BudgetCaps{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewTurnRunner: %v", err)
 	}
@@ -278,4 +279,8 @@ func TestPackageDocNamesTheRegisteredHandlerRef(t *testing.T) {
 	if !strings.Contains(doc, registered) {
 		t.Errorf("package doc does not name the registered ref %q", registered)
 	}
+}
+
+func (g *greedyAgent) ResumeFromConfirmation(_ context.Context, _ compute.ProcessMessageRequest, _ []compute.Message) (*compute.ProcessMessageResponse, error) {
+	return nil, errors.New("ResumeFromConfirmation: not expected in this test")
 }

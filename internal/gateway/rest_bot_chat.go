@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
@@ -53,6 +55,25 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		s.jsonErr(w, http.StatusInternalServerError, "this server cannot stream")
 		return
 	}
+	// Clear the write deadline for THIS response only.
+	//
+	// The server sets WriteTimeout=60s, which is right for every other
+	// endpoint and fatal here: it is an absolute deadline from the
+	// start of the response, not an inactivity timeout, so the
+	// heartbeat below does not extend it. A bot turn against a real
+	// model routinely runs past a minute — one that delegates to three
+	// specialists took 159s — and every one of those was killed
+	// mid-stream. The turn itself completed and was recorded; only the
+	// person watching was told "network error", which is the worst
+	// possible split: the work happened and the UI said it failed.
+	//
+	// Scoped to this handler rather than raised globally, so a slow or
+	// stuck request anywhere else still hits the server-wide bound.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		// Not fatal — an unwrapped ResponseWriter in a test has no
+		// deadline to clear, and the stream is still correct.
+		s.log.Debug("chat: could not clear write deadline", "err", err)
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -62,7 +83,26 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 	w.WriteHeader(http.StatusOK)
 
 	turnID := ids.New()
-	sendSSE(w, flusher, "start", map[string]any{"bot": botID, "turn_id": turnID})
+
+	// Three goroutines write to this stream: the heartbeat ticker, the
+	// delta hook, and this handler. An http.ResponseWriter is not safe
+	// for concurrent use, and interleaved writes corrupt frames rather
+	// than merely reordering them.
+	//
+	// One guarded emitter rather than a mutex the call sites take
+	// themselves. The first version did the latter and a mismatched
+	// pair — an Unlock whose Lock had been lost in an edit — took the
+	// whole node down with "unlock of unlocked mutex" the first time a
+	// turn asked for approval. A lock nobody outside this closure can
+	// touch cannot be left unbalanced.
+	var sseMu sync.Mutex
+	emit := func(event string, payload map[string]any) {
+		sseMu.Lock()
+		defer sseMu.Unlock()
+		sendSSE(w, flusher, event, payload)
+	}
+
+	emit("start", map[string]any{"bot": botID, "turn_id": turnID})
 
 	// A heartbeat while the turn runs. The console shows it as
 	// "working", and it also keeps an idle-timeout proxy from closing a
@@ -76,12 +116,60 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 			case <-done:
 				return
 			case <-ticker.C:
-				sendSSE(w, flusher, "working", map[string]any{"turn_id": turnID})
+				emit("working", map[string]any{"turn_id": turnID})
 			}
 		}
 	}()
 
-	resp, err := s.runBotTurn(r, botID, body.Message, turnID)
+	// The confirmation hook. The person who started this turn is still
+	// on the other end of the stream, so the question goes to them:
+	// register a prompt, push its id down the wire for the console to
+	// render buttons against, and block until they answer or the TTL
+	// fires. Previously this path could only report that it was unable
+	// to ask, which made every guarded tool unreachable from the
+	// console no matter who was watching.
+	confirm := func(ctx context.Context, reason, action, resource string) (bool, error) {
+		if s.cfg.Prompts == nil {
+			return false, errors.New("no prompt registry is wired")
+		}
+		ttl := s.cfg.ConfirmationTTL
+		if ttl <= 0 {
+			ttl = 5 * time.Minute
+		}
+		p, perr := s.cfg.Prompts.Create(NewPrompt{
+			TurnID: turnID, Reason: reason, Channel: "console",
+			TTL: ttl, Action: action, Resource: resource,
+		})
+		if perr != nil {
+			return false, perr
+		}
+		emit("needs_confirmation", map[string]any{
+			"prompt_id":          p.ID,
+			"reason":             reason,
+			"action":             action,
+			"resource":           resource,
+			"expires_in_seconds": int(ttl.Seconds()),
+		})
+		decision, werr := s.cfg.Prompts.Wait(ctx, p.ID)
+		if werr != nil {
+			return false, werr
+		}
+		return decision == PromptApproved, nil
+	}
+
+	// Deltas go down the same stream as everything else. Serialised
+	// through the heartbeat's mutex-free design by writing from this
+	// goroutine only — the agent calls OnDelta synchronously from its
+	// read loop, so there is exactly one writer at a time here, and
+	// the ticker above is the other. Guarded below.
+	onDelta := func(text string) {
+		if text == "" {
+			return
+		}
+		emit("delta", map[string]any{"text": text})
+	}
+
+	resp, err := s.runBotTurn(r, botID, body.Message, turnID, confirm, onDelta)
 	close(done)
 
 	if err != nil {
@@ -89,25 +177,39 @@ func (s *Server) handleBotChat(w http.ResponseWriter, r *http.Request, botID str
 		// the headers are already on the wire by the time a turn can
 		// fail, and a client parsing SSE has nowhere to put a status
 		// code that arrives afterwards.
-		sendSSE(w, flusher, "error", map[string]any{"message": err.Error()})
+		emit("error", map[string]any{"message": err.Error()})
 		return
 	}
+	// Still needing confirmation here means the ask itself failed —
+	// no registry, or the wait was aborted. Say which, rather than the
+	// old blanket "use another channel", which was wrong as soon as
+	// this channel could ask.
 	if resp.NeedsConfirmation {
-		sendSSE(w, flusher, "needs_confirmation", map[string]any{
-			"reason": resp.ConfirmationReason,
-			"note": "approve it on the channel you normally use — a confirmation is " +
-				"raised for the person who asked, and this console is not that channel",
+		emit("error", map[string]any{
+			"message": "this turn needs your approval and the prompt could not be raised: " +
+				resp.ConfirmationReason,
 		})
 		return
 	}
-	sendSSE(w, flusher, "reply", map[string]any{
-		"text":       resp.Reply,
-		"turn_id":    turnID,
-		"tool_calls": len(resp.ToolCalls),
+	emit("reply", map[string]any{
+		"text":    resp.Reply,
+		"turn_id": turnID,
+		// Names, not a count. A count tells you a turn was busy; only
+		// the names tell you whether the thing it SAYS it did is among
+		// them — which is the check that catches a bot reporting work
+		// it never performed.
+		"tools_used":  compute.InvokedToolNames(resp.ToolCalls),
+		"tool_calls":  len(resp.ToolCalls),
+		"tokens_used": resp.BudgetState.Tokens,
+		"cost_usd":    resp.BudgetState.SpendUSD,
+		"session_id":  resp.SessionID,
 	})
 }
 
-func (s *Server) runBotTurn(r *http.Request, botID, message, turnID string) (*compute.ProcessMessageResponse, error) {
+func (s *Server) runBotTurn(r *http.Request, botID, message, turnID string,
+	confirm func(context.Context, string, string, string) (bool, error),
+	onDelta func(string),
+) (*compute.ProcessMessageResponse, error) {
 	claims, err := s.authenticate(r)
 	if err != nil {
 		return nil, err
@@ -124,6 +226,8 @@ func (s *Server) runBotTurn(r *http.Request, botID, message, turnID string) (*co
 		TurnIDOverride: turnID,
 		Channel:        botChannel,
 		ChannelID:      botID,
+		Confirm:        confirm,
+		OnDelta:        onDelta,
 	})
 }
 

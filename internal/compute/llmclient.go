@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,6 +226,13 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 		req.ServerTools = append(req.ServerTools, c.serverTools...)
 	}
 
+	// Branching here, at the transport, rather than anywhere upstream:
+	// the caller gets the same *ChatResponse either way, so nothing
+	// above this line needs to know which one ran.
+	if req.OnDelta != nil {
+		return c.streamChat(ctx, req, model, req.OnDelta)
+	}
+
 	body, err := json.Marshal(toOpenAIRequest(req, c.model))
 	if err != nil {
 		return nil, fmt.Errorf("llm: marshal request: %w", err)
@@ -262,7 +270,7 @@ func (c *LLMClient) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 			"model", model,
 			"duration", time.Since(start),
 			"body", truncateBody(rawBody))
-		return nil, classifyHTTPError(resp.StatusCode, rawBody)
+		return nil, classifyHTTPResponse(resp, rawBody, time.Now())
 	}
 
 	var openResp openAIResponse
@@ -298,6 +306,30 @@ func finishReasonOrEmpty(r *openAIResponse) string {
 
 // classifyHTTPError turns a non-2xx response into the right sentinel
 // wrapped with enough context (status + body excerpt) for triage.
+// parseRetryAfter reads the Retry-After header in both the forms the
+// RFC allows: delay-seconds, and an HTTP-date.
+//
+// A past date yields zero rather than a negative duration, so a clock
+// skewed the wrong way cannot turn "wait" into "retry immediately".
+func parseRetryAfter(h http.Header, now time.Time) time.Duration {
+	raw := strings.TrimSpace(h.Get("Retry-After"))
+	if raw == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(raw); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
+	}
+	if when, err := http.ParseTime(raw); err == nil {
+		if d := when.Sub(now); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
+
 func classifyHTTPError(status int, body []byte) error {
 	excerpt := truncateBody(body)
 
@@ -321,6 +353,17 @@ func classifyHTTPError(status int, body []byte) error {
 	// would silently disable failover for exactly the outages it
 	// exists to cover.
 	return &DriverError{Class: ClassifyHTTPStatus(status, string(body)), Err: err}
+}
+
+// classifyHTTPResponse is classifyHTTPError plus whatever the provider
+// said about when to come back.
+func classifyHTTPResponse(resp *http.Response, body []byte, now time.Time) error {
+	err := classifyHTTPError(resp.StatusCode, body)
+	var de *DriverError
+	if errors.As(err, &de) {
+		de.RetryAfter = parseRetryAfter(resp.Header, now)
+	}
+	return err
 }
 
 // truncateBody caps a body excerpt at 512 bytes so error messages
@@ -351,6 +394,12 @@ type openAIRequest struct {
 	// in a single wire array.
 	Tools      []any `json:"tools,omitempty"`
 	ToolChoice any   `json:"tool_choice,omitempty"` // string ("auto"/"none"/"required") or object
+
+	// Stream and StreamOptions are set only on the streaming path.
+	// Omitempty on both so a non-streaming request is byte-identical
+	// to what it was before streaming existed.
+	Stream        bool                 `json:"stream,omitempty"`
+	StreamOptions *openAIStreamOptions `json:"stream_options,omitempty"`
 }
 
 type openAIMessage struct {

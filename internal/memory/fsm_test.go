@@ -2,6 +2,7 @@ package memory
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -248,5 +249,46 @@ func TestSelfTaughtApplyFiresTheChangeCallback(t *testing.T) {
 	case <-fired:
 		t.Error("a policy-rule apply woke the materialiser")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// Every bucket written under revision-checked CAS has to be listed as
+// claimable.
+//
+// Wiring a new registry means four separate edits — the constant, the
+// allBuckets list, the payload oneof, and this — and the failure for
+// each is different and none of them is at startup. Missing this one
+// surfaces as `CLAIM groups: bucket does not support claim semantics`
+// on the first WRITE, long after the code looks wired.
+func TestRegistriesWrittenByCASAreClaimable(t *testing.T) {
+	t.Parallel()
+
+	for _, bucket := range []string{BucketBots, BucketBotInbox, BucketGroups, BucketSoulTune} {
+		if !claimableBucket(bucket) {
+			t.Errorf("%q is written with LOG_OP_CLAIM but the FSM refuses to claim it", bucket)
+		}
+	}
+}
+
+// claimableBucket and decodeClaimable must agree.
+//
+// decodeClaimable's own comment says they are "kept beside" each other
+// so the lists cannot drift — but nothing enforced it, and they
+// drifted on the very next registry added. The symptom was specific
+// and misleading: CREATING a group worked, because a first write has
+// no current record to inspect, and only RENAMING failed. A feature
+// that works until you edit it is the worst shape for this bug.
+func TestClaimableAndDecodableAgree(t *testing.T) {
+	t.Parallel()
+
+	for _, bucket := range allBuckets {
+		_, err := decodeClaimable(bucket, nil)
+		decodable := err == nil || !strings.Contains(err.Error(), "not claimable")
+		if claimableBucket(bucket) && !decodable {
+			t.Errorf("%q is claimable but decodeClaimable refuses it: writes succeed, updates fail", bucket)
+		}
+		if !claimableBucket(bucket) && decodable {
+			t.Errorf("%q is decodable but not claimable: the decode arm is unreachable", bucket)
+		}
 	}
 }

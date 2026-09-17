@@ -392,3 +392,26 @@ func TestDeleteBot(t *testing.T) {
 		t.Errorf("the bot survived the delete: %v", err)
 	}
 }
+
+// The Go field was renamed and the JSON tag was not, so the console's
+// is_coordinator was undefined for every bot — the marker never
+// rendered and the landing redirect fell through to whatever happened
+// to sort first. Nothing errored; a boolean was just quietly missing.
+//
+// Asserting the wire NAME rather than the Go field is the point: the
+// two drifting apart is invisible from either side alone.
+func TestCoordinatorFlagIsOnTheWireUnderItsOwnName(t *testing.T) {
+	t.Parallel()
+	s := botServer(newFakeBots(
+		&lobslawv1.BotRecord{Id: "coordinator", IsCoordinator: true, Enabled: true},
+	), nil)
+
+	rec := do(t, s, http.MethodGet, "/v1/bots", "")
+	body := rec.Body.String()
+	if !strings.Contains(body, `"is_coordinator":true`) {
+		t.Errorf("is_coordinator missing from the response:\n%s", body)
+	}
+	if strings.Contains(body, "is_chief") {
+		t.Errorf("the old wire name is still being served:\n%s", body)
+	}
+}
