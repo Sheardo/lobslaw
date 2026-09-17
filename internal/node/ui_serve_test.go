@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/node"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -25,6 +26,13 @@ import (
 func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping console boot integration in short mode")
+	}
+	// A tree where the console has not been built cannot serve one, and
+	// this test would report that as a 404 — indistinguishable from a
+	// routing bug. Every fresh clone and every CI job that runs
+	// `go test ./...` without `make web` starts in exactly that state.
+	if !ui.Built() {
+		t.Skip("no web assets in this binary; run `make web` to exercise the console")
 	}
 
 	tmp := t.TempDir()

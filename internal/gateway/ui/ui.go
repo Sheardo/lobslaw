@@ -26,6 +26,21 @@ var dist embed.FS
 // to wire itself and says why.
 var ErrNotBuilt = errors.New("ui: no web assets in this binary; run `make web` before building")
 
+// Built reports whether this binary carries the web assets.
+//
+// Exported for tests that boot a node and expect a console: without
+// it, a tree where `make web` has not run fails them with a bare 404,
+// which reads as a routing bug rather than as a missing build step.
+// That is the state every fresh clone and every CI job starts in.
+func Built() bool {
+	sub, err := fs.Sub(dist, "dist")
+	if err != nil {
+		return false
+	}
+	_, err = fs.Stat(sub, "index.html")
+	return err == nil
+}
+
 // Handler serves the console with SPA fallback.
 //
 // Any path that is not a real file falls through to index.html,
