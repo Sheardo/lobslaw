@@ -13,12 +13,50 @@ export interface Bot {
   description: string;
   instructions: string;
   is_coordinator: boolean;
+  /** Resolved by the server: a bot written before groups existed
+   *  reports the default team rather than an empty string. */
+  group_id: string;
   enabled: boolean;
   tools: string[];
   may_message: string[];
   revision: number;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  description?: string;
+  coordinator_bot_id?: string;
+  is_default: boolean;
+  revision: number;
+  bots: number;
+  owner?: string;
+  /** Whether the signed-in person may rename or delete this team.
+   *  Decided by the server; the console only uses it to avoid
+   *  offering a control that would be refused. */
+  mine: boolean;
+}
+
+export interface Routine {
+  id: string;
+  name: string;
+  schedule: string;
+  handler_ref: string;
+  enabled: boolean;
+  last_run?: string;
+  next_run?: string;
+  prompt?: string;
+}
+
+export interface MemoryRecord {
+  id: string;
+  kind: string;
+  text: string;
+  tags?: string[];
+  scope?: string;
+  created_at?: string;
 }
 
 export interface InboxItem {
@@ -35,6 +73,11 @@ export interface InboxItem {
   attempts: number;
   correlation_id?: string;
   session_id?: string;
+  /** The distinct tools the working turn actually invoked. The result
+   *  text is the bot's account of its work; this is the record of it. */
+  tools_used?: string[];
+  tokens_used?: number;
+  cost_usd?: number;
   created_at?: string;
   completed_at?: string;
 }
@@ -119,6 +162,42 @@ export const api = {
       `/v1/inbox/${encodeURIComponent(botId)}/${encodeURIComponent(itemId)}`,
       { method: "PATCH", body: JSON.stringify({ action }) },
     ),
+
+  listGroups: () =>
+    request<{ groups: Group[] }>("/v1/groups").then((r) => r.groups ?? []),
+
+  renameGroup: (id: string, name: string, revision: number) =>
+    request<Group>(`/v1/groups/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name, revision }),
+    }),
+
+  createGroup: (id: string, name: string) =>
+    request<Group>("/v1/groups", {
+      method: "POST",
+      body: JSON.stringify({ id, name }),
+    }),
+
+  /** A bot's scheduled work. Its own, by principal — not filterable
+   *  by query, so one bot's routines cannot be listed by asking for
+   *  another's. */
+  routines: (botId: string) =>
+    request<{ routines: Routine[] }>(`/v1/bots/${encodeURIComponent(botId)}/routines`)
+      .then((r) => r.routines ?? []),
+
+  /** What a bot remembers, read-only. */
+  memory: (botId: string) =>
+    request<{ records: MemoryRecord[]; total: number }>(
+      `/v1/bots/${encodeURIComponent(botId)}/memory`),
+
+  /** Answer a confirmation the turn is blocked on. The turn is
+   *  waiting on the other end of the open SSE stream, so resolving
+   *  here is what lets it continue. */
+  resolvePrompt: (promptId: string, approve: boolean) =>
+    request<{ status?: string }>(`/v1/prompts/${encodeURIComponent(promptId)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ approve }),
+    }),
 
   activity: (limit = 100) =>
     request<{ items: InboxItem[] }>(`/v1/activity?limit=${limit}`).then(
