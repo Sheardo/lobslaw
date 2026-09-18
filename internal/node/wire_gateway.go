@@ -112,6 +112,8 @@ func (n *Node) wireGateway() error {
 		DefaultBudget:    compute.FromComputeConfig(n.cfg.Compute),
 		JWTValidator:     n.jwtValidator,
 		RequireAuth:      n.cfg.Auth.RequireAuth,
+		Identity:         n.identityResolver(),
+		Users:            n.cfg.Users,
 		Telegram:         tg,
 		Slack:            sl,
 		Webhooks:         webhooks,

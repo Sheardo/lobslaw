@@ -231,12 +231,18 @@ roles        = ["operator"]
 type    = "telegram"
 address = "123456789"
 
+[[user.channels]]
+type    = "rest"
+address = "alice@idp"   # JWT sub; matching display names are not a link
+
 # Roles only reach a channel with no JWT via an alias. The key is the
 # channel-DERIVED id ("tg-<id>", "slack-<team>-<user>"), not the bare
 # address above.
 [identity.aliases]
 "tg-123456789" = "alice"
 ```
+
+REST web login (`POST /v1/session`) uses that `type = "rest"` address. The operator must declare the `[[user]]` first — there is no self-signup, and logging in does not grant `role:operator`.
 
 There is no `scope` key on `[[user]]`; a scope written there is silently ignored. `lobslaw doctor` checks the alias and role wiring and names what is missing.
 

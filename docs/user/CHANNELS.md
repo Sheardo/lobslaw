@@ -7,9 +7,13 @@ lobslaw exposes the agent loop to users through **channels**. Today there are tw
 Default. Mounts on the gateway HTTP port (8443 by default) at:
 
 - `POST /v1/messages` — send a message, get a reply
-- `GET /v1/plan` — see what's scheduled and in-flight
-- `POST /v1/prompts/{id}/{approve|deny}` — answer a confirmation prompt
-- `GET /healthz`, `GET /readyz` — health probes
+- `GET /v1/plan` — see what's scheduled and in-flight (401 when `require_auth` is on and you are not signed in)
+- `GET /v1/prompts/{id}` / `POST /v1/prompts/{id}/resolve` — inspect or answer a confirmation
+- `GET /v1/capabilities` — which surfaces this node has (does not grant access)
+- `POST /v1/session` — exchange a JWT for a login cookie; `DELETE /v1/session` revokes it
+- `GET /healthz`, `GET /readyz` — health probes (ungated)
+
+A body field named `user_id` is ignored. Who you are comes from the Bearer token or the login cookie, resolved to `[[user]].id`. To enrol a browser user, declare them under `[[user]]` with `[[user.channels]] type = "rest"` and `address` equal to their JWT `sub`. Logging in does not make them an operator.
 
 ### Conversations over REST
 
