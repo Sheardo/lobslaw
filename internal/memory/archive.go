@@ -45,6 +45,7 @@ var archiveKinds = []archiveKind{
 	{BucketUserPrefs, "preferences", &lobslawv1.UserPreferences{}},
 	{BucketScheduledTasks, "scheduled-tasks", &lobslawv1.ScheduledTaskRecord{}},
 	{BucketCommitments, "commitments", &lobslawv1.AgentCommitment{}},
+	{BucketBots, "bots", &lobslawv1.BotRecord{}},
 }
 
 // ReadArchiveRecords opens an EXISTING database read-only, unlike OpenStore,

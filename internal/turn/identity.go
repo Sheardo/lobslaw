@@ -107,6 +107,16 @@ type Identity struct {
 	// a model that picks its own zone moves when a schedule appears to
 	// fire.
 	Timezone string
+
+	// BotID is the named agent running this turn, when one is. Empty
+	// on ordinary compute — the main assistant, as before bots existed.
+	BotID string
+}
+
+// IsBot reports whether this turn is being run by a named agent
+// rather than the main assistant.
+func (t Identity) IsBot() bool {
+	return t.BotID != ""
 }
 
 // SessionKey is the conversation this turn is in, as the session store

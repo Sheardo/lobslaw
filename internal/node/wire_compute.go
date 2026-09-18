@@ -536,6 +536,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		Executor:             n.executor,
 		Registry:             n.toolRegistry,
 		SoulSnapshot:         n.soulSnapshot,
+		SoulSnapshotFor:      n.soulSnapshotFor,
 		Soul: func() *types.SoulConfig {
 			s := n.Soul()
 			if s == nil {

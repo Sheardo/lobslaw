@@ -58,6 +58,7 @@ func requestFromTurn(req turn.Request) (ProcessMessageRequest, error) {
 		ConversationSummary: req.ConversationSummary,
 		RecalledContext:     req.RecalledContext,
 		Attachments:         req.Attachments,
+		BotID:               req.BotID,
 	}, nil
 }
 

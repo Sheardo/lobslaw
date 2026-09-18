@@ -150,6 +150,7 @@ func nodeWireStages() []WireStage {
 		{Name: "notices", Gate: gateRaft, Wire: (*Node).wireNotices},
 		{Name: "credentials", Gate: gateRaft, Wire: (*Node).wireCredentials},
 		{Name: "soul-raft", Gate: gateRaft, Wire: (*Node).wireSoulRaft},
+		{Name: "bots", Gate: gateRaft, Wire: (*Node).wireBots},
 		{Name: "plan-svc", Gate: gateRaft, Wire: (*Node).wirePlanService},
 		{Name: "scheduler", Gate: gateScheduler, Wire: (*Node).wireScheduler},
 		{Name: "storage", Gate: gateRaftAnd(gateStorage), Wire: (*Node).wireStorageStage},

@@ -349,6 +349,7 @@ type Node struct {
 	soul         atomic.Pointer[soul.Soul]
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
+	botSvc       *memory.BotService
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -1285,6 +1286,17 @@ func (n *Node) soulSnapshot(ctx context.Context) (*soul.Soul, error) {
 		return n.Soul(), nil
 	}
 	snapshot, err := n.soulAdjuster.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func (n *Node) soulSnapshotFor(ctx context.Context, botID string) (*soul.Soul, error) {
+	if n.soulAdjuster == nil {
+		return n.Soul(), nil
+	}
+	snapshot, err := n.soulAdjuster.SnapshotFor(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

@@ -1235,6 +1235,40 @@ message EmotiveStyleTune {
   optional string emoji_usage = 6;
 }
 
+// BotRecord is one named agent. It is a principal, not a permission
+// set: it runs as "bot:<id>" and policy decides what that may do.
+// Persona (instructions, overlay) grants no authority.
+//
+// The tools list is a registry filter — what the model is shown —
+// not a second authorisation system. Empty means the node default.
+message BotRecord {
+  reserved 5, 7 to 9, 16;
+  reserved "is_coordinator", "may_message", "model_role", "budget", "group_id";
+
+  // id is an immutable slug — "engineering". It is the principal's
+  // identifier, so renaming one would orphan every record it owns.
+  string id = 1;
+  string display_name = 2;
+  string description = 3;
+  // instructions is the bot's standing brief. Rendered as soul
+  // guidance, which means it is standing configuration and never
+  // the current task.
+  string instructions = 4;
+  repeated string tools = 6;
+  bool enabled = 10;
+  // revision is FSM-assigned and bumped on every write, making a
+  // read-modify-write safe against a stale reader. Same contract as
+  // SoulTuneRecord.
+  uint64 revision = 11;
+  string claimed_by = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+  string created_by = 15;
+  // owner is the human principal this bot belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 17;
+}
+
 // CredentialRecord holds an OAuth (or other-provider) credential
 // the operator has connected to lobslaw. Tokens are encrypted at
 // rest with the cluster MemoryKey — the bytes on the wire and on
@@ -1961,6 +1995,7 @@ message LogEntry {
     EnrolmentRecord enrolment = 35;
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
+    BotRecord bot = 37;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

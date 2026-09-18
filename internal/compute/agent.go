@@ -120,6 +120,11 @@ type AgentConfig struct {
 	// Soul remains the inexpensive accessor for runtime trust checks.
 	SoulSnapshot func(context.Context) (*soul.Soul, error)
 
+	// SoulSnapshotFor is Snapshot for one named bot. Nil falls back to
+	// SoulSnapshot, which is the chief overlay — the behaviour a
+	// deployment without bots already has.
+	SoulSnapshotFor func(context.Context, string) (*soul.Soul, error)
+
 	// LanguageDetector is reused across turns and only invoked when the
 	// effective soul enables detection. Nil uses the lazy Lingua detector.
 	LanguageDetector soul.Detector
@@ -463,6 +468,10 @@ type ProcessMessageRequest struct {
 	// prompt — recalled episodes are untrusted content.
 	RecalledContext string
 
+	// BotID is the named agent running this turn. Empty means the
+	// main assistant — the behaviour a deployment without bots has.
+	BotID string
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -619,10 +628,18 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
 	}
-	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil) {
+	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
 		var body string
-		if a.cfg.SoulSnapshot != nil {
+		if req.BotID != "" && a.cfg.SoulSnapshotFor != nil {
+			snapshot, err := a.cfg.SoulSnapshotFor(ctx, req.BotID)
+			if err != nil {
+				return fmt.Errorf("load effective soul: %w", err)
+			}
+			if snapshot != nil {
+				config, body = &snapshot.Config, snapshot.Body
+			}
+		} else if a.cfg.SoulSnapshot != nil {
 			snapshot, err := a.cfg.SoulSnapshot(ctx)
 			if err != nil {
 				return fmt.Errorf("load effective soul: %w", err)
@@ -1644,11 +1661,25 @@ func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 		ChannelID: req.ChannelID,
 		Shared:    req.SharedConversation,
 		Timezone:  req.UserTimezone,
+		BotID:     req.BotID,
 	}
 	if req.Claims != nil {
 		t.UserID = req.Claims.UserID
 		t.Scope = req.Claims.Scope
 		t.Roles = req.Claims.Roles
+	}
+	// A bot's principal is minted, never resolved. The alias map
+	// translates ids that arrived FROM a channel, and Resolve wraps
+	// whatever it is given in the user kind — so putting "bot:devops"
+	// through it yields "user:bot:devops", which owns nothing the bot
+	// owns and matches no policy rule written about it.
+	//
+	// Explicit claims still win: a routine alice scheduled is worked by
+	// the devops bot and attributed to alice, so only a turn running as
+	// its own bot takes the bot principal.
+	if req.BotID != "" && req.Claims != nil && req.Claims.UserID == identity.Bot(req.BotID).String() {
+		t.Principal = identity.Bot(req.BotID)
+		return t
 	}
 	// A nil resolver maps every id to itself, which is the correct
 	// behaviour for a deployment that has declared no aliases.
