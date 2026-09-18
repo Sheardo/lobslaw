@@ -185,6 +185,7 @@ type Server struct {
 	httpSrv  *http.Server
 	listener net.Listener
 	ready    bool // flipped to true when Start() completes bind; checked by /readyz
+	console  http.Handler
 }
 
 // NewServer constructs the REST server with explicit dependencies.
@@ -240,6 +241,13 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	if s.cfg.Plan != nil {
 		mux.HandleFunc("/v1/plan", s.handlePlan)
+	}
+	s.mountConsole(mux)
+
+	if s.consoleEnabled() {
+		if err := checkConsoleBind(s.cfg.Addr, s.cfg.RequireAuth); err != nil {
+			return err
+		}
 	}
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)

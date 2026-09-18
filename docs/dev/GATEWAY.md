@@ -2,11 +2,12 @@
 
 The gateway is the user-facing edge. It turns inbound REST / Telegram traffic into `compute.ProcessMessageRequest` calls on the agent loop, then turns the agent's response back into a channel-appropriate reply (JSON, or a Telegram message with inline buttons).
 
-Three packages cooperate:
+Four packages cooperate:
 
 - `internal/gateway` — the REST server (`Server`), the Telegram webhook handler (`TelegramHandler`), and the confirmation registry both channels share (`Prompts`, with an in-memory and a raft-backed implementation).
+- `internal/gateway/ui` — the embedded browser console. `go:embed` of a Vite build; `Handler` returns `ErrNotBuilt` when `make web` has not run.
 - `pkg/auth` — JWT validation (`Validator`, `ExtractBearer`) used by the REST server to authenticate inbound requests.
-- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive.
+- `internal/compute` — the agent loop, tool registry, executor, budget, and mock/real LLM providers the channels drive. The gateway package does not import it.
 
 The agent loop knows nothing about HTTP or Telegram. Each channel is a thin adapter that translates inbound transport into an internal request.
 
@@ -64,6 +65,7 @@ User-data routes (`/v1/*` except login's Bearer exchange) return **401** when `R
 | `POST /v1/session` | JWT → opaque login cookie | 200, 401, 403 (not enrolled) |
 | `GET  /v1/session` | Current login identity | 200, 401 |
 | `DELETE /v1/session` | Revoke cookie + cancel tracked streams | 200, 401, 403 |
+| `GET  /` | Embedded SPA when FunctionUIWeb is on and assets were built | 200, 404 |
 | `POST /telegram` | Telegram webhook (if `Telegram` configured on the server) | 200, 401 |
 
 A table-driven test walks every `mux.Handle*` path literal in this package. A new route that is not classified there fails CI.
@@ -89,7 +91,49 @@ Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (
 
 ### Capabilities
 
-`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. This story reports `compute-teams` and `ui-web` with `enabled=false`.
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. `ui-web` is true when the console handler is mounted. `compute-teams` stays false in this story — the SPA hides team chrome rather than inventing a default team.
+
+### Web console
+
+FunctionUIWeb (`--ui-web` / `[ui-web].enabled`) mounts the SPA on the REST listener via `Server.RegisterConsole`. It does **not** rewrite to compute: a ui-web node may have no local agent (`POST /v1/messages` then 503). A binary built without `make web` logs a warning and stays up.
+
+A non-loopback bind with the console mounted refuses to start unless `[auth] require_auth = true`. Loopback is exempt so a laptop console can run without a JWT issuer.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Browser
+  participant SPA as embedded SPA
+  participant Server as gateway.Server
+  participant Runner as turn.Runner
+
+  Browser->>Server: GET /
+  alt console mounted
+    Server-->>Browser: index.html (no-cache)
+    Browser->>SPA: boot
+    SPA->>Server: GET /v1/session (cookie)
+    alt 401
+      Browser->>Server: POST /v1/session Authorization Bearer JWT
+      Server-->>Browser: Set-Cookie lobslaw_login
+    end
+    SPA->>Server: GET /v1/capabilities
+    alt compute-teams.enabled
+      SPA->>SPA: load teams; empty is empty, 5xx is unavailable
+    else
+      SPA->>SPA: single-assistant chat
+    end
+    SPA->>Server: POST /v1/messages Accept text/event-stream
+    alt runner nil
+      Server-->>SPA: 503
+      SPA->>SPA: unavailable, not deleted
+    else
+      Server->>Runner: Run
+      Runner-->>SPA: SSE typing / interim / final
+    end
+  else
+    Server-->>Browser: 404
+  end
+```
 
 ---
 

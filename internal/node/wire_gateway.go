@@ -3,21 +3,25 @@ package node
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/egress"
 	"github.com/jmylchreest/lobslaw/internal/gateway"
+	"github.com/jmylchreest/lobslaw/internal/gateway/ui"
 	"github.com/jmylchreest/lobslaw/internal/mcp"
 	"github.com/jmylchreest/lobslaw/internal/memory"
 	"github.com/jmylchreest/lobslaw/internal/notify"
 	"github.com/jmylchreest/lobslaw/internal/singleton"
 	"github.com/jmylchreest/lobslaw/internal/tools"
 	"github.com/jmylchreest/lobslaw/pkg/config"
+	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
 func (n *Node) wireGateway() error {
-	if n.agent == nil {
+	uiWeb := slices.Contains(n.cfg.Functions, types.FunctionUIWeb)
+	if n.agent == nil && !uiWeb {
 		return fmt.Errorf("gateway requires compute function (no agent wired on this node)")
 	}
 
@@ -127,14 +131,32 @@ func (n *Node) wireGateway() error {
 	}
 
 	n.gatewaySrv = gateway.NewServer(cfg, compute.Adapt(n.agent))
+	n.mountWebConsole(uiWeb)
 	n.log.Info("gateway wired",
 		"http_port", port,
 		"tls", tlsCert != "",
 		"channels", len(n.cfg.Gateway.Channels),
 		"telegram", tg != nil,
 		"require_auth", cfg.RequireAuth,
+		"ui_web", uiWeb,
 	)
 	return nil
+}
+
+// mountWebConsole attaches the embedded SPA when FunctionUIWeb is on.
+// A missing Vite build is a warning, not a boot failure: Telegram and
+// the API still serve.
+func (n *Node) mountWebConsole(enabled bool) {
+	if !enabled || n.gatewaySrv == nil {
+		return
+	}
+	handler, err := ui.Handler()
+	if err != nil {
+		n.log.Warn("gateway: web console enabled but unavailable", "err", err)
+		return
+	}
+	n.gatewaySrv.RegisterConsole(handler)
+	n.log.Info("gateway: web console mounted", "path", "/")
 }
 
 // registerSlackTools exposes slack_read_channel / slack_search.

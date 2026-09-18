@@ -35,10 +35,16 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		Configured: computeOn,
 		Available:  computeOn,
 	}
+	uiOn := s.consoleEnabled()
 	out := capabilitiesResponse{
 		Compute:      compute,
 		ComputeTeams: capabilityFlags{},
-		UIWeb:        capabilityFlags{},
+		UIWeb: capabilityFlags{
+			Enabled:    uiOn,
+			Authorised: uiOn,
+			Configured: uiOn,
+			Available:  uiOn,
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)

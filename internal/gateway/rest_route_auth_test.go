@@ -30,6 +30,7 @@ const (
 // TestUnauthenticatedCallerGets401OnEveryUserDataRoute.
 func restRouteAuthTable() map[string]restRouteClass {
 	return map[string]restRouteClass{
+		"/":                restRoutePublic,
 		"/healthz":         restRoutePublic,
 		"/readyz":          restRoutePublic,
 		"/telegram":        restRouteOwnAuth,
