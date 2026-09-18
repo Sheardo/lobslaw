@@ -11,7 +11,7 @@ func TestGatewayDoesNotImportCompute(t *testing.T) {
 	t.Parallel()
 	pkgs, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedImports | packages.NeedModule,
-	}, "github.com/jmylchreest/lobslaw/internal/gateway")
+	}, "github.com/jmylchreest/lobslaw/internal/gateway", "github.com/jmylchreest/lobslaw/internal/gateway/ui")
 	if err != nil {
 		t.Fatalf("packages.Load: %v", err)
 	}

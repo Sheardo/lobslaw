@@ -1,6 +1,6 @@
 # Channels
 
-lobslaw exposes the agent loop to users through **channels**. Today there are two: the REST API and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
+lobslaw exposes the agent loop to users through **channels**. Today there are REST, an optional browser console, and Telegram. Channels are configured under `[[gateway.channels]]` in `config.toml`; you can mix and match.
 
 ## REST
 
@@ -34,6 +34,24 @@ curl -X POST https://localhost:8443/v1/messages \
 Pick the id yourself — anything stable and unique per conversation, containing no `:` or `/` (both are rejected with a 400). Reusing an id resumes that conversation; a fresh id starts a new one.
 
 Session ids are scoped to the authenticated caller, so two users who both pick `default` get two separate conversations and neither can read the other's. On a node with `require_auth = false` every caller is the same anonymous identity, and so shares one namespace — if REST is reachable by more than one person, authenticate it.
+
+## Browser console
+
+Off by default. `--all` does not turn it on. Enable it with `--ui-web` or:
+
+```toml
+[ui-web]
+enabled = true
+
+[auth]
+require_auth = true
+```
+
+Then open the gateway HTTP port in a browser (8443 by default). Sign in with a JWT for an enrolled `[[user]]` — there is no self-signup. The console talks to the same REST routes as above (`/v1/session`, `/v1/capabilities`, `/v1/messages`).
+
+If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
+
+When compute-teams is off (the default), you get a single-assistant chat. The console will not invent a team. If the agent is not on this node, chat shows unavailable rather than an empty history.
 
 ## Telegram
 

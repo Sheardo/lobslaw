@@ -80,10 +80,18 @@ func gateComputeTeams(cfg Config) bool {
 // operator running the gateway function for testing might leave it
 // disabled in config to bring up the rest of the cluster first.
 func gateGateway(cfg Config) bool {
-	// One switch, not two. The gateway function normalises to compute
-	// (it cannot run without an agent), so what remains is: does this
-	// node run an agent, and did the operator enable the channels.
-	return !cfg.RestoreMode && slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
+	if cfg.RestoreMode {
+		return false
+	}
+	// ui-web serves the console on the REST listener and does not
+	// rewrite to compute — a web node may have no local agent.
+	if slices.Contains(cfg.Functions, types.FunctionUIWeb) {
+		return true
+	}
+	// The gateway function normalises to compute (it cannot run
+	// without an agent), so what remains is: does this node run an
+	// agent, and did the operator enable the channels.
+	return slices.Contains(cfg.Functions, types.FunctionCompute) && cfg.Gateway.Enabled
 }
 
 // gateStorage selects stages that need the storage function. Storage
