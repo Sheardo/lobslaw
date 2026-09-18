@@ -20,46 +20,57 @@ sequenceDiagram
   participant Client
   participant Server as gateway.Server
   participant Auth as pkg/auth.Validator
-  participant Agent as compute.Agent
+  participant Runner as turn.Runner
   participant Prompts as gateway.PromptRegistry
 
-  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt>
+  Client->>Server: POST /v1/messages<br/>Authorization: Bearer <jwt> or Cookie
   Server->>Server: MaxBytesReader(1MB) + JSON decode
-  Server->>Auth: Validate(token)
-  alt token missing/invalid + RequireAuth
-    Auth-->>Server: error
+  alt cookie login session
+    Server->>Server: lookup opaque session, CSRF Origin check
+  else Bearer JWT
+    Server->>Auth: Validate(token)
+  end
+  alt missing/invalid + RequireAuth
     Server-->>Client: 401
   else ok
-    Auth-->>Server: *types.Claims
-    Server->>Agent: RunToolCallLoop(req with Claims, TurnBudget)
+    Server->>Runner: Run(req with Claims)
     alt resp.NeedsConfirmation && Prompts configured
-      Agent-->>Server: resp
-      Server->>Prompts: Create(turn, reason, "rest", TTL)
+      Runner-->>Server: resp
+      Server->>Prompts: Create(..., RaisedFor=canonical user)
       Prompts-->>Server: Prompt{ID,...}
       Server-->>Client: 200 {reply, needs_confirmation:true, prompt_id}
     else plain reply
-      Agent-->>Server: resp
+      Runner-->>Server: resp
       Server-->>Client: 200 {reply, tool_calls, budget}
     end
   end
 ```
 
-Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`.
+Client then polls `GET /v1/prompts/<id>` for state and confirms via `POST /v1/prompts/<id>/resolve` with `{"approve": bool}`. Knowing a prompt id is not access: with `RequireAuth` the caller must be the user the prompt was raised for.
 
 ### Routes
 
+User-data routes (`/v1/*` except login's Bearer exchange) return **401** when `RequireAuth` is set and the caller has no valid JWT or login cookie. `/healthz` and `/readyz` stay public. Telegram and inbound webhooks keep their own secrets.
+
 | Method + Path | Purpose | Status codes |
 |---|---|---|
-| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401 (w/ RequireAuth), 500, 503 (no agent) |
+| `POST /v1/messages` | Main user entry — sends a message to the agent | 200, 400, 401, 403 (cookie CSRF), 500, 503 (no agent) |
 | `GET  /healthz` | Liveness — process alive | 200 |
 | `GET  /readyz` | Readiness — server bound + agent configured | 200, 503 |
-| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 404 |
-| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 404, 409 (already resolved) |
+| `GET  /v1/prompts/<id>` | Fetch prompt state | 200, 401, 404, 409 (expired) |
+| `POST /v1/prompts/<id>/resolve` | Approve/deny a confirmation | 200, 400, 401, 404, 409 |
+| `GET  /v1/plan` | Upcoming commitments + scheduled tasks | 200, 401, 405, 500 |
+| `GET  /v1/capabilities` | Discovery flags (does not grant access) | 200, 401 |
+| `POST /v1/session` | JWT → opaque login cookie | 200, 401, 403 (not enrolled) |
+| `GET  /v1/session` | Current login identity | 200, 401 |
+| `DELETE /v1/session` | Revoke cookie + cancel tracked streams | 200, 401, 403 |
 | `POST /telegram` | Telegram webhook (if `Telegram` configured on the server) | 200, 401 |
+
+A table-driven test walks every `mux.Handle*` path literal in this package. A new route that is not classified there fails CI.
 
 ### Auth modes
 
-The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
+The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes for **Bearer** tokens:
 
 | Validator | RequireAuth | Behaviour |
 |---|---|---|
@@ -69,6 +80,16 @@ The `RESTConfig` `JWTValidator` + `RequireAuth` pair gives four regimes:
 | nil | true | **Fail-closed.** Every request 401. Intentional: "I asked for auth but provided no validator" is an operator error that shouldn't silently allow traffic. |
 
 Validated tokens with a missing `scope` claim default to `DefaultScope` rather than an empty string.
+
+Identity is never taken from the JSON body. JWT `sub` is resolved through `identity.Resolver` and `[[user.channels]]` (`type = "rest"`, `address = <jwt sub>`) onto `[[user]].id`. Display-name changes do not change that id.
+
+### Web login sessions
+
+Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (`lobslaw_login`). There is no self-signup: `POST /v1/session` requires the JWT subject to match an operator-declared `[[user]]`. Web login copies `[[user]].roles` onto the session and **does not** grant `role:operator` from the JWT. Cookie-authenticated unsafe methods also check `Origin` against the request host. `DELETE /v1/session` drops the cookie and cancels any in-flight REST streams bound to it. Login sessions are in-memory; a restart means presenting the JWT again.
+
+### Capabilities
+
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. This story reports `compute-teams` and `ui-web` with `enabled=false`.
 
 ---
 
@@ -594,7 +615,7 @@ See [MEMORY.md → Sessions](MEMORY.md#sessions) for the storage layout, the tri
 
 Callouts deferred past Phase 6h:
 
-- **`GET /v1/plan` and `GET /v1/health`.** Owned by Phase 7 (scheduler) and Phase 11 (audit) respectively.
+- **`GET /v1/health`.** Owned by Phase 11 (audit). `/v1/plan` is mounted and gated like every other user-data route.
 - **ACME / Let's Encrypt.** TLS certs are passed explicitly; automatic issuance isn't wired.
 - **REST cross-node resume.** REST holds the connection open and resumes in the request that raised the prompt, so it stores no continuation. A REST turn approved elsewhere still records the decision, but the original request has to be re-sent.
 

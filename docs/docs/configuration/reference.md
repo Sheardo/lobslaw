@@ -707,6 +707,10 @@ roles        = ["operator"]
 [[user.channels]]
 type    = "telegram"
 address = "123456789"
+
+[[user.channels]]
+type    = "rest"
+address = "alice@idp"
 ```
 
 `id` is the canonical principal id — the same value `[identity.aliases]`

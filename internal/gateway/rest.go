@@ -19,6 +19,7 @@ import (
 
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/internal/ids"
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
@@ -102,6 +103,15 @@ type RESTConfig struct {
 	// (anything reachable from the public internet) set this true.
 	RequireAuth bool
 
+	// Identity maps JWT subjects and channel addresses onto [[user]].id.
+	// Nil keeps Bearer "the subject is the user" behaviour; cookie
+	// login still requires a matching Users entry.
+	Identity *identity.Resolver
+
+	// Users is the operator-declared enrolment catalog. Cookie login
+	// requires a matching [[user]]; there is no self-signup.
+	Users []config.UserConfig
+
 	// Telegram, when non-nil, mounts the Telegram webhook handler
 	// at /telegram on the same mux. Shares the server's TLS + port
 	// so operators don't need a second listener.
@@ -169,6 +179,7 @@ type Server struct {
 	runner turn.Runner
 	log    *slog.Logger
 	conv   *conversationLog
+	logins *loginStore
 
 	mu       sync.Mutex
 	httpSrv  *http.Server
@@ -202,6 +213,7 @@ func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 		log:    cfg.Logger,
 		gate:   NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
 		conv:   newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		logins: newLoginStore(),
 	}
 }
 
@@ -213,6 +225,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	mux.HandleFunc("/readyz", s.handleReadyz)
+	mux.HandleFunc("/v1/session", s.handleSession)
+	mux.HandleFunc("/v1/capabilities", s.handleCapabilities)
 	if s.cfg.Telegram != nil && s.cfg.Telegram.Mode() == TelegramModeWebhook {
 		mux.Handle("/telegram", s.cfg.Telegram)
 	}
@@ -448,11 +462,18 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		req.TurnID = "rest-" + ids.New()
 	}
 
-	claims, authErr := s.authenticate(r)
+	authn, authErr := s.authenticateRequest(r)
 	if authErr != nil {
 		s.jsonErr(w, http.StatusUnauthorized, authErr.Error())
 		return
 	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+	claims := authn.Claims
+	reqCtx, stopStream := s.bindStream(r.Context(), authn.LoginID)
+	defer stopStream()
 
 	var sessionRef SessionRef
 	var prior Transcript
@@ -521,7 +542,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// that stalls after approval should hit the same cap as one that
 	// stalls before it.
 	responder := newRESTResponder(w, r)
-	turnCtx, stopGuards := startResponsiveness(r.Context(), responder, ResponsivenessConfig{
+	turnCtx, stopGuards := startResponsiveness(reqCtx, responder, ResponsivenessConfig{
 		TypingInterval: s.cfg.TypingInterval,
 		InterimTimeout: s.cfg.InterimTimeout,
 		HardTimeout:    s.cfg.HardTimeout,
@@ -570,6 +591,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			TTL:       ttl,
 			Action:    resp.ConfirmationAction,
 			Resource:  resp.ConfirmationResource,
+			RaisedFor: claims.UserID,
 		})
 		if perr != nil {
 			s.log.Warn("rest: prompt registration failed — returning confirmation as-is", "err", perr)
@@ -773,6 +795,16 @@ func anonClaims(scope string) *types.Claims {
 // expires. Resolution is idempotent-on-conflict: a second attempt
 // after the first (or after timeout) returns 409.
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
+	authn, err := s.authenticateRequest(r)
+	if err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if err := s.checkCookieCSRF(r, authn); err != nil {
+		s.jsonErr(w, http.StatusForbidden, err.Error())
+		return
+	}
+
 	// Parse path: /v1/prompts/<id>[/resolve]
 	path := strings.TrimPrefix(r.URL.Path, "/v1/prompts/")
 	if path == "" {
@@ -789,9 +821,9 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case action == "" && r.Method == http.MethodGet:
-		s.handlePromptGet(w, r, id)
+		s.handlePromptGet(w, r, id, authn)
 	case action == "resolve" && r.Method == http.MethodPost:
-		s.handlePromptResolve(w, r, id)
+		s.handlePromptResolve(w, r, id, authn)
 	case action == "" && r.Method != http.MethodGet:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	case action == "resolve" && r.Method != http.MethodPost:
@@ -801,7 +833,7 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id string, authn requestAuth) {
 	p, err := s.cfg.Prompts.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrPromptNotFound) {
@@ -809,6 +841,14 @@ func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.promptVisible(p, authn) {
+		s.jsonErr(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if s.promptExpired(p) {
+		s.jsonErr(w, http.StatusConflict, "prompt expired")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -823,7 +863,24 @@ func (s *Server) handlePromptGet(w http.ResponseWriter, r *http.Request, id stri
 	})
 }
 
-func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string) {
+func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id string, authn requestAuth) {
+	p, err := s.cfg.Prompts.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrPromptNotFound) {
+			s.jsonErr(w, http.StatusNotFound, "prompt not found")
+			return
+		}
+		s.jsonErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !s.promptVisible(p, authn) {
+		s.jsonErr(w, http.StatusNotFound, "prompt not found")
+		return
+	}
+	if s.promptExpired(p) {
+		s.jsonErr(w, http.StatusConflict, "prompt expired")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	var body struct {
 		Approve bool `json:"approve"`
@@ -859,12 +916,36 @@ func (s *Server) handlePromptResolve(w http.ResponseWriter, r *http.Request, id 
 	})
 }
 
+func (s *Server) promptVisible(p *Prompt, authn requestAuth) bool {
+	if !s.cfg.RequireAuth {
+		return true
+	}
+	if p.RaisedFor == "" || authn.Claims == nil {
+		return false
+	}
+	return p.RaisedFor == authn.Claims.UserID
+}
+
+func (s *Server) promptExpired(p *Prompt) bool {
+	if p.Decision == PromptTimedOut {
+		return true
+	}
+	if p.Decision != PromptPending {
+		return false
+	}
+	return !p.ExpiresAt.IsZero() && time.Now().After(p.ExpiresAt)
+}
+
 // handlePlan wraps PlanService.GetPlan. Accepts an optional
 // ?window=<duration> query param (Go-duration syntax: "24h", "30m",
 // "1h30m"); empty or invalid falls back to the service default.
 func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, err := s.authenticateRequest(r); err != nil {
+		s.jsonErr(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	req := &lobslawv1.GetPlanRequest{}
