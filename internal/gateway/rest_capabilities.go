@@ -29,16 +29,21 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	computeOn := s.runner != nil
-	compute := capabilityFlags{
-		Enabled:    computeOn,
-		Authorised: true,
-		Configured: computeOn,
-		Available:  computeOn,
-	}
+	teamsOn := s.cfg.Bots != nil
 	uiOn := s.consoleEnabled()
 	out := capabilitiesResponse{
-		Compute:      compute,
-		ComputeTeams: capabilityFlags{},
+		Compute: capabilityFlags{
+			Enabled:    computeOn,
+			Authorised: true,
+			Configured: computeOn,
+			Available:  computeOn,
+		},
+		ComputeTeams: capabilityFlags{
+			Enabled:    teamsOn,
+			Authorised: teamsOn,
+			Configured: teamsOn,
+			Available:  teamsOn,
+		},
 		UIWeb: capabilityFlags{
 			Enabled:    uiOn,
 			Authorised: uiOn,

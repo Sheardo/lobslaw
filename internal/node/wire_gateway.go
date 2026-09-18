@@ -35,12 +35,20 @@ func (n *Node) wireGateway() error {
 	for i, ch := range n.cfg.Gateway.Channels {
 		switch ch.Type {
 		case "slack":
+			if n.agent == nil {
+				n.log.Warn("gateway: skipping slack; no local compute (remote turns are a later story)", "index", i)
+				continue
+			}
 			h, err := n.buildSlackHandler(ch)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (slack): %w", i, err)
 			}
 			sl = h
 		case "telegram":
+			if n.agent == nil {
+				n.log.Warn("gateway: skipping telegram; no local compute (remote turns are a later story)", "index", i)
+				continue
+			}
 			h, err := n.buildTelegramHandler(ch)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (telegram): %w", i, err)
@@ -52,6 +60,10 @@ func (n *Node) wireGateway() error {
 			// could not be, because the handler did not exist yet.
 			n.attachEnrolmentAsker(h)
 		case "webhook":
+			if n.agent == nil {
+				n.log.Warn("gateway: skipping webhook; no local compute (remote turns are a later story)", "index", i)
+				continue
+			}
 			h, err := n.buildWebhookHandler(ch)
 			if err != nil {
 				return fmt.Errorf("gateway.channels[%d] (webhook): %w", i, err)
