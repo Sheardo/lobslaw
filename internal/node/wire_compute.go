@@ -567,6 +567,7 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		TimezoneResolver: n.resolveUserTimezone,
 		BinariesProvider: binariesProvider,
 		ContextBudget:    contextBudgetFromConfig(n.cfg.Compute.Context),
+		Bots:             botResolverOrNil(n.botSvc),
 		Logger:           n.log,
 	})
 	if err != nil {

@@ -87,6 +87,9 @@ type SlackConfig struct {
 
 	DefaultBudget turn.BudgetCaps
 
+	// TeamRouter picks the coordinator for this user. Nil leaves BotID empty.
+	TeamRouter TeamRouter
+
 	// Notices, Prompts, Leaser, Sessions, Compactor, Conversation and
 	// the queue/responsiveness fields carry the same meaning as their
 	// TelegramConfig counterparts.

@@ -125,6 +125,10 @@ type AgentConfig struct {
 	// deployment without bots already has.
 	SoulSnapshotFor func(context.Context, string) (*soul.Soul, error)
 
+	// Bots resolves a named agent for a turn. Nil leaves BotID as a
+	// label with no profile — ordinary compute, no teams.
+	Bots BotResolver
+
 	// LanguageDetector is reused across turns and only invoked when the
 	// effective soul enables detection. Nil uses the lazy Lingua detector.
 	LanguageDetector soul.Detector
@@ -472,6 +476,11 @@ type ProcessMessageRequest struct {
 	// main assistant — the behaviour a deployment without bots has.
 	BotID string
 
+	// Bot is the resolved profile. Set by resolveBot when BotID is
+	// known; callers such as ask_bot may pass a modified copy
+	// (Without("ask_bot")) so the child cannot re-delegate.
+	Bot *BotProfile
+
 	// Attachments are media the channel received with this turn.
 	// Channel handlers (gateway/telegram, gateway/rest, etc.)
 	// populate this from their native payload + downloader. The
@@ -579,11 +588,18 @@ func (a *Agent) RunToolCallLoop(ctx context.Context, req ProcessMessageRequest) 
 	if req.Budget == nil {
 		return nil, errors.New("RunToolCallLoop: req.Budget is required")
 	}
+	if err := a.resolveBot(ctx, &req); err != nil {
+		return nil, err
+	}
+	if req.Bot != nil {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	// Attached before fillDefaults, not inside runLoop: fillDefaults is
 	// where the ContextEngine runs its passive recall, and that recall
 	// needs to know whose memories it may read. Getting this order wrong
 	// is how the recall came to be unscoped in the first place.
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = WithBudget(ctx, req.Budget)
 	// Attached once, at the top, so anything downstream can emit a
 	// span without every intermediate signature growing a parameter.
 	// A nil recorder leaves the context untouched, which is what a
@@ -627,6 +643,9 @@ func (a *Agent) fillDefaults(ctx context.Context, req *ProcessMessageRequest) er
 		// crosses ~100 we swap to semantic top-K retrieval against
 		// the existing embedding service.
 		req.Tools = a.cfg.Registry.LLMTools()
+	}
+	if req.Bot != nil {
+		req.Tools = req.Bot.FilterTools(req.Tools)
 	}
 	if req.SystemPrompt == "" && (a.cfg.Soul != nil || a.cfg.SoulSnapshot != nil || a.cfg.SoulSnapshotFor != nil) {
 		var config *types.SoulConfig
@@ -792,6 +811,34 @@ func userIDFor(req *ProcessMessageRequest) string {
 	return req.Claims.UserID
 }
 
+func (a *Agent) resolveBot(ctx context.Context, req *ProcessMessageRequest) error {
+	if req.Bot != nil || req.BotID == "" || a.cfg.Bots == nil {
+		return nil
+	}
+	profile, err := a.cfg.Bots.ResolveBot(ctx, req.BotID)
+	if err != nil {
+		return err
+	}
+	req.Bot = profile
+	return nil
+}
+
+// DescribeSilentTurn returns a human description when the model
+// produced no reply, so a caller cannot confuse "" with "nothing
+// to report".
+func DescribeSilentTurn(resp *ProcessMessageResponse) string {
+	if resp == nil {
+		return "the turn produced no reply"
+	}
+	if strings.TrimSpace(resp.Reply) != "" {
+		return ""
+	}
+	if names := invokedToolNames(resp.ToolCalls); len(names) > 0 {
+		return "no reply; tools used: " + strings.Join(names, ", ")
+	}
+	return "the turn produced no reply"
+}
+
 func toPromptgenTools(tools []Tool) []promptgen.ToolInfo {
 	out := make([]promptgen.ToolInfo, 0, len(tools))
 	for _, t := range tools {
@@ -816,7 +863,14 @@ func (a *Agent) ResumeFromConfirmation(ctx context.Context, req ProcessMessageRe
 	if len(priorMessages) == 0 {
 		return nil, errors.New("ResumeFromConfirmation: priorMessages is empty — nothing to resume from")
 	}
+	if err := a.resolveBot(ctx, &req); err != nil {
+		return nil, err
+	}
+	if req.Bot != nil {
+		req.Budget.Tighten(req.Bot.Caps)
+	}
 	ctx = turn.WithIdentity(ctx, a.TurnIdentityFor(req))
+	ctx = WithBudget(ctx, req.Budget)
 	// This is the same turn. Its system prompt is already part of the
 	// continuation; refreshing the soul here would assemble an unused prompt
 	// and could prevent resumption when a remote store is unavailable.

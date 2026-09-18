@@ -93,6 +93,15 @@ func (n *Node) seedDefaultPolicyRules(ctx context.Context) error {
 		// entirely in the operator's [[policy.rules]].
 		"slack_read_channel": true,
 		"slack_search":       true,
+		"bot_list":           true,
+		"bot_create":         true,
+		"bot_update":         true,
+		"ask_bot":            true,
+		"tell_bot":           true,
+		"inbox_list":         true,
+		"inbox_read":         true,
+		"inbox_post":         true,
+		"inbox_resolve":      true,
 	}
 
 	// Seed default-allow rules ONLY for builtins (Path prefix

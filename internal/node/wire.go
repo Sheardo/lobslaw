@@ -68,6 +68,13 @@ func gateRaft(cfg Config) bool { return needsRaft(cfg.Functions) }
 // builtins, tool registry.
 func gateCompute(cfg Config) bool { return slices.Contains(cfg.Functions, types.FunctionCompute) }
 
+// gateComputeTeams selects coordinator, inbox drain and team tools.
+// Ordinary compute does not imply this. Restore mode keeps the drain
+// paused so recovery cannot execute queued work.
+func gateComputeTeams(cfg Config) bool {
+	return !cfg.RestoreMode && slices.Contains(cfg.Functions, types.FunctionComputeTeams)
+}
+
 // gateGateway selects stages that need the gateway. Both the
 // function bit AND the explicit Enabled toggle must be set: an
 // operator running the gateway function for testing might leave it
@@ -162,6 +169,7 @@ func nodeWireStages() []WireStage {
 		{Name: "audit", Wire: (*Node).wireAuditStage},
 		{Name: "soul-fallback", Wire: (*Node).wireSoulFallback},
 		{Name: "compute", Gate: gateCompute, Wire: (*Node).wireComputeStage},
+		{Name: "compute-teams", Gate: gateComputeTeams, Wire: (*Node).wireComputeTeamsStage},
 		{Name: "approval-gates", Gate: gateCompute, Wire: (*Node).wireApprovalGates},
 		// After compute, which builds the RoleMap the fork routes
 		// through; before gateway, which is where turns start arriving.

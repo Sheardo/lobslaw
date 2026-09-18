@@ -350,6 +350,9 @@ type Node struct {
 	soulAdjuster *soul.Adjuster
 	soulTuneSvc  *memory.SoulTuneService
 	botSvc       *memory.BotService
+	groupSvc     *memory.GroupService
+	inboxSvc     *memory.InboxService
+	inboxWake    chan struct{}
 	skillAdapter *skills.AgentAdapter
 
 	// Compute-function stack. Non-nil iff FunctionCompute is enabled.
@@ -708,6 +711,9 @@ func (n *Node) Start(ctx context.Context) error { //nolint:gocyclo // flat start
 	// Scheduler runs for the node lifetime. Exits cleanly on ctx
 	// cancel. Only present on Raft-hosting nodes (the construction
 	// branch in New gated that).
+	if n.inboxSvc != nil && n.agent != nil && gateComputeTeams(n.cfg) {
+		go n.runInboxDrain(ctx)
+	}
 	if n.scheduler != nil {
 		go func() {
 			if err := n.scheduler.Run(ctx); err != nil {

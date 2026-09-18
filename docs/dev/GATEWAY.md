@@ -89,7 +89,7 @@ Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (
 
 ### Capabilities
 
-`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. This story reports `compute-teams` and `ui-web` with `enabled=false`.
+`GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. `compute-teams` is enabled only when `FunctionComputeTeams` is on (`--compute-teams` or `[compute-teams].enabled`). `/v1/bots` and `/v1/groups` mount only then. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`.
 
 ---
 

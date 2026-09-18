@@ -1242,9 +1242,6 @@ message EmotiveStyleTune {
 // The tools list is a registry filter — what the model is shown —
 // not a second authorisation system. Empty means the node default.
 message BotRecord {
-  reserved 5, 7 to 9, 16;
-  reserved "is_coordinator", "may_message", "model_role", "budget", "group_id";
-
   // id is an immutable slug — "engineering". It is the principal's
   // identifier, so renaming one would orphan every record it owns.
   string id = 1;
@@ -1254,7 +1251,16 @@ message BotRecord {
   // guidance, which means it is standing configuration and never
   // the current task.
   string instructions = 4;
+  // is_coordinator is a convenience flag. The coordinator ROLE lives
+  // on GroupRecord.coordinator_bot_id — this bot is an ordinary bot
+  // that happens to hold that role.
+  bool is_coordinator = 5;
   repeated string tools = 6;
+  // may_message is the explicit edge list for ask_bot / tell_bot /
+  // inbox_post. Validated as a DAG on write.
+  repeated string may_message = 7;
+  string model_role = 8;
+  BotBudget budget = 9;
   bool enabled = 10;
   // revision is FSM-assigned and bumped on every write, making a
   // read-modify-write safe against a stale reader. Same contract as
@@ -1264,9 +1270,88 @@ message BotRecord {
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
   string created_by = 15;
+  // group_id is the team this bot belongs to. Empty is not a public
+  // default — a bot with no team is not in anyone's team.
+  string group_id = 16;
   // owner is the human principal this bot belongs to — "user:alice".
   // Empty means nobody: the record is inaccessible, never public.
   string owner = 17;
+}
+
+// BotBudget caps one of this bot's turns. Zero on a field takes the
+// node's configured default rather than meaning "unlimited".
+message BotBudget {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+// GroupRecord is one team: a single human owner, a coordinator bot,
+// and the specialists under it. Empty owner is inaccessible, never
+// public.
+message GroupRecord {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // coordinator_bot_id is an ordinary bot that answers for this group.
+  string coordinator_bot_id = 4;
+  bool is_default = 5;
+  uint64 revision = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string created_by = 9;
+  string claimed_by = 10;
+  // owner is the human principal this team belongs to — "user:alice".
+  // Empty means nobody: the record is inaccessible, never public.
+  string owner = 11;
+}
+
+// InboxKind is what an item IS.
+enum InboxKind {
+  INBOX_KIND_UNSPECIFIED = 0;
+  INBOX_KIND_TASK = 1;
+  INBOX_KIND_QUESTION = 2;
+  INBOX_KIND_ANSWER = 3;
+  INBOX_KIND_RESULT = 4;
+  INBOX_KIND_FYI = 5;
+}
+
+// InboxStatus is where an item is in its life. FAILED stays visible.
+enum InboxStatus {
+  INBOX_STATUS_UNSPECIFIED = 0;
+  INBOX_STATUS_PENDING = 1;
+  INBOX_STATUS_CLAIMED = 2;
+  INBOX_STATUS_DONE = 3;
+  INBOX_STATUS_FAILED = 4;
+  INBOX_STATUS_CANCELLED = 5;
+}
+
+// BotInboxItem is one unit of a bot's durable work queue.
+// Keyed "<recipient>:<ulid>". Status is not in the key.
+message BotInboxItem {
+  string id = 1;
+  string recipient = 2;
+  string sender = 3;
+  InboxKind kind = 4;
+  string subject = 5;
+  string body = 6;
+  int32 priority = 7;
+  InboxStatus status = 8;
+  string correlation_id = 9;
+  string result = 10;
+  string error = 11;
+  int32 attempts = 12;
+  string claimed_by = 13;
+  google.protobuf.Timestamp claim_expires_at = 14;
+  uint64 revision = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp completed_at = 17;
+  string session_id = 18;
+  repeated string tools_used = 19;
+  uint64 tokens_used = 20;
+  double cost_usd = 21;
+  // requested_by is the person this work traces back to.
+  string requested_by = 22;
 }
 
 // CredentialRecord holds an OAuth (or other-provider) credential
@@ -1996,6 +2081,8 @@ message LogEntry {
     // A portable import commits records and its resume receipt together.
     ArchiveBatch archive_batch = 36;
     BotRecord bot = 37;
+    BotInboxItem bot_inbox = 38;
+    GroupRecord group = 39;
   }
   // LOG_OP_CLAIM only: the value we expect on the current record's
   // claimed_by field before we write. Used to enforce CAS semantics.

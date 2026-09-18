@@ -21,10 +21,52 @@ it may do.
 | Personality | `internal/soul` | One overlay per bot; chief keeps `soul:tune` |
 | Turns | `internal/compute.TurnIdentityFor` | Mint `bot:<id>`; never `Resolve()` it |
 
-Not in this story: teams, inbox, HTTP bot routes, `ask_bot`, a default
-team seed. Turns without `BotID` behave as the main assistant.
+Turns without `BotID` behave as the main assistant.
 
-See aide decision `owned-bots`.
+See aide decisions `owned-bots` and `compute-teams`.
+
+---
+
+## Teams (opt-in: `FunctionComputeTeams`)
+
+Coordinator selection, specialist delegation and a durable inbox.
+Off by default. `--all` does not enable it. Ordinary compute does
+not seed teams or register team tools.
+
+| Piece | Where | Shape |
+|---|---|---|
+| Team | `GroupRecord` | Single human owner; empty = inaccessible |
+| Coordinator | `GroupRecord.coordinator_bot_id` | An ordinary bot with that role |
+| Inbox | `BotInboxItem` | Raft queue, `LOG_OP_CLAIM`, drain loop |
+| Delegation | `ask_bot` / `tell_bot` / `inbox_post` | Registered only when teams is on |
+
+```mermaid
+flowchart TB
+  subgraph gate ["FunctionComputeTeams"]
+    Groups[GroupRecord]
+    Inbox[BotInboxItem]
+    Tools["ask_bot / tell_bot / inbox_post"]
+    Drain[inbox drain loop]
+  end
+  Channel[Telegram / Slack / REST] -->|BotID on turn.Request| Agent
+  Channel -->|binding or this user's coordinator| Groups
+  Tools --> Inbox
+  Drain --> Agent
+  Agent -->|WrapContext untrusted| Peer[peer bot text]
+```
+
+Empty group owner is nobody, never public. Channel routing uses an
+explicit binding or **that user's** coordinator. A missing binding
+does not fall into another person's team.
+
+`ask_bot` draws on the caller's budget, strips itself from the child
+registry (`Without("ask_bot")` — empty allowlist does not re-grant
+it), and fails closed if the child would need confirmation. Peer text
+is wrapped with `promptgen.WrapContext`. `TurnBudget.Tighten` runs on
+both `Run` and `Resume`.
+
+`bot_*` / `ask_bot` / `tell_bot` / `inbox_*` join `noSeedTools`
+(default-deny like `soul_*`). Restore mode pauses the drain.
 
 ---
 
@@ -129,8 +171,9 @@ never creates a bot is unchanged.
 ## Persistence
 
 Writes go through Raft (`LOG_OP_CLAIM`) with the same revision CAS as
-soul tune. `BucketBots` is in `archiveKinds`; credentials and browser
-sessions are not. A bot record round-trips a portable export.
+soul tune. `BucketBots`, `BucketGroups` and `BucketBotInbox` are in
+`archiveKinds`; credentials and browser sessions are not. Restore mode
+pauses the inbox drain.
 
 Deleting a bot does not cascade the records it owned. Recreating the
 same id restores the principal.
@@ -139,7 +182,6 @@ same id restores the principal.
 
 ## Out of scope
 
-- Teams / `GroupRecord` / default team seed
-- Inbox, `ask_bot`, drain, coordinator
-- HTTP bot routes
-- `compute-teams` function
+- Browser console / SPA (`web/`, `FunctionUIWeb`)
+- A default team seeded on ordinary compute
+- Per-bot channel tokens / avatars

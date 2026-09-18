@@ -161,6 +161,11 @@ const (
 	// BucketBots holds the named agents, keyed by the bot's immutable
 	// slug, which is also its principal's identifier.
 	BucketBots = "bots"
+	// BucketGroups holds teams: one human owner, one coordinator bot.
+	BucketGroups = "groups"
+	// BucketBotInbox holds the durable per-bot work queue, keyed
+	// "<recipient>:<ulid>".
+	BucketBotInbox = "bot_inbox"
 )
 
 // ChiefBotID names the bot whose personality overlay is the
@@ -225,4 +230,6 @@ var allBuckets = []string{
 	BucketSelfTaughtHistory,
 	BucketEnrolments,
 	BucketBots,
+	BucketGroups,
+	BucketBotInbox,
 }

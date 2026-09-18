@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/jmylchreest/lobslaw/internal/bots"
 	"github.com/jmylchreest/lobslaw/internal/identity"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
@@ -117,6 +118,9 @@ func (s *BotService) Put(ctx context.Context, rec *lobslawv1.BotRecord, expected
 	}
 	rec = proto.Clone(rec).(*lobslawv1.BotRecord)
 	if err := validateBot(rec); err != nil {
+		return nil, err
+	}
+	if err := s.checkMessageGraph(ctx, rec); err != nil {
 		return nil, err
 	}
 
@@ -245,7 +249,37 @@ func validateBot(rec *lobslawv1.BotRecord) error {
 	if err := validateBotOwner(rec.GetOwner()); err != nil {
 		return err
 	}
+	for _, target := range rec.GetMayMessage() {
+		if strings.TrimSpace(target) == id {
+			return fmt.Errorf("bots: %q may not be listed as its own message target", id)
+		}
+		if !botIDPattern.MatchString(strings.TrimSpace(target)) {
+			return fmt.Errorf("bots: may_message entry %q is not a valid bot id", target)
+		}
+	}
+	if b := rec.GetBudget(); b != nil {
+		if b.GetMaxToolCalls() < 0 || b.GetMaxSpendUsd() < 0 || b.GetMaxEgressBytes() < 0 {
+			return fmt.Errorf("bots: %q has a negative budget cap; zero means inherit the node default", id)
+		}
+	}
 	return nil
+}
+
+// checkMessageGraph refuses a may_message edge that would close a
+// loop, naming the path. On write rather than at call time.
+func (s *BotService) checkMessageGraph(ctx context.Context, rec *lobslawv1.BotRecord) error {
+	if len(rec.GetMayMessage()) == 0 {
+		return nil
+	}
+	existing, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	graph := make(bots.Graph, len(existing)+1)
+	for _, b := range existing {
+		graph[b.GetId()] = b.GetMayMessage()
+	}
+	return graph.WithEdges(rec.GetId(), rec.GetMayMessage()).Validate()
 }
 
 func validateBotOwner(owner string) error {

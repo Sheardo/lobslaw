@@ -86,6 +86,9 @@ type TelegramConfig struct {
 	// the handler says so rather than dropping them silently.
 	ArtifactOpener ArtifactOpener
 
+	// TeamRouter picks the coordinator for this user. Nil leaves BotID empty.
+	TeamRouter TeamRouter
+
 	// Mode picks between webhook (inbound, default) and poll
 	// (outbound). Empty → webhook for back-compat with Phase 6e
 	// deployments.
@@ -589,6 +592,11 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		body = "(no caption — please inspect the attached media and respond)"
 	}
 
+	userID := ""
+	if claims != nil {
+		userID = claims.UserID
+	}
+	channelID := strconv.FormatInt(msg.Chat.ID, 10)
 	agentReq := turn.Request{
 		Message:             body,
 		Attachments:         im.Attachments,
@@ -598,8 +606,9 @@ func (h *TelegramHandler) handleMessage(ctx context.Context, msg *tgMessage) {
 		ConversationHistory: prior.Messages,
 		ConversationSummary: prior.Summary,
 		Channel:             "telegram",
-		ChannelID:           strconv.FormatInt(msg.Chat.ID, 10),
+		ChannelID:           channelID,
 		SharedConversation:  isSharedChat(msg.Chat),
+		BotID:               resolveTeamBot(h.cfg.TeamRouter, ctx, "telegram", channelID, userID),
 	}
 
 	// Wrap the agent call with the responsiveness guards: typing

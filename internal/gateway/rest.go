@@ -160,6 +160,16 @@ type RESTConfig struct {
 
 	// Logger is used for structured log output. Nil → slog.Default().
 	Logger *slog.Logger
+
+	// Bots, Groups and Inbox are the compute-teams registries. Nil
+	// leaves /v1/bots and /v1/groups unmounted — ordinary compute.
+	Bots   BotAPI
+	Groups GroupAPI
+	Inbox  InboxAPI
+
+	// TeamRouter picks which bot answers a channel message. Nil
+	// leaves BotID empty.
+	TeamRouter TeamRouter
 }
 
 // PlanService is the subset of lobslawv1.PlanServiceServer that the
@@ -241,6 +251,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if s.cfg.Plan != nil {
 		mux.HandleFunc("/v1/plan", s.handlePlan)
 	}
+	s.registerTeamRoutes(mux)
 
 	ln, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
@@ -520,6 +531,10 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			"summarised", prior.Summary != "")
 	}
 
+	userID := ""
+	if claims != nil {
+		userID = claims.UserID
+	}
 	agentReq := turn.Request{
 		Message:             req.Message,
 		Claims:              claims,
@@ -530,6 +545,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		ConversationSummary: prior.Summary,
 		Channel:             sessionRef.Channel,
 		ChannelID:           sessionRef.ChannelID,
+		BotID:               s.resolveTeamBot(r.Context(), sessionRef.Channel, sessionRef.ChannelID, userID),
 	}
 
 	// Responsiveness, shared with Telegram. The visible half needs an

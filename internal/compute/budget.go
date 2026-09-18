@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -8,6 +9,22 @@ import (
 	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
+
+type budgetCtxKey struct{}
+
+// WithBudget attaches a turn budget so a child (ask_bot) can draw on it.
+func WithBudget(ctx context.Context, b *TurnBudget) context.Context {
+	if b == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, budgetCtxKey{}, b)
+}
+
+// BudgetFrom returns the reservation attached to ctx, or nil.
+func BudgetFrom(ctx context.Context) *TurnBudget {
+	b, _ := ctx.Value(budgetCtxKey{}).(*TurnBudget)
+	return b
+}
 
 // TurnBudget tracks per-turn resource consumption against operator-
 // configured caps. The agent loop (Phase 5.4) holds one TurnBudget
@@ -182,6 +199,30 @@ func (b *TurnBudget) Records() []CostRecord {
 // Caps returns the operator-configured caps. Zero fields mean
 // "unlimited on that dimension".
 func (b *TurnBudget) Caps() BudgetCaps { return b.caps }
+
+// Tighten narrows this budget's caps, never widens them.
+func (b *TurnBudget) Tighten(caps BudgetCaps) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.caps = mergeCaps(b.caps, caps)
+}
+
+func mergeCaps(base, extra BudgetCaps) BudgetCaps {
+	out := base
+	if extra.MaxToolCalls > 0 && (out.MaxToolCalls == 0 || extra.MaxToolCalls < out.MaxToolCalls) {
+		out.MaxToolCalls = extra.MaxToolCalls
+	}
+	if extra.MaxSpendUSD > 0 && (out.MaxSpendUSD == 0 || extra.MaxSpendUSD < out.MaxSpendUSD) {
+		out.MaxSpendUSD = extra.MaxSpendUSD
+	}
+	if extra.MaxEgressBytes > 0 && (out.MaxEgressBytes == 0 || extra.MaxEgressBytes < out.MaxEgressBytes) {
+		out.MaxEgressBytes = extra.MaxEgressBytes
+	}
+	return out
+}
 
 // Restore replays already-spent budget onto a fresh TurnBudget, for a
 // turn resuming after a confirmation — possibly on a different node

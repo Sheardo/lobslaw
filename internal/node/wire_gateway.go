@@ -124,6 +124,10 @@ func (n *Node) wireGateway() error {
 		Compactor:        n.newSessionCompactor(),
 		Conversation:     n.conversationConfig(),
 		Logger:           n.log,
+		Bots:             n.teamBotsOrNil(),
+		Groups:           n.teamGroupsOrNil(),
+		Inbox:            n.teamInboxOrNil(),
+		TeamRouter:       n.teamRouterOrNil(),
 	}
 
 	n.gatewaySrv = gateway.NewServer(cfg, compute.Adapt(n.agent))
@@ -273,6 +277,7 @@ func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.Slack
 		SessionGrants:     n.sessionGrantsView(),
 		Gate:              gate,
 		Logger:            n.log,
+		TeamRouter:        n.teamRouterOrNil(),
 	}, compute.Adapt(n.agent))
 }
 
@@ -361,6 +366,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Sessions:          n.newSessionStore(),
 		Compactor:         n.newSessionCompactor(),
 		Conversation:      n.conversationConfig(),
+		TeamRouter:        n.teamRouterOrNil(),
 	}, compute.Adapt(n.agent))
 }
 

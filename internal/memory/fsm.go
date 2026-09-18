@@ -360,6 +360,10 @@ func revisionOf(m proto.Message) (uint64, bool) {
 		return p.Revision, true
 	case *lobslawv1.BotRecord:
 		return p.Revision, true
+	case *lobslawv1.GroupRecord:
+		return p.Revision, true
+	case *lobslawv1.BotInboxItem:
+		return p.Revision, true
 	default:
 		return 0, false
 	}
@@ -388,6 +392,10 @@ func setRevision(m proto.Message, rev uint64) {
 	case *lobslawv1.SkillBlob:
 		p.Revision = rev
 	case *lobslawv1.BotRecord:
+		p.Revision = rev
+	case *lobslawv1.GroupRecord:
+		p.Revision = rev
+	case *lobslawv1.BotInboxItem:
 		p.Revision = rev
 	}
 }
@@ -611,6 +619,18 @@ func decodeClaimable(bucket string, raw []byte) (claimable, error) {
 			return nil, err
 		}
 		return &r, nil
+	case BucketGroups:
+		var r lobslawv1.GroupRecord
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
+	case BucketBotInbox:
+		var r lobslawv1.BotInboxItem
+		if err := proto.Unmarshal(raw, &r); err != nil {
+			return nil, err
+		}
+		return &r, nil
 
 	case BucketScheduledTasks:
 		var r lobslawv1.ScheduledTaskRecord
@@ -685,7 +705,7 @@ func claimableBucket(bucket string) bool {
 	switch bucket {
 	case BucketScheduledTasks, BucketCommitments, BucketSessionLeases, BucketPrompts, BucketPinned,
 		BucketSelfTaught, BucketSessionGrants, BucketSkills, BucketSkillBlobs, BucketEnrolments, BucketSoulTune,
-		BucketBots:
+		BucketBots, BucketGroups, BucketBotInbox:
 		return true
 	default:
 		return false
@@ -726,6 +746,10 @@ func bucketAndPayload(entry *lobslawv1.LogEntry) (string, proto.Message, error) 
 		return BucketSoulTune, p.SoulTune, nil
 	case *lobslawv1.LogEntry_Bot:
 		return BucketBots, p.Bot, nil
+	case *lobslawv1.LogEntry_Group:
+		return BucketGroups, p.Group, nil
+	case *lobslawv1.LogEntry_BotInbox:
+		return BucketBotInbox, p.BotInbox, nil
 	case *lobslawv1.LogEntry_Credential:
 		return BucketCredentials, p.Credential, nil
 	case *lobslawv1.LogEntry_UserPrefs:

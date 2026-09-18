@@ -79,6 +79,16 @@ func TestMCPManagementToolsAreSeedable(t *testing.T) {
 	}
 }
 
+func TestTeamToolsAreDefaultDenyLikeSoul(t *testing.T) {
+	t.Parallel()
+	seeds := readSeedSource(t)
+	for _, name := range []string{"ask_bot", "tell_bot", "inbox_post", "bot_create", "bot_update"} {
+		if !strings.Contains(seeds, `"`+name+`":`) {
+			t.Errorf("%s must be in noSeedTools (default-deny like soul_*)", name)
+		}
+	}
+}
+
 func readNodeSource(t *testing.T) string {
 	t.Helper()
 	return readSource(t, "node.go")
