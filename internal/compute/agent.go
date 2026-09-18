@@ -396,6 +396,10 @@ type ProcessMessageRequest struct {
 	// Claims identifies the user (for policy evaluation + audit).
 	Claims *types.Claims
 
+	// Principal is the cluster-wide identity already resolved by the
+	// caller. Empty lets TurnIdentityFor Resolve() from Claims.UserID.
+	Principal identity.Principal
+
 	// TurnID is a stable identifier for this turn; propagated
 	// through request IDs in logs + audit.
 	TurnID string
@@ -1733,6 +1737,10 @@ func (a *Agent) TurnIdentityFor(req ProcessMessageRequest) turn.Identity {
 	// its own bot takes the bot principal.
 	if req.BotID != "" && req.Claims != nil && req.Claims.UserID == identity.Bot(req.BotID).String() {
 		t.Principal = identity.Bot(req.BotID)
+		return t
+	}
+	if req.Principal != "" {
+		t.Principal = req.Principal
 		return t
 	}
 	// A nil resolver maps every id to itself, which is the correct

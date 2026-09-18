@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -45,6 +46,34 @@ func TestCapabilitiesShape(t *testing.T) {
 	}
 	if body.ComputeTeams.Available || body.UIWeb.Available {
 		t.Error("disabled capabilities must not report available=true")
+	}
+}
+
+type downRunner struct {
+	captureRunner
+}
+
+func (d *downRunner) Available(context.Context) bool { return false }
+
+func TestCapabilitiesComputeUnavailableWhenBackendDown(t *testing.T) {
+	t.Parallel()
+	srv := startWebREST(t, &downRunner{}, nil)
+	token := mintJWTWith(t, "alice@idp", nil)
+	resp := doJSON(t, http.MethodGet, webBaseURL(srv)+"/v1/capabilities", "", http.Header{
+		"Authorization": []string{"Bearer " + token},
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body capabilitiesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Compute.Enabled || !body.Compute.Configured {
+		t.Errorf("unreachable backend must stay enabled/configured, got %+v", body.Compute)
+	}
+	if body.Compute.Available {
+		t.Error("unreachable backend must report compute.available=false, not treat records as gone")
 	}
 }
 

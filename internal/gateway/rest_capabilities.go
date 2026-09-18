@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 )
@@ -36,7 +37,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Enabled:    computeOn,
 			Authorised: true,
 			Configured: computeOn,
-			Available:  computeOn,
+			Available:  s.computeAvailable(),
 		},
 		ComputeTeams: capabilityFlags{
 			Enabled:    teamsOn,
@@ -53,4 +54,20 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+// computeAvailability is implemented by remote runners. Local agents
+// omit it and are treated as available whenever the runner is non-nil.
+type computeAvailability interface {
+	Available(context.Context) bool
+}
+
+func (s *Server) computeAvailable() bool {
+	if s.runner == nil {
+		return false
+	}
+	if p, ok := s.runner.(computeAvailability); ok {
+		return p.Available(context.Background())
+	}
+	return true
 }

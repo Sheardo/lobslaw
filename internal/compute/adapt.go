@@ -45,6 +45,7 @@ func requestFromTurn(req turn.Request) (ProcessMessageRequest, error) {
 	return ProcessMessageRequest{
 		Message:             req.Message,
 		Claims:              req.Claims,
+		Principal:           req.Principal,
 		TurnID:              req.TurnID,
 		Channel:             req.Channel,
 		ChannelID:           req.ChannelID,

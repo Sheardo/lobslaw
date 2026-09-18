@@ -42,6 +42,8 @@ Off by default. `--all` does not turn it on. Enable it with `--ui-web` or:
 ```toml
 [ui-web]
 enabled = true
+# Required when this node does not run compute: cluster gRPC of a compute node.
+# backend = "compute-1:7443"
 
 [auth]
 require_auth = true
@@ -51,7 +53,7 @@ Then open the gateway HTTP port in a browser (8443 by default). Sign in with a J
 
 If the node is reachable on more than loopback, `require_auth` is mandatory: the process refuses to start without it. A binary built without `make web` still starts; the console is simply missing and the log says so.
 
-When compute-teams is off (the default), you get a single-assistant chat. The console will not invent a team. If the agent is not on this node, chat shows unavailable rather than an empty history.
+When compute-teams is off (the default), you get a single-assistant chat. The console will not invent a team. If compute is not on this node, set `[ui-web].backend` to a compute node's cluster address; when that backend is unreachable, chat shows unavailable rather than an empty history.
 
 ## Telegram
 

@@ -800,6 +800,18 @@ can no longer be unblocked, found by the garbage collector's reachability
 analysis. Nothing registers it here — `pprof.Index` looks profiles up when the
 request arrives, so profiles a newer Go adds appear on their own.
 
+## `[ui-web]`
+
+Off by default. `--all` does not enable it. Enabling it does not imply local compute.
+
+```toml
+[ui-web]
+enabled = true
+backend  = "compute-1:7443"   # cluster gRPC of a compute node; required when compute is off
+```
+
+`backend` is the `host:port` peers dial for `AgentService`. A ui-web node without FunctionCompute fails at boot if this is empty.
+
 ## Other sections
 
 `[discovery]`, `[observability]`, `[hooks]` — see `pkg/config/config.go` for the full schema. These are stable but rarely-touched.

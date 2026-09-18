@@ -42,6 +42,7 @@ func TestNodeServesTheWebConsoleAndAPIOnOneListener(t *testing.T) {
 			HTTPPort:         0,
 			UnknownUserScope: "public",
 		},
+		UIWeb: config.UIWebConfig{Backend: "127.0.0.1:9"},
 	}
 
 	n, err := node.New(cfg)
@@ -116,6 +117,7 @@ func TestNodeBootsUIWebWithoutAssets(t *testing.T) {
 			HTTPPort:         0,
 			UnknownUserScope: "public",
 		},
+		UIWeb: config.UIWebConfig{Backend: "127.0.0.1:9"},
 	}
 
 	n, err := node.New(cfg)

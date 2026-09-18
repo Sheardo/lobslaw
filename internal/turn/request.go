@@ -2,6 +2,7 @@ package turn
 
 import (
 	"github.com/jmylchreest/lobslaw/internal/commandrisk"
+	"github.com/jmylchreest/lobslaw/internal/identity"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
 
@@ -11,6 +12,7 @@ import (
 type Request struct {
 	Message             string
 	Claims              *types.Claims
+	Principal           identity.Principal
 	TurnID              string
 	Channel             string
 	ChannelID           string

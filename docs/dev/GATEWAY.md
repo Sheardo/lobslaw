@@ -93,9 +93,11 @@ Browser clients exchange a JWT for an opaque HttpOnly `SameSite=Strict` cookie (
 
 `GET /v1/capabilities` (authenticated) reports `{enabled, authorised, configured, available}` for `compute`, `compute-teams`, and `ui-web`. Discovery does not grant access. `compute-teams` is enabled only when `FunctionComputeTeams` is on (`--compute-teams` or `[compute-teams].enabled`). `/v1/bots` and `/v1/groups` mount only then. Channel handlers set `turn.Request.BotID` via `TeamRouter` and do not import `internal/compute`. `ui-web` is true when the console handler is mounted. The SPA hides team chrome when teams are off rather than inventing a default team.
 
+A ui-web node without local compute runs turns on `[ui-web].backend` over cluster mTLS gRPC (`AgentService`). The request carries the authenticated user's Claims and Principal — the web node's machine certificate is never the user. If the backend is unreachable, `compute.available` is false; sessions and records are not treated as deleted.
+
 ### Web console
 
-FunctionUIWeb (`--ui-web` / `[ui-web].enabled`) mounts the SPA on the REST listener via `Server.RegisterConsole`. It does **not** rewrite to compute: a ui-web node may have no local agent (`POST /v1/messages` then 503). A binary built without `make web` logs a warning and stays up.
+FunctionUIWeb (`--ui-web` / `[ui-web].enabled`) mounts the SPA on the REST listener via `Server.RegisterConsole`. It does **not** rewrite to compute. A ui-web node without FunctionCompute must set `[ui-web].backend` to a compute node's cluster gRPC address or boot fails. A binary built without `make web` logs a warning and stays up.
 
 A non-loopback bind with the console mounted refuses to start unless `[auth] require_auth = true`. Loopback is exempt so a laptop console can run without a JWT issuer.
 
@@ -106,6 +108,7 @@ sequenceDiagram
   participant SPA as embedded SPA
   participant Server as gateway.Server
   participant Runner as turn.Runner
+  participant Compute as AgentService
 
   Browser->>Server: GET /
   alt console mounted
@@ -117,7 +120,9 @@ sequenceDiagram
       Server-->>Browser: Set-Cookie lobslaw_login
     end
     SPA->>Server: GET /v1/capabilities
-    alt compute-teams.enabled
+    alt compute.available false
+      SPA->>SPA: unavailable, records stay
+    else compute-teams.enabled
       SPA->>SPA: load teams; empty is empty, 5xx is unavailable
     else
       SPA->>SPA: single-assistant chat
@@ -126,6 +131,11 @@ sequenceDiagram
     alt runner nil
       Server-->>SPA: 503
       SPA->>SPA: unavailable, not deleted
+    else remote backend
+      Server->>Runner: Run (Claims + Principal)
+      Runner->>Compute: RunTurn
+      Compute-->>Runner: RunTurnResponse
+      Runner-->>SPA: SSE typing / interim / final
     else
       Server->>Runner: Run
       Runner-->>SPA: SSE typing / interim / final

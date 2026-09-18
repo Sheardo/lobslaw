@@ -473,6 +473,10 @@ type ComputeTeamsConfig struct {
 // not enable it. Enabling it does not imply local compute.
 type UIWebConfig struct {
 	Enabled bool `koanf:"enabled"`
+	// Backend is the cluster gRPC address (host:port) of a compute
+	// node. Required when ui-web is on and compute is off — a web
+	// node has no local agent, so turns run there.
+	Backend string `koanf:"backend"`
 }
 
 // ComputeConfig is the [compute] section: LLM providers, the chains

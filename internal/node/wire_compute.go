@@ -574,6 +574,9 @@ func (n *Node) wireAgent(binariesProvider func() []promptgen.BinaryInfo) error {
 		return fmt.Errorf("agent: %w", err)
 	}
 	n.agent = a
+	if n.server != nil {
+		lobslawv1.RegisterAgentServiceServer(n.server, compute.NewTurnServer(a))
+	}
 	return nil
 }
 

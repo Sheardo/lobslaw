@@ -2379,3 +2379,106 @@ message PromptRecord {
   // a paused turn.
   string enrolment = 20;
 }
+
+// -----------------------------------------------------------------------------
+// AgentService — run a turn on a compute node for a peer that has none
+// -----------------------------------------------------------------------------
+//
+// A ui-web node authenticates users over HTTP, then asks a compute node
+// to run the turn. Cluster mTLS authenticates the PEER NODE, not the
+// person. The authenticated user travels on the request as Claims and
+// Principal. An empty user is refused: the web node's machine identity
+// must not become the unrestricted audience over every user's data
+// (operator-role-and-cluster-authorization).
+service AgentService {
+  rpc RunTurn(RunTurnRequest) returns (RunTurnResponse);
+  rpc ResumeTurn(ResumeTurnRequest) returns (ResumeTurnResponse);
+  // Ping is the availability probe. Failure is "compute.available =
+  // false", not a deleted capability — sessions and records stay.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+message PingRequest {}
+message PingResponse {}
+
+message TurnBudgetCaps {
+  int32 max_tool_calls = 1;
+  double max_spend_usd = 2;
+  int64 max_egress_bytes = 3;
+}
+
+message TurnBudgetState {
+  int32 tool_calls = 1;
+  double spend_usd = 2;
+  int64 egress_bytes = 3;
+}
+
+message TurnAttachment {
+  string kind = 1;
+  string mime_type = 2;
+  int32 size = 3;
+  int32 width = 4;
+  int32 height = 5;
+  int32 duration = 6;
+  string reference = 7;
+  string filename = 8;
+  string local_path = 9;
+}
+
+message TurnToolInvocation {
+  string call_id = 1;
+  string tool_name = 2;
+  string args = 3;
+  string output = 4;
+  int32 exit_code = 5;
+  string error = 6;
+}
+
+message RunTurnRequest {
+  string message = 1;
+  // The authenticated user. Required. Never inferred from the peer
+  // certificate — that is the web node's machine identity.
+  Claims claims = 2;
+  // Cluster-wide principal already resolved on the calling node.
+  // Empty lets the compute node Resolve() from claims.user_id.
+  string principal = 3;
+  string turn_id = 4;
+  string channel = 5;
+  string channel_id = 6;
+  bool shared_conversation = 7;
+  string hint = 8;
+  string user_timezone = 9;
+  string system_prompt = 10;
+  string model = 11;
+  repeated SessionMessage conversation_history = 12;
+  string conversation_summary = 13;
+  string recalled_context = 14;
+  repeated TurnAttachment attachments = 15;
+  TurnBudgetCaps caps = 16;
+  TurnBudgetState spent = 17;
+  string bot_id = 18;
+}
+
+message ResumeTurnRequest {
+  RunTurnRequest request = 1;
+  repeated SessionMessage prior = 2;
+}
+
+message RunTurnResponse {
+  string reply = 1;
+  repeated TurnToolInvocation tool_calls = 2;
+  repeated TurnAttachment attachments = 3;
+  repeated SessionMessage messages = 4;
+  int32 turn_start_index = 5;
+  TurnBudgetState budget = 6;
+  bool needs_confirmation = 7;
+  string confirmation_action = 8;
+  string confirmation_resource = 9;
+  bool confirmation_grantable = 10;
+  repeated string confirmation_labels = 11;
+  string confirmation_reason = 12;
+}
+
+message ResumeTurnResponse {
+  RunTurnResponse response = 1;
+}
