@@ -1,12 +1,15 @@
-// Package turn carries who a turn came from and where it arrived.
+// Package turn carries who a turn came from, where it arrived, and
+// the channel-facing contract for running one.
 //
 // Its own package because it is a FACT ABOUT A CALLER, not any one
-// subsystem's concern.
+// subsystem's concern. Channels depend on Runner rather than
+// internal/compute, so a local agent and a remote backend are two
+// implementations rather than two call shapes.
 //
-// A leaf: pkg/types, internal/identity, and the standard library.
-// Nothing here may import a subsystem — everything that authorises or
-// attributes anything imports this, so a single subsystem dependency
-// here becomes a cycle for all of them.
+// A leaf: pkg/types, internal/identity, internal/commandrisk, and the
+// standard library. Nothing here may import a subsystem — everything
+// that authorises or attributes anything imports this, so a single
+// subsystem dependency here becomes a cycle for all of them.
 package turn
 
 import (

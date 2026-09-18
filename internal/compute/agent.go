@@ -548,14 +548,7 @@ type ProcessMessageResponse struct {
 }
 
 // ToolInvocation records one tool call's lifecycle within a turn.
-type ToolInvocation struct {
-	CallID   string
-	ToolName string
-	Args     string
-	Output   string
-	ExitCode int
-	Error    string
-}
+type ToolInvocation = turn.ToolInvocation
 
 // RunToolCallLoop processes one turn end-to-end. Steps per PLAN.md
 // Phase 5.4:

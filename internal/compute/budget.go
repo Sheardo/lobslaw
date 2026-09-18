@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 )
 
@@ -33,15 +34,8 @@ type TurnBudget struct {
 	records     []CostRecord
 }
 
-// BudgetCaps mirrors the config.BudgetsConfig shape but with
-// clearer types for in-code use. Zero on any field means "no cap"
-// for that dimension — operators commonly set only spend and leave
-// tool-calls / egress unbounded.
-type BudgetCaps struct {
-	MaxToolCalls   int
-	MaxSpendUSD    float64
-	MaxEgressBytes int64
-}
+// BudgetCaps is the operator-configured per-turn limit set.
+type BudgetCaps = turn.BudgetCaps
 
 // FromConfig builds BudgetCaps from the deprecated [compute.budgets]
 // block. Retained for back-compat; new config should use
@@ -87,14 +81,8 @@ type BudgetDecision struct {
 	Current    BudgetState
 }
 
-// BudgetState is a snapshot of consumed resources. Returned on
-// every decision and on a stand-alone State() call so the agent
-// loop can surface mid-turn totals to the user.
-type BudgetState struct {
-	ToolCalls   int
-	SpendUSD    float64
-	EgressBytes int64
-}
+// BudgetState is a snapshot of consumed resources.
+type BudgetState = turn.BudgetState
 
 // ErrBudgetConfigInvalid fires when NewTurnBudget receives caps
 // with negative values. Positive caps are enforced; zero means

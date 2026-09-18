@@ -124,7 +124,7 @@ func (n *Node) wireGateway() error {
 		Logger:           n.log,
 	}
 
-	n.gatewaySrv = gateway.NewServer(cfg, n.agent)
+	n.gatewaySrv = gateway.NewServer(cfg, compute.Adapt(n.agent))
 	n.log.Info("gateway wired",
 		"http_port", port,
 		"tls", tlsCert != "",
@@ -271,7 +271,7 @@ func (n *Node) buildSlackHandler(ch config.GatewayChannelConfig) (*gateway.Slack
 		SessionGrants:     n.sessionGrantsView(),
 		Gate:              gate,
 		Logger:            n.log,
-	}, n.agent)
+	}, compute.Adapt(n.agent))
 }
 
 // buildTelegramHandler resolves bot token + webhook secret from the
@@ -359,7 +359,7 @@ func (n *Node) buildTelegramHandler(ch config.GatewayChannelConfig) (*gateway.Te
 		Sessions:          n.newSessionStore(),
 		Compactor:         n.newSessionCompactor(),
 		Conversation:      n.conversationConfig(),
-	}, n.agent)
+	}, compute.Adapt(n.agent))
 }
 
 // soulProvider returns the current SOUL config if one is loaded,
@@ -384,7 +384,7 @@ func (n *Node) buildWebhookHandler(ch config.GatewayChannelConfig) (*gateway.Web
 		Scope:         ch.Scope,
 		DefaultBudget: compute.FromComputeConfig(n.cfg.Compute),
 		Logger:        n.log,
-	}, n.agent)
+	}, compute.Adapt(n.agent))
 }
 
 // startMCPFromConfig spawns every [[mcp.servers]] entry, translating

@@ -3,7 +3,7 @@ package gateway
 import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
 	"github.com/jmylchreest/lobslaw/pkg/types"
 )
@@ -19,8 +19,15 @@ import (
 
 // Continuation is the serialisable half of a paused turn.
 type Continuation struct {
-	Request  compute.ProcessMessageRequest
-	Messages []compute.Message
+	Request  turn.Request
+	Messages []turn.Message
+}
+
+func continuationRequest(req turn.Request, resp *turn.Response) turn.Request {
+	if resp != nil {
+		req.Spent = resp.BudgetState
+	}
+	return req
 }
 
 func continuationToProto(c *Continuation) *lobslawv1.Continuation {
@@ -36,12 +43,9 @@ func continuationToProto(c *Continuation) *lobslawv1.Continuation {
 		RecalledContext:     c.Request.RecalledContext,
 		Claims:              claimsToProto(c.Request.Claims),
 	}
-	if c.Request.Budget != nil {
-		state := c.Request.Budget.State()
-		out.SpentUsd = state.SpendUSD
-		out.ToolCalls = int32(state.ToolCalls)
-		out.EgressBytes = state.EgressBytes
-	}
+	out.SpentUsd = c.Request.Spent.SpendUSD
+	out.ToolCalls = int32(c.Request.Spent.ToolCalls)
+	out.EgressBytes = c.Request.Spent.EgressBytes
 	for _, m := range c.Messages {
 		out.Messages = append(out.Messages, messageToProto(m))
 	}
@@ -53,25 +57,15 @@ func continuationToProto(c *Continuation) *lobslawv1.Continuation {
 // caps come from the resuming node's config rather than the record: a
 // budget cap is an operator's current policy, and restoring a cap from
 // a paused turn would let an old one outlive the change.
-func continuationFromProto(p *lobslawv1.Continuation, caps compute.BudgetCaps) (*Continuation, error) {
+func continuationFromProto(p *lobslawv1.Continuation, caps turn.BudgetCaps) (*Continuation, error) {
 	if p == nil {
 		return nil, nil
 	}
-	budget, err := compute.NewTurnBudget(caps)
-	if err != nil {
-		return nil, err
-	}
 	// Replay the spend so a resumed turn does not start over with a
 	// full allowance — otherwise every confirmation would be a way to
-	// double the budget.
-	budget.Restore(compute.BudgetState{
-		ToolCalls:   int(p.ToolCalls),
-		SpendUSD:    p.SpentUsd,
-		EgressBytes: p.EgressBytes,
-	})
-
+	// double the budget. Caps come from the resuming node's config.
 	out := &Continuation{
-		Request: compute.ProcessMessageRequest{
+		Request: turn.Request{
 			Message:             p.UserMessage,
 			Claims:              claimsFromProto(p.Claims),
 			UserTimezone:        p.UserTimezone,
@@ -79,7 +73,12 @@ func continuationFromProto(p *lobslawv1.Continuation, caps compute.BudgetCaps) (
 			SystemPrompt:        p.SystemPrompt,
 			ConversationSummary: p.ConversationSummary,
 			RecalledContext:     p.RecalledContext,
-			Budget:              budget,
+			Caps:                caps,
+			Spent: turn.BudgetState{
+				ToolCalls:   int(p.ToolCalls),
+				SpendUSD:    p.SpentUsd,
+				EgressBytes: p.EgressBytes,
+			},
 		},
 	}
 	for _, m := range p.Messages {
@@ -88,7 +87,7 @@ func continuationFromProto(p *lobslawv1.Continuation, caps compute.BudgetCaps) (
 	return out, nil
 }
 
-func messageToProto(m compute.Message) *lobslawv1.SessionMessage {
+func messageToProto(m turn.Message) *lobslawv1.SessionMessage {
 	out := &lobslawv1.SessionMessage{
 		Role:       m.Role,
 		Content:    m.Content,
@@ -102,14 +101,14 @@ func messageToProto(m compute.Message) *lobslawv1.SessionMessage {
 	return out
 }
 
-func messageFromProto(m *lobslawv1.SessionMessage) compute.Message {
-	out := compute.Message{
+func messageFromProto(m *lobslawv1.SessionMessage) turn.Message {
+	out := turn.Message{
 		Role:       m.Role,
 		Content:    m.Content,
 		ToolCallID: m.ToolCallId,
 	}
 	for _, tc := range m.ToolCalls {
-		out.ToolCalls = append(out.ToolCalls, compute.ToolCall{
+		out.ToolCalls = append(out.ToolCalls, turn.ToolCall{
 			ID: tc.Id, Name: tc.Name, Arguments: tc.Arguments,
 		})
 	}

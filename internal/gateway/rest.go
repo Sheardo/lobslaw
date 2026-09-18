@@ -1,8 +1,8 @@
 // Package gateway wires user-facing channels (REST, Telegram) on
 // top of the node's internal services. The agent loop doesn't know
 // about HTTP or Telegram — each channel is a thin adapter that
-// translates an inbound request into an internal
-// compute.ProcessMessageRequest and translates the response back.
+// translates an inbound request into a turn.Request and translates
+// the response back.
 package gateway
 
 import (
@@ -19,8 +19,8 @@ import (
 
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	"github.com/jmylchreest/lobslaw/internal/compute"
 	"github.com/jmylchreest/lobslaw/internal/ids"
+	"github.com/jmylchreest/lobslaw/internal/turn"
 	"github.com/jmylchreest/lobslaw/pkg/auth"
 	"github.com/jmylchreest/lobslaw/pkg/config"
 	lobslawv1 "github.com/jmylchreest/lobslaw/pkg/proto/lobslaw/v1"
@@ -89,7 +89,7 @@ type RESTConfig struct {
 	// DefaultBudget is the per-turn budget applied to each message.
 	// Zero caps mean unlimited. Callers typically pass caps derived
 	// from config.Compute.Budgets.
-	DefaultBudget compute.BudgetCaps
+	DefaultBudget turn.BudgetCaps
 
 	// JWTValidator validates inbound Authorization: Bearer tokens.
 	// Nil means accept unauthenticated requests with DefaultScope
@@ -165,10 +165,10 @@ type Server struct {
 	// gate serialises turns per session. See turnqueue.go.
 	gate *TurnGate
 
-	cfg   RESTConfig
-	agent *compute.Agent
-	log   *slog.Logger
-	conv  *conversationLog
+	cfg    RESTConfig
+	runner turn.Runner
+	log    *slog.Logger
+	conv   *conversationLog
 
 	mu       sync.Mutex
 	httpSrv  *http.Server
@@ -177,10 +177,10 @@ type Server struct {
 }
 
 // NewServer constructs the REST server with explicit dependencies.
-// agent may be nil — /healthz still responds, /v1/messages returns
+// runner may be nil — /healthz still responds, /v1/messages returns
 // 503. Lets a node with Compute disabled still expose health
 // endpoints for load-balancer probes.
-func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
+func NewServer(cfg RESTConfig, runner turn.Runner) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = fmt.Sprintf(":%d", config.DefaultGatewayHTTPPort)
 	}
@@ -197,11 +197,11 @@ func NewServer(cfg RESTConfig, agent *compute.Agent) *Server {
 		cfg.Logger = slog.Default()
 	}
 	return &Server{
-		cfg:   cfg,
-		agent: agent,
-		log:   cfg.Logger,
-		gate:  NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
-		conv:  newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
+		cfg:    cfg,
+		runner: runner,
+		log:    cfg.Logger,
+		gate:   NewTurnGate(cfg.QueueMode, cfg.QueueDebounce, cfg.Logger).WithLeaser(cfg.Leaser, 0).WithJudge(cfg.RelatednessJudge).WithBurst(cfg.QueueBurstWindow, cfg.QueueBurstReset),
+		conv:   newConversationLog(cfg.Sessions, cfg.Compactor, cfg.Conversation, cfg.Logger),
 	}
 }
 
@@ -313,7 +313,7 @@ func (s *Server) Addr() string {
 
 // messageRequest is the JSON body for POST /v1/messages. Minimal
 // shape — channel handlers construct the full
-// compute.ProcessMessageRequest server-side from this + config +
+// turn.Request server-side from this + config +
 // any auth context.
 type messageRequest struct {
 	Message string `json:"message"`
@@ -418,7 +418,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.agent == nil {
+	if s.runner == nil {
 		http.Error(w, "agent not configured on this node", http.StatusServiceUnavailable)
 		return
 	}
@@ -446,12 +446,6 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	// id they cannot look the turn up by.
 	if req.TurnID == "" {
 		req.TurnID = "rest-" + ids.New()
-	}
-
-	budget, err := compute.NewTurnBudget(s.cfg.DefaultBudget)
-	if err != nil {
-		s.jsonErr(w, http.StatusInternalServerError, "budget construction: "+err.Error())
-		return
 	}
 
 	claims, authErr := s.authenticate(r)
@@ -505,12 +499,12 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 			"summarised", prior.Summary != "")
 	}
 
-	agentReq := compute.ProcessMessageRequest{
+	agentReq := turn.Request{
 		Message:             req.Message,
 		Claims:              claims,
 		TurnID:              req.TurnID,
 		Model:               req.Model,
-		Budget:              budget,
+		Caps:                s.cfg.DefaultBudget,
 		ConversationHistory: prior.Messages,
 		ConversationSummary: prior.Summary,
 		Channel:             sessionRef.Channel,
@@ -535,7 +529,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	})
 	defer stopGuards()
 
-	resp, err := s.agent.RunToolCallLoop(turnCtx, agentReq)
+	resp, err := s.runner.Run(turnCtx, agentReq)
 	if err != nil {
 		s.log.Error("agent error", "turn_id", req.TurnID, "err", err)
 		stopGuards()
@@ -603,9 +597,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		// The turn approval is the policy half of the same idea: the
 		// operation the user just answered for does not get asked again
 		// inside the turn they answered it in.
-		agentReq.Budget.Relax()
-		resumeCtx := compute.WithTurnApproval(turnCtx, resp.ConfirmationAction, resp.ConfirmationResource)
-		resumed, rerr := s.agent.ResumeFromConfirmation(resumeCtx, agentReq, resp.Messages)
+		agentReq.Spent = resp.BudgetState
+		resumeCtx := turn.WithTurnApproval(turnCtx, resp.ConfirmationAction, resp.ConfirmationResource)
+		resumed, rerr := s.runner.Resume(resumeCtx, agentReq, resp.Messages)
 		if rerr != nil {
 			s.log.Error("rest: resume after approval failed",
 				"turn_id", req.TurnID, "err", rerr)
@@ -699,7 +693,7 @@ func (s *Server) handleReadyz(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"status":"starting"}`, http.StatusServiceUnavailable)
 		return
 	}
-	if s.agent == nil {
+	if s.runner == nil {
 		http.Error(w, `{"status":"agent-not-configured"}`, http.StatusServiceUnavailable)
 		return
 	}
